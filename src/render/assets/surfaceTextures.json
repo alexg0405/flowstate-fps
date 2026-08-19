@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "entries": {
+    "ceramic": {
+      "uri": "/assets/art/textures/ceramic-composite.ktx2",
+      "hash": "sha256:89e4e15575b7e261d43b9845d1f82d6150d4de2db8c053565569ba917a4dc4ca",
+      "byteLength": 162297,
+      "gpuBytes": 699064
+    },
+    "graphite": {
+      "uri": "/assets/art/textures/graphite-deck.ktx2",
+      "hash": "sha256:442bcdda3237802faad1832a5e002e9b23ef4f8a9da76e378d32fb8e84cfdff1",
+      "byteLength": 165357,
+      "gpuBytes": 699064
+    },
+    "gunmetal": {
+      "uri": "/assets/art/textures/brushed-gunmetal.ktx2",
+      "hash": "sha256:1f2a8a4da2e2ff2f887a853ef7fe5b6831e63815a0a1681f73b0c19f45ef7b9a",
+      "byteLength": 174869,
+      "gpuBytes": 699064
+    },
+    "signal": {
+      "uri": "/assets/art/textures/signal-circuit.ktx2",
+      "hash": "sha256:767bbff9403f5c7ad06a715d05c09cc536f9c9be97069e4ad13c73af9c19a826",
+      "byteLength": 156787,
+      "gpuBytes": 699064
+    }
+  }
+}

@@ -1,0 +1,608 @@
+{
+  "schemaVersion": 1,
+  "entries": {
+    "viewmodel.runner-rifle": {
+      "kind": "viewmodel",
+      "uri": "/assets/art/viewmodels/runner-rifle.glb",
+      "hash": "sha256:19746ebae6dcd6eae4b69ff5d2b725c4e713624ff651259a775983d2bcd517e0",
+      "byteLength": 236296,
+      "lods": [
+        {
+          "level": 0,
+          "uri": "/assets/art/viewmodels/runner-rifle.glb",
+          "minDistance": 0,
+          "hash": "sha256:19746ebae6dcd6eae4b69ff5d2b725c4e713624ff651259a775983d2bcd517e0",
+          "byteLength": 236296
+        }
+      ],
+      "variants": [
+        {
+          "id": "base",
+          "label": "Base",
+          "accent": "#ff2d55"
+        }
+      ],
+      "bounds": {
+        "min": [
+          -0.16169,
+          -0.294869,
+          -0.4872
+        ],
+        "max": [
+          0.170106,
+          0.199522,
+          0.945
+        ],
+        "radius": 0.775517
+      },
+      "preloadGroup": "startup",
+      "memoryEstimate": {
+        "cpuBytes": 387784,
+        "gpuBytes": 379256
+      },
+      "source": "art-src/blender/viewmodels/runner-rifle.blend",
+      "fallback": "viewmodel-rifle",
+      "scale": 0.42,
+      "clips": {
+        "equip": "vm_equip",
+        "idle": "vm_idle",
+        "sprint": "vm_sprint",
+        "fire01": "vm_fire_01",
+        "fire02": "vm_fire_02",
+        "adsIn": "vm_ads_in",
+        "adsOut": "vm_ads_out",
+        "reloadTactical": "vm_reload_tactical",
+        "reloadEmpty": "vm_reload_empty",
+        "melee": "vm_melee",
+        "grappleCast": "vm_grapple_cast",
+        "grappleHold": "vm_grapple_hold",
+        "grappleRelease": "vm_grapple_release"
+      },
+      "sockets": [
+        "socket_muzzle",
+        "socket_eject",
+        "socket_hand_l",
+        "socket_hand_r",
+        "socket_grapple_emitter"
+      ],
+      "validation": {
+        "maxTriangles": 50000,
+        "maxMaterials": 8,
+        "maxTextures": 16,
+        "maxTextureSize": 2048,
+        "maxBones": 96,
+        "requireMeshopt": true,
+        "requireKtx2": true,
+        "selfContained": true
+      },
+      "tags": [
+        "first-person",
+        "weapon",
+        "hero"
+      ]
+    },
+    "character.hunter-ranged": {
+      "kind": "character",
+      "uri": "/assets/art/characters/hunter-ranged.glb",
+      "hash": "sha256:80a3b7dc8be0c76ef40dbc49f0fcd1bf4ba0769f6921228c4c4a1fcf34b45e39",
+      "byteLength": 195084,
+      "lods": [
+        {
+          "level": 0,
+          "uri": "/assets/art/characters/hunter-ranged.glb",
+          "minDistance": 0,
+          "hash": "sha256:80a3b7dc8be0c76ef40dbc49f0fcd1bf4ba0769f6921228c4c4a1fcf34b45e39",
+          "byteLength": 195084
+        }
+      ],
+      "variants": [
+        {
+          "id": "base",
+          "label": "Base",
+          "accent": "#08f7ff"
+        }
+      ],
+      "bounds": {
+        "min": [
+          -0.479395,
+          0,
+          -0.293186
+        ],
+        "max": [
+          0.479384,
+          1.57352,
+          0.537986
+        ],
+        "radius": 1.010702
+      },
+      "preloadGroup": "combat",
+      "memoryEstimate": {
+        "cpuBytes": 220992,
+        "gpuBytes": 213608
+      },
+      "source": "art-src/blender/characters/hunter-ranged.blend",
+      "fallback": "hunter-ranged",
+      "scale": 0.68,
+      "clips": {
+        "idle": "hunter_idle",
+        "run": "hunter_run",
+        "strafeLeft": "hunter_strafe_l",
+        "strafeRight": "hunter_strafe_r",
+        "attack": "hunter_fire",
+        "hit": "hunter_hit",
+        "death": "hunter_death",
+        "jump": "hunter_jump",
+        "vault": "hunter_vault",
+        "drop": "hunter_drop",
+        "land": "hunter_land"
+      },
+      "sockets": [
+        "socket_muzzle",
+        "socket_weapon",
+        "socket_head"
+      ],
+      "validation": {
+        "maxTriangles": 60000,
+        "maxMaterials": 8,
+        "maxTextures": 16,
+        "maxTextureSize": 2048,
+        "maxBones": 128,
+        "minimumRigAttachments": 7,
+        "requireMeshopt": true,
+        "requireKtx2": true,
+        "selfContained": true
+      },
+      "tags": [
+        "enemy",
+        "hunter",
+        "ranged"
+      ]
+    },
+    "character.hunter-aggressive": {
+      "kind": "character",
+      "uri": "/assets/art/characters/hunter-aggressive.glb",
+      "hash": "sha256:5c7bbcd21d4ea1e80ef2452c4fcec2881fefb49bea5ed6f54677db3b8fca79fc",
+      "byteLength": 189192,
+      "lods": [
+        {
+          "level": 0,
+          "uri": "/assets/art/characters/hunter-aggressive.glb",
+          "minDistance": 0,
+          "hash": "sha256:5c7bbcd21d4ea1e80ef2452c4fcec2881fefb49bea5ed6f54677db3b8fca79fc",
+          "byteLength": 189192
+        }
+      ],
+      "variants": [
+        {
+          "id": "base",
+          "label": "Base",
+          "accent": "#ff2d55"
+        }
+      ],
+      "bounds": {
+        "min": [
+          -0.479395,
+          0,
+          -0.19993
+        ],
+        "max": [
+          0.517836,
+          1.654153,
+          0.236296
+        ],
+        "radius": 0.990074
+      },
+      "preloadGroup": "combat",
+      "memoryEstimate": {
+        "cpuBytes": 220592,
+        "gpuBytes": 213400
+      },
+      "source": "art-src/blender/characters/hunter-aggressive.blend",
+      "fallback": "hunter-aggressive",
+      "scale": 0.68,
+      "clips": {
+        "idle": "hunter_idle",
+        "run": "hunter_run",
+        "strafeLeft": "hunter_strafe_l",
+        "strafeRight": "hunter_strafe_r",
+        "attack": "hunter_melee",
+        "hit": "hunter_hit",
+        "death": "hunter_death",
+        "jump": "hunter_jump",
+        "vault": "hunter_vault",
+        "drop": "hunter_drop",
+        "land": "hunter_land"
+      },
+      "sockets": [
+        "socket_weapon",
+        "socket_head"
+      ],
+      "validation": {
+        "maxTriangles": 60000,
+        "maxMaterials": 8,
+        "maxTextures": 16,
+        "maxTextureSize": 2048,
+        "maxBones": 128,
+        "minimumRigAttachments": 7,
+        "requireMeshopt": true,
+        "requireKtx2": true,
+        "selfContained": true
+      },
+      "tags": [
+        "enemy",
+        "hunter",
+        "melee"
+      ]
+    },
+    "environment.rooftop-platform": {
+      "kind": "environment",
+      "uri": "/assets/art/environment/rooftop-platform.glb",
+      "hash": "sha256:9898a880850515f5090a4753f4235c6dd444e56032d8a5523ff50df6f2c5b5d3",
+      "byteLength": 33772,
+      "lods": [
+        {
+          "level": 0,
+          "uri": "/assets/art/environment/rooftop-platform.glb",
+          "minDistance": 0,
+          "hash": "sha256:9898a880850515f5090a4753f4235c6dd444e56032d8a5523ff50df6f2c5b5d3",
+          "byteLength": 33772
+        }
+      ],
+      "variants": [
+        {
+          "id": "base",
+          "label": "Base",
+          "accent": "#08f7ff"
+        },
+        {
+          "id": "weathered",
+          "label": "Weathered",
+          "accent": "#73858b"
+        },
+        {
+          "id": "hazard-yellow",
+          "label": "Hazard yellow",
+          "accent": "#f4ec18"
+        }
+      ],
+      "bounds": {
+        "min": [
+          -2,
+          -0.489976,
+          -2.047522
+        ],
+        "max": [
+          2,
+          0.069933,
+          2.047522
+        ],
+        "radius": 2.875886
+      },
+      "preloadGroup": "level",
+      "memoryEstimate": {
+        "cpuBytes": 55920,
+        "gpuBytes": 55920
+      },
+      "source": "art-src/blender/environment/rooftop-kit.blend",
+      "fallback": "environment-platform",
+      "scale": 1,
+      "clips": {},
+      "sockets": [],
+      "validation": {
+        "maxTriangles": 12000,
+        "maxMaterials": 5,
+        "maxTextures": 8,
+        "maxTextureSize": 2048,
+        "maxBones": 0,
+        "requireMeshopt": true,
+        "requireKtx2": true,
+        "selfContained": true
+      },
+      "tags": [
+        "environment",
+        "modular",
+        "floor"
+      ]
+    },
+    "environment.wallrun-panel": {
+      "kind": "environment",
+      "uri": "/assets/art/environment/wallrun-panel.glb",
+      "hash": "sha256:ed5ee04fa74e8a20a5ee6c39fb5f3860589dcfbf15f8b34ddbeb7bc2f724f1d8",
+      "byteLength": 37736,
+      "lods": [
+        {
+          "level": 0,
+          "uri": "/assets/art/environment/wallrun-panel.glb",
+          "minDistance": 0,
+          "hash": "sha256:ed5ee04fa74e8a20a5ee6c39fb5f3860589dcfbf15f8b34ddbeb7bc2f724f1d8",
+          "byteLength": 37736
+        }
+      ],
+      "variants": [
+        {
+          "id": "base",
+          "label": "Base",
+          "accent": "#08f7ff"
+        },
+        {
+          "id": "hazard-yellow",
+          "label": "Hazard yellow",
+          "accent": "#f4ec18"
+        },
+        {
+          "id": "signal-magenta",
+          "label": "Signal magenta",
+          "accent": "#ff2d55"
+        },
+        {
+          "id": "weathered",
+          "label": "Weathered",
+          "accent": "#73858b"
+        }
+      ],
+      "bounds": {
+        "min": [
+          -2,
+          -0.000067,
+          -0.119877
+        ],
+        "max": [
+          2,
+          2.800067,
+          0.2674
+        ],
+        "radius": 2.449017
+      },
+      "preloadGroup": "level",
+      "memoryEstimate": {
+        "cpuBytes": 71592,
+        "gpuBytes": 71592
+      },
+      "source": "art-src/blender/environment/rooftop-kit.blend",
+      "fallback": "environment-wallrun-panel",
+      "scale": 1,
+      "clips": {},
+      "sockets": [],
+      "validation": {
+        "maxTriangles": 8000,
+        "maxMaterials": 4,
+        "maxTextures": 8,
+        "maxTextureSize": 2048,
+        "maxBones": 0,
+        "requireMeshopt": true,
+        "requireKtx2": true,
+        "selfContained": true
+      },
+      "tags": [
+        "environment",
+        "modular",
+        "traversal",
+        "wall-run"
+      ]
+    },
+    "environment.vault-barrier": {
+      "kind": "environment",
+      "uri": "/assets/art/environment/vault-barrier.glb",
+      "hash": "sha256:eab2136564baa8b076a7661b667c7b3f34cac7b67652b3728a3bd9ad73c41a9e",
+      "byteLength": 22980,
+      "lods": [
+        {
+          "level": 0,
+          "uri": "/assets/art/environment/vault-barrier.glb",
+          "minDistance": 0,
+          "hash": "sha256:eab2136564baa8b076a7661b667c7b3f34cac7b67652b3728a3bd9ad73c41a9e",
+          "byteLength": 22980
+        }
+      ],
+      "variants": [
+        {
+          "id": "base",
+          "label": "Base",
+          "accent": "#08f7ff"
+        },
+        {
+          "id": "hazard-yellow",
+          "label": "Hazard yellow",
+          "accent": "#f4ec18"
+        },
+        {
+          "id": "signal-magenta",
+          "label": "Signal magenta",
+          "accent": "#ff2d55"
+        },
+        {
+          "id": "weathered",
+          "label": "Weathered",
+          "accent": "#73858b"
+        }
+      ],
+      "bounds": {
+        "min": [
+          -1.2,
+          -0.000053,
+          -0.309985
+        ],
+        "max": [
+          1.2,
+          1.050053,
+          0.317515
+        ],
+        "radius": 1.346893
+      },
+      "preloadGroup": "level",
+      "memoryEstimate": {
+        "cpuBytes": 34104,
+        "gpuBytes": 34104
+      },
+      "source": "art-src/blender/environment/rooftop-kit.blend",
+      "fallback": "environment-vault-barrier",
+      "scale": 1,
+      "clips": {},
+      "sockets": [],
+      "validation": {
+        "maxTriangles": 8000,
+        "maxMaterials": 4,
+        "maxTextures": 8,
+        "maxTextureSize": 2048,
+        "maxBones": 0,
+        "requireMeshopt": true,
+        "requireKtx2": true,
+        "selfContained": true
+      },
+      "tags": [
+        "environment",
+        "modular",
+        "traversal",
+        "vault"
+      ]
+    },
+    "environment.grapple-anchor": {
+      "kind": "environment",
+      "uri": "/assets/art/environment/grapple-anchor.glb",
+      "hash": "sha256:2befe5cea53e12b54b5bde5f7dedf226573cb5e3a08e6638eae02970834607d8",
+      "byteLength": 24504,
+      "lods": [
+        {
+          "level": 0,
+          "uri": "/assets/art/environment/grapple-anchor.glb",
+          "minDistance": 0,
+          "hash": "sha256:2befe5cea53e12b54b5bde5f7dedf226573cb5e3a08e6638eae02970834607d8",
+          "byteLength": 24504
+        }
+      ],
+      "variants": [
+        {
+          "id": "base",
+          "label": "Base",
+          "accent": "#08f7ff"
+        },
+        {
+          "id": "hazard-yellow",
+          "label": "Hazard yellow",
+          "accent": "#f4ec18"
+        },
+        {
+          "id": "signal-magenta",
+          "label": "Signal magenta",
+          "accent": "#ff2d55"
+        },
+        {
+          "id": "weathered",
+          "label": "Weathered",
+          "accent": "#73858b"
+        }
+      ],
+      "bounds": {
+        "min": [
+          -0.645,
+          -0.645,
+          -0.645
+        ],
+        "max": [
+          0.645,
+          0.645,
+          0.645
+        ],
+        "radius": 1.117173
+      },
+      "preloadGroup": "level",
+      "memoryEstimate": {
+        "cpuBytes": 37888,
+        "gpuBytes": 37888
+      },
+      "source": "art-src/blender/environment/rooftop-kit.blend",
+      "fallback": "environment-grapple-anchor",
+      "scale": 1,
+      "clips": {},
+      "sockets": [
+        "socket_grapple"
+      ],
+      "validation": {
+        "maxTriangles": 8000,
+        "maxMaterials": 4,
+        "maxTextures": 8,
+        "maxTextureSize": 2048,
+        "maxBones": 0,
+        "requireMeshopt": true,
+        "requireKtx2": true,
+        "selfContained": true
+      },
+      "tags": [
+        "environment",
+        "modular",
+        "traversal",
+        "grapple"
+      ]
+    },
+    "environment.route-sign": {
+      "kind": "environment",
+      "uri": "/assets/art/environment/route-sign.glb",
+      "hash": "sha256:454689e360f9fc1daabfa89305ec7a09fed27122908823170c1cc843c44f7c3f",
+      "byteLength": 20040,
+      "lods": [
+        {
+          "level": 0,
+          "uri": "/assets/art/environment/route-sign.glb",
+          "minDistance": 0,
+          "hash": "sha256:454689e360f9fc1daabfa89305ec7a09fed27122908823170c1cc843c44f7c3f",
+          "byteLength": 20040
+        }
+      ],
+      "variants": [
+        {
+          "id": "base",
+          "label": "Base",
+          "accent": "#08f7ff"
+        },
+        {
+          "id": "hazard-yellow",
+          "label": "Hazard yellow",
+          "accent": "#f4ec18"
+        },
+        {
+          "id": "signal-magenta",
+          "label": "Signal magenta",
+          "accent": "#ff2d55"
+        }
+      ],
+      "bounds": {
+        "min": [
+          -1.4,
+          0.009959,
+          -0.059987
+        ],
+        "max": [
+          1.4,
+          0.830041,
+          0.122525
+        ],
+        "radius": 1.461664
+      },
+      "preloadGroup": "level",
+      "memoryEstimate": {
+        "cpuBytes": 25704,
+        "gpuBytes": 25704
+      },
+      "source": "art-src/blender/environment/rooftop-kit.blend",
+      "fallback": "environment-route-sign",
+      "scale": 1,
+      "clips": {},
+      "sockets": [],
+      "validation": {
+        "maxTriangles": 4000,
+        "maxMaterials": 4,
+        "maxTextures": 4,
+        "maxTextureSize": 2048,
+        "maxBones": 0,
+        "requireMeshopt": true,
+        "requireKtx2": true,
+        "selfContained": true
+      },
+      "tags": [
+        "environment",
+        "modular",
+        "wayfinding"
+      ]
+    }
+  }
+}

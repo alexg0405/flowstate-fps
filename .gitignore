@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+.DS_Store
+.tooling/
+*.fpsproj
+*.blend1
+*.tsbuildinfo
