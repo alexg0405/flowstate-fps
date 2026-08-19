@@ -225,7 +225,7 @@ implemented anywhere.**
 Grounded in the committed visual-regression snapshots
 (`tests/e2e/visual.spec.ts-snapshots/`), which are the game as it actually looks.
 
-### 3.1 The value hierarchy is inverted **[NOT DONE — diagnosis below is wrong]**
+### 3.1 The value hierarchy is inverted **[FIXED — see section 11; the diagnosis below is wrong]**
 The albedo framing in this entry does not hold up; see section 9 for the measured
 correction. Kept as written for the record.
 
@@ -290,7 +290,7 @@ It photographs beautifully and is illegible at 20 m/s. Everything the player
 actually needs mid-flow — hit confirm, hook state, threat direction, combo —
 belongs within ~15° of the crosshair; the rest is pause-screen information.
 
-### 3.7 There is 23 MB of unused art budget
+### 3.7 There is 23 MB of unused art budget **[PARTLY — city density added, see section 11]**
 `art:validate` reports **1.93 MiB of 25.00 MiB**. Visual richness is not
 budget-constrained. The whole 172 m route is built from 5 environment assets
 with 4 material variants and 3 route signs as the only landmarks.
@@ -778,3 +778,62 @@ audit's observation stands. I did not do it, for two reasons:
 
 It is worth doing on a machine where the cost is visible, with the numbers above as
 the baseline to beat.
+
+
+---
+
+## 11. Palette, value hierarchy and city density
+
+### The 3D layer now matches the interface
+The menu and boot screens are flat blocks of pure yellow, cyan and hot pink over
+near-black, and that is the game's identity. The 3D layer had drifted: forty-odd
+hand-written hexes, all near the palette and none on it, a lot of soft ambers and
+salmons, and **no yellow at all** -- the one colour the interface leads with.
+`src/render/palette.ts` is now the single source of truth for scene void, fog,
+surface accents, hostile accents and every emissive material.
+
+### The value hierarchy, correctly diagnosed this time
+Section 3.1 blamed albedo and section 9 recorded that a runtime material grade
+changed no pixels. Both were built on a broken measurement -- see below. The real
+cause was the **deck top's albedo at source**, linear (0.28, 0.34, 0.38), which made
+the play surface the brightest thing in the game. Fixed in
+`generate_vertical_slice.py` and rebuilt, with the sun cooled and pulled back from a
+warm 2.05 and exposure lowered to 0.52. The architecture is now dark and the
+emissive trim carries the brightness.
+
+Hostiles also accent their **signal trim only**. Making every material on the model
+emissive is why a hunter read as a glowing blob rather than a silhouette with a
+marking, and it was part of why enemies were hard to pick out at all.
+
+### City density
+Towers started 42 units out while the play corridor is 17 wide, leaving a 25-unit
+dead band either side of the route, and each tower carried one emissive strip. Now
+there is a near tier filling that band, a far tier behind it for depth, three
+coloured neon bands and a vertical sign per tower, and gantries crossing overhead so
+the upper half of the frame is not empty sky. All instanced: the whole city costs
+**2 draw calls** — 290 to 292 total, 140k to 163k triangles.
+
+### My measurement harness was wrong, and it cost real time
+Two mistakes compounded:
+
+1. **`sharp`'s `stats()` reads the input image and ignores a pending `.extract()`.**
+   Every "region" reading I took in Phase 5 was a whole-frame mean. The conclusion in
+   section 9 that the environment grade and hostile lift "changed no pixels" was
+   therefore under-supported — a regional change could hide in a frame-wide average.
+   Those two functions were still the wrong fix for the right problem, and the
+   source-level fix above is the correct one, but the evidence I gave was not.
+2. **Screenshots taken ~2.2 s after entering a run race the async asset load.** The
+   frame renders pale and washed before the KTX2 sheets and character GLBs settle. I
+   spent a long stretch bisecting a rendering "regression" that was entirely this,
+   including reverting a debug spawn position on a diagnosis that was simply wrong.
+   Measured directly: the same scene reads rgb(197,214,210) at 2.2 s and
+   rgb(31,39,45) at 6 s. The visual-regression suite was never affected because
+   `openPresentation` waits on the asset responses before capturing — which is why
+   its baselines stayed trustworthy throughout.
+
+Verified: `npm test` **262 passed**, typecheck clean, build clean, `test:e2e`
+**35 passed**, `art:validate` clean, 3 visual baselines regenerated and re-checked.
+
+### Still outstanding
+`BatchedMesh` batching of the catalog assets (section 10), the HUD reduction
+(section 9), and enemy/encounter variety (section 7). None were attempted here.

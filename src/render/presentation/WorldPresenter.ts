@@ -371,6 +371,131 @@ export class WorldPresenter {
     return group;
   }
 
+  /**
+   * The neon skyline.
+   *
+   * Towers used to start 42 units out while the play corridor is only 17 wide, leaving
+   * a 25-unit dead band either side of the route, and each tower carried a single
+   * emissive strip. This fills that band with a near tier, layers a far tier behind it
+   * for depth, and hangs gantries overhead so the upper half of the frame is not empty
+   * sky. Everything is instanced -- four draw calls for the whole city -- because the
+   * route already costs 250 in its main pass.
+   */
+  private buildCity(): void {
+    const random = this.seededRandom(0xf10a5e7);
+    const quaternion = new THREE.Quaternion();
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const scale = new THREE.Vector3();
+
+    const tiers = [
+      // Near tier: fills the dead band beside the route. Kept low and slim so it reads
+      // as street frontage rather than looming over the player.
+      { count: 96, minX: 29, spreadX: 32, minHeight: 12, spreadHeight: 26, minWidth: 5, spreadWidth: 8 },
+      // Far tier: the original silhouette, pushed back to sit behind the near one.
+      { count: 84, minX: 62, spreadX: 128, minHeight: 30, spreadHeight: 120, minWidth: 10, spreadWidth: 20 },
+    ];
+    const total = tiers.reduce((sum, tier) => sum + tier.count, 0);
+
+    const towerGeometry = new RoundedBoxGeometry(1, 1, 1, 2, 0.04);
+    const towerMaterial = this.materials.variant('armor', '#0a0f16');
+    this.generatedMaterials.push(towerMaterial);
+    const towers = new THREE.InstancedMesh(towerGeometry, towerMaterial, total);
+    towers.receiveShadow = true;
+
+    // Three bands per tower, so a face reads as a lit building rather than one stripe.
+    const bandsPerTower = 3;
+    const bandGeometry = new THREE.PlaneGeometry(1, 1);
+    const bandMaterial = this.emissiveMaterial(palette.cyan, 1.5);
+    const bands = new THREE.InstancedMesh(bandGeometry, bandMaterial, total * bandsPerTower);
+
+    const signGeometry = new THREE.PlaneGeometry(1, 1);
+    const signMaterial = this.emissiveMaterial(palette.yellow, 1.7);
+    const signs = new THREE.InstancedMesh(signGeometry, signMaterial, total);
+
+    const accents = [palette.cyan, palette.red, palette.yellow];
+    const bandColor = new THREE.Color();
+    let tower = 0;
+    let band = 0;
+
+    for (const tier of tiers) {
+      for (let index = 0; index < tier.count; index += 1, tower += 1) {
+        const side = index % 2 ? -1 : 1;
+        const width = tier.minWidth + random() * tier.spreadWidth;
+        const depth = tier.minWidth + random() * tier.spreadWidth;
+        const height = tier.minHeight + random() * tier.spreadHeight;
+        const x = side * (tier.minX + random() * tier.spreadX);
+        const z = 56 - random() * 300;
+        position.set(x, height / 2 - 18, z);
+        scale.set(width, height, depth);
+        towers.setMatrixAt(tower, matrix.compose(position, quaternion, scale));
+
+        // Faces turn toward the route, so the neon is pointed at the player.
+        const inward = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, side > 0 ? -Math.PI / 2 : Math.PI / 2, 0));
+        const faceX = x + (side > 0 ? -width / 2 - 0.06 : width / 2 + 0.06);
+        const accent = accents[(tower + index) % accents.length];
+
+        for (let step = 0; step < bandsPerTower; step += 1, band += 1) {
+          const bandHeight = Math.max(0.35, height * (0.012 + random() * 0.02));
+          const bandY = position.y - height / 2 + height * (0.18 + step * 0.26 + random() * 0.08);
+          bands.setMatrixAt(band, matrix.compose(
+            position.clone().set(faceX, bandY, z),
+            inward,
+            scale.clone().set(depth * (0.5 + random() * 0.4), bandHeight, 1),
+          ));
+          bandColor.set(step === 1 ? accent : accents[(tower + step) % accents.length]);
+          bands.setColorAt(band, bandColor);
+        }
+
+        // A tall thin sign on roughly half the towers, which is what gives a skyline
+        // its vertical rhythm.
+        const hasSign = random() > 0.5;
+        const signHeight = hasSign ? height * (0.2 + random() * 0.3) : 0;
+        signs.setMatrixAt(tower, matrix.compose(
+          position.clone().set(faceX, position.y + height * (0.1 + random() * 0.2), z + depth * 0.18),
+          inward,
+          scale.clone().set(Math.max(0.4, width * 0.1), signHeight, 1),
+        ));
+        signs.setColorAt(tower, bandColor.set(accents[tower % accents.length]));
+      }
+    }
+
+    // Gantries crossing the route overhead: the upper half of the frame was empty sky.
+    // Kept few, high and thin -- this is a rooftop route, and a dense low lattice reads
+    // as a tunnel ceiling instead.
+    const gantryCount = 13;
+    const gantryGeometry = new RoundedBoxGeometry(1, 1, 1, 1, 0.05);
+    const gantryMaterial = this.materials.variant('armor', '#0c1219');
+    this.generatedMaterials.push(gantryMaterial);
+    const gantries = new THREE.InstancedMesh(gantryGeometry, gantryMaterial, gantryCount);
+    for (let index = 0; index < gantryCount; index += 1) {
+      const z = 24 - index * 24 - random() * 10;
+      const y = 40 + random() * 44;
+      const span = 80 + random() * 120;
+      gantries.setMatrixAt(index, matrix.compose(
+        position.clone().set((random() - 0.5) * 34, y, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, (random() - 0.5) * 0.14)),
+        scale.clone().set(span, 0.9 + random() * 1.6, 3 + random() * 4),
+      ));
+    }
+
+    for (const mesh of [towers, bands, signs, gantries]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      this.environmentRoot.add(mesh);
+    }
+    this.cityGlow = bands;
+  }
+
+  /** Deterministic, so the skyline is identical for every player and every capture. */
+  private seededRandom(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+      state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+      return (state >>> 0) / 0x1_0000_0000;
+    };
+  }
+
   private buildEnvironment(): void {
     const sky = new THREE.Mesh(
       new THREE.SphereGeometry(420, 40, 24),
@@ -395,46 +520,7 @@ export class WorldPresenter {
     floor.receiveShadow = true;
     this.environmentRoot.add(floor);
 
-    const towerGeometry = new RoundedBoxGeometry(1, 1, 1, 2, 0.04);
-    const towerMaterial = this.materials.variant('armor', '#111724');
-    this.generatedMaterials.push(towerMaterial);
-    const towers = new THREE.InstancedMesh(towerGeometry, towerMaterial, 78);
-    const windowGeometry = new THREE.PlaneGeometry(1, 1);
-    const windowMaterial = this.emissiveMaterial('#ff507d', 1.45);
-    const windows = new THREE.InstancedMesh(windowGeometry, windowMaterial, 78);
-    const matrix = new THREE.Matrix4();
-    const windowMatrix = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const scale = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
-    let seed = 0xf10a5e7;
-    const random = () => {
-      seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
-      return (seed >>> 0) / 0x1_0000_0000;
-    };
-    for (let index = 0; index < towers.count; index += 1) {
-      const side = index % 2 ? -1 : 1;
-      const width = 9 + random() * 18;
-      const depth = 8 + random() * 22;
-      const height = 25 + random() * 105;
-      position.set(side * (42 + random() * 120), height / 2 - 18, 48 - random() * 285);
-      scale.set(width, height, depth);
-      matrix.compose(position, quaternion, scale);
-      towers.setMatrixAt(index, matrix);
-      const glowScale = new THREE.Vector3(width * 0.6, Math.max(4, height * 0.055), 1);
-      const glowPosition = position.clone().add(new THREE.Vector3(side > 0 ? -width / 2 - 0.05 : width / 2 + 0.05, height * 0.18, 0));
-      const glowQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, side > 0 ? -Math.PI / 2 : Math.PI / 2, 0));
-      windowMatrix.compose(glowPosition, glowQuat, glowScale);
-      windows.setMatrixAt(index, windowMatrix);
-      windows.setColorAt(index, new THREE.Color(index % 3 ? '#36cfee' : '#ff4d7d'));
-    }
-    towers.instanceMatrix.needsUpdate = true;
-    windows.instanceMatrix.needsUpdate = true;
-    if (windows.instanceColor) windows.instanceColor.needsUpdate = true;
-    windows.frustumCulled = true;
-    towers.receiveShadow = true;
-    this.cityGlow = windows;
-    this.environmentRoot.add(towers, windows);
+    this.buildCity();
 
     const moon = new THREE.Mesh(new THREE.SphereGeometry(14, 32, 20), this.emissiveMaterial('#ffadb9', 1.1));
     moon.position.set(-105, 96, -235);
