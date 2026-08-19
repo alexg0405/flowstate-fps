@@ -1,9 +1,6 @@
-*.blend filter=lfs diff=lfs merge=lfs -text
-*.glb filter=lfs diff=lfs merge=lfs -text
-*.ktx2 filter=lfs diff=lfs merge=lfs -text
-*.exr filter=lfs diff=lfs merge=lfs -text
-*.hdr filter=lfs diff=lfs merge=lfs -text
-*.psd filter=lfs diff=lfs merge=lfs -text
+# Binary art is committed directly rather than through Git LFS. The whole payload is
+# around 10 MB with no single file over 3 MB, so LFS would add a required client-side
+# dependency for no benefit. Revisit if the art budget grows toward its 25 MB ceiling.
 *.gltf text eol=lf
 *.json text eol=lf
 *.py text eol=lf

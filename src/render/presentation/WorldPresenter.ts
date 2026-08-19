@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { LevelPrimitive, LightInstance, RuntimeLevelV1, TransformData, Vec3 } from '../../contracts';
 import { isAssetId } from '../assets/catalog';
+import { palette } from '../palette';
 import { MaterialLibrary } from './MaterialLibrary';
 
 interface GateArt {
@@ -26,9 +27,9 @@ interface GateArt {
 const POOLED_POINT_LIGHTS = 2;
 const POOLED_SPOT_LIGHTS = 1;
 
-const CYAN = '#42e8ff';
-const MAGENTA = '#ff3e77';
-const AMBER = '#ffb547';
+const CYAN = palette.cyan;
+const MAGENTA = palette.red;
+const YELLOW = palette.yellow;
 
 export class WorldPresenter {
   readonly root = new THREE.Group();
@@ -232,7 +233,7 @@ export class WorldPresenter {
     const accent = this.surfaceColor(surface);
     const railMaterial = this.materials.variant('gunmetal', '#111820');
     this.generatedMaterials.push(railMaterial);
-    const stripMaterial = this.emissiveMaterial(accent, 3.8);
+    const stripMaterial = this.emissiveMaterial(accent, 1.9);
     const longAxisX = sx >= sz;
     const segments = Math.max(2, Math.min(10, Math.floor((longAxisX ? sx : sz) / 4)));
     for (let index = 0; index < segments; index += 1) {
@@ -283,7 +284,7 @@ export class WorldPresenter {
       }
     }
 
-    const light = this.rounded(faceOnZ ? faceWidth * 0.72 : 0.055, 0.065, faceOnZ ? 0.055 : faceWidth * 0.72, 0.018, this.emissiveMaterial(this.surfaceColor(surface), 4.2));
+    const light = this.rounded(faceOnZ ? faceWidth * 0.72 : 0.055, 0.065, faceOnZ ? 0.055 : faceWidth * 0.72, 0.018, this.emissiveMaterial(this.surfaceColor(surface), 2.0));
     light.position.set(faceOnZ ? 0 : sx / 2 + 0.08, sy * 0.34, faceOnZ ? sz / 2 + 0.08 : 0);
     group.add(light);
   }
@@ -570,8 +571,9 @@ export class WorldPresenter {
   private surfaceColor(surface: LevelPrimitive['surface']): string {
     if (surface === 'wall-run') return CYAN;
     if (surface === 'vault' || surface === 'mantle') return MAGENTA;
-    if (surface === 'no-traverse') return AMBER;
-    return '#7ddbe8';
+    if (surface === 'no-traverse') return YELLOW;
+    // Plain decks carry the yellow the menu leads with, which the 3D layer had none of.
+    return YELLOW;
   }
 
   private clearGenerated(root: THREE.Object3D): void {

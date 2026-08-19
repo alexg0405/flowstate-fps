@@ -58,6 +58,7 @@ const CyberDuskGrade = {
     /** 0 at a standstill, 1 at the speed the effects are tuned to peak at. */
     speed: { value: 0 },
     streakStrength: { value: 1 },
+    saturation: { value: 1.22 },
   },
   vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
   fragmentShader: `
@@ -65,6 +66,7 @@ const CyberDuskGrade = {
     uniform float gradeStrength;
     uniform float speed;
     uniform float streakStrength;
+    uniform float saturation;
     varying vec2 vUv;
     vec3 filmicCurve(vec3 x){return x*x*(3.0-2.0*x);}
     void main(){
@@ -88,11 +90,17 @@ const CyberDuskGrade = {
         c.b=texture2D(tDiffuse,vUv+centred*split).b;
       }
       float luma=dot(c,vec3(.2126,.7152,.0722));
-      vec3 shadowTint=vec3(.78,.88,1.08);
-      vec3 highlightTint=vec3(1.08,.92,.95);
+      // Split tone toward the palette: cool ink in the shadows, warm yellow in the
+      // highlights, which is the contrast the menu is built out of.
+      vec3 shadowTint=vec3(.72,.86,1.12);
+      vec3 highlightTint=vec3(1.14,1.06,.72);
       vec3 tinted=c*mix(shadowTint,highlightTint,smoothstep(.18,.82,luma));
       tinted=mix(tinted,filmicCurve(clamp(tinted,0.0,1.0)),.18);
-      tinted=mix(vec3(dot(tinted,vec3(.333))),tinted,1.08);
+      // Saturation is a ratio against luma, so it is safe on the linear buffer this
+      // pass runs against. A contrast multiply is not: linear values here run well
+      // above 1, so pivoting about a mid grey amplifies highlights into a white-out.
+      // The contrast for this look comes from exposure and albedo instead.
+      tinted=mix(vec3(dot(tinted,vec3(.333))),tinted,saturation);
       vec3 graded=mix(c,tinted,gradeStrength);
       // Closing the frame in at speed, which reads as tunnelling.
       graded*=1.0-drive*0.22*smoothstep(0.35,1.15,radius);
@@ -136,10 +144,13 @@ export class PostPipeline {
     this.quality = this.resolveQuality(settings);
     this.reducedMotion = settings.reducedMotion;
     this.bloomPass.enabled = this.quality !== 'low';
-    this.bloomPass.strength = this.reducedMotion ? 0.08 : this.quality === 'high' ? 0.2 : 0.14;
-    this.bloomPass.radius = this.quality === 'high' ? 0.4 : 0.3;
-    this.bloomPass.threshold = 1.02;
-    this.gradePass.uniforms.gradeStrength.value = this.quality === 'low' ? 0.48 : 0.78;
+    this.bloomPass.strength = this.reducedMotion ? 0.09 : this.quality === 'high' ? 0.22 : 0.15;
+    this.bloomPass.radius = this.quality === 'high' ? 0.42 : 0.32;
+    // Applied to linear values, so it has to stay near 1. Dropping it to 0.72 bloomed
+    // every lit surface into a white-out, and even 0.96 washed the frame whenever an
+    // emissive strip came close to the camera.
+    this.bloomPass.threshold = 1.05;
+    this.gradePass.uniforms.gradeStrength.value = this.quality === 'low' ? 0.62 : 0.88;
     // Reduced motion keeps the grade and drops only the motion cues.
     this.gradePass.uniforms.streakStrength.value = this.reducedMotion ? 0 : this.quality === 'high' ? 1 : 0.6;
   }

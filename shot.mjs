@@ -1,0 +1,13 @@
+import { chromium } from '@playwright/test';
+const [, , out, scene] = process.argv;
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+await page.addInitScript(() => localStorage.setItem('flowstate-fps-save-v1', JSON.stringify({ schemaVersion: 4, settings: {}, bestRun: null, bestTimeSeconds: null })));
+const url = 'http://localhost:5178/?mode=game' + (scene ? String.fromCharCode(38) + 'scene=' + scene : '');
+await page.goto(url);
+await page.getByRole('button', { name: /enter run/i }).click();
+await page.waitForFunction(() => !document.querySelector('.game-overlay'), null, { timeout: 30000 });
+await page.waitForTimeout(2200);
+await page.screenshot({ path: out });
+await browser.close();
+console.log('captured', out);

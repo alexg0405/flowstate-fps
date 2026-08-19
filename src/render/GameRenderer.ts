@@ -10,6 +10,7 @@ import { GhostPresenter } from './presentation/GhostPresenter';
 import { GrapplePresenter } from './presentation/GrapplePresenter';
 import { MaterialLibrary } from './presentation/MaterialLibrary';
 import { PostPipeline } from './presentation/PostPipeline';
+import { palette } from './palette';
 import { ResolutionController } from './ResolutionController';
 import { ViewmodelPresenter } from './presentation/ViewmodelPresenter';
 import { WorldPresenter } from './presentation/WorldPresenter';
@@ -45,7 +46,9 @@ export class GameRenderer {
   private readonly post: PostPipeline;
   private readonly assetManager: AssetManager;
   private readonly assetRoot = new THREE.Group();
-  private readonly sun = new THREE.DirectionalLight('#ffd9cb', 2.05);
+  // Cooled and pulled back. A warm 2.05 sun raking a pale deck is what made the floor
+  // the brightest thing in frame; the accents are supposed to own that.
+  private readonly sun = new THREE.DirectionalLight('#cfe4ee', 1.5);
   private readonly sunTarget = new THREE.Object3D();
   private environmentTexture: THREE.Texture | null = null;
   private resizeObserver: ResizeObserver;
@@ -82,13 +85,15 @@ export class GameRenderer {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.62;
+    // Lowered to deepen the blacks the palette sits on. The interface is flat colour
+    // over near-black, and the rendered frame was carrying far more midtone than that.
+    this.renderer.toneMappingExposure = 0.52;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.autoClear = false;
     this.renderer.info.autoReset = false;
-    this.scene.background = new THREE.Color('#080b18');
-    this.scene.fog = new THREE.FogExp2('#111326', 0.0062);
+    this.scene.background = new THREE.Color(palette.void);
+    this.scene.fog = new THREE.FogExp2(palette.ink, 0.0062);
 
     this.materials = new MaterialLibrary(this.renderer);
     this.world = new WorldPresenter(this.materials);
@@ -397,10 +402,10 @@ export class GameRenderer {
   }
 
   private setupLighting(): void {
-    const skyFill = new THREE.HemisphereLight('#6979b9', '#110e18', 0.82);
-    const rim = new THREE.DirectionalLight('#56e9ff', 0.72);
+    const skyFill = new THREE.HemisphereLight('#5f6fa8', '#0a0e14', 0.7);
+    const rim = new THREE.DirectionalLight('#08f7ff', 0.8);
     rim.position.set(-36, 22, -65);
-    const duskBounce = new THREE.DirectionalLight('#ff4d7b', 0.38);
+    const duskBounce = new THREE.DirectionalLight('#ff2d55', 0.42);
     duskBounce.position.set(28, 8, 34);
 
     this.sun.position.set(35, 58, 24);

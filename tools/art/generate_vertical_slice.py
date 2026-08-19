@@ -428,12 +428,17 @@ def build_environment() -> None:
     export = bpy.data.collections.get("EXPORT")
     bpy.context.scene.collection.children.unlink(export)
     bpy.data.collections.remove(export)
-    concrete = material("roof_ceramic", (0.28, 0.34, 0.38, 1), 0.28, 0.52)
-    deck = material("roof_deck", (0.04, 0.065, 0.085, 1), 0.74, 0.3)
+    # The deck top was the brightest surface in the game at (0.28, 0.34, 0.38), which
+    # put the play surface above everything the player actually needs to read. The
+    # interface this look is drawn from is flat saturated colour over near-black, so the
+    # architecture goes dark and the emissive trim carries the brightness.
+    concrete = material("roof_ceramic", (0.09, 0.115, 0.135, 1), 0.28, 0.62)
+    deck = material("roof_deck", (0.03, 0.045, 0.06, 1), 0.74, 0.32)
     metal = material("roof_gunmetal", (0.025, 0.04, 0.055, 1), 0.9, 0.22)
-    cyan = material("roof_cyan", (0.01, 0.25, 0.32, 1), 0.34, 0.2, (0.03, 0.9, 1.0, 1), 5)
-    magenta = material("roof_magenta", (0.42, 0.015, 0.08, 1), 0.4, 0.23, (1.0, 0.02, 0.14, 1), 4.5)
-    amber = material("roof_amber", (0.45, 0.18, 0.02, 1), 0.35, 0.24, (1.0, 0.35, 0.04, 1), 4)
+    # Emissives sit on the Cyber-Dusk palette: #08f7ff, #ff2d55, #f4ec18.
+    cyan = material("roof_cyan", (0.01, 0.25, 0.32, 1), 0.34, 0.2, (0.03, 0.97, 1.0, 1), 5)
+    magenta = material("roof_magenta", (0.42, 0.015, 0.08, 1), 0.4, 0.23, (1.0, 0.176, 0.333, 1), 4.5)
+    amber = material("roof_amber", (0.45, 0.42, 0.02, 1), 0.35, 0.24, (0.957, 0.925, 0.094, 1), 4.4)
 
     platform = new_export_collection("ROOFTOP_PLATFORM")
     box(platform, "platform_core", (4, 4, 0.34), (0, 0, -0.17), deck, 0.1)

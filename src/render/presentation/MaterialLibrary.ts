@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { verifyAssetPayload } from '../assets/ThreeAssetLoader';
+import { palette } from '../palette';
 import { surfaceTextureEntries, type SurfaceTextureId } from '../assets/surfaceTextures';
 
 export type CyberMaterialId =
@@ -14,6 +15,7 @@ export type CyberMaterialId =
   | 'glass'
   | 'cyan-light'
   | 'amber-light'
+  | 'yellow-light'
   | 'red-light'
   | 'skin'
   | 'fabric';
@@ -38,7 +40,7 @@ export class MaterialLibrary {
       color: '#27313b', metalness: 0.72, roughness: 0.34, map: detail, normalMap: normal, normalScale: new THREE.Vector2(0.22, 0.22),
     }));
     this.materials.set('concrete', new THREE.MeshStandardMaterial({
-      color: '#7d8790', metalness: 0.08, roughness: 0.78, map: detail, normalMap: normal, normalScale: new THREE.Vector2(0.42, 0.42),
+      color: '#3b444d', metalness: 0.08, roughness: 0.84, map: detail, normalMap: normal, normalScale: new THREE.Vector2(0.42, 0.42),
     }));
     this.materials.set('carbon', new THREE.MeshStandardMaterial({
       color: '#080d13', metalness: 0.38, roughness: 0.3, map: detail, normalMap: normal, normalScale: new THREE.Vector2(0.3, 0.3),
@@ -47,7 +49,7 @@ export class MaterialLibrary {
       color: '#1d2730', metalness: 0.94, roughness: 0.19, map: detail, normalMap: normal, normalScale: new THREE.Vector2(0.16, 0.16),
     }));
     this.materials.set('ceramic', new THREE.MeshPhysicalMaterial({
-      color: '#c7d0d3', metalness: 0.34, roughness: 0.2, clearcoat: 0.38, clearcoatRoughness: 0.18,
+      color: '#6d777c', metalness: 0.34, roughness: 0.28, clearcoat: 0.38, clearcoatRoughness: 0.18,
     }));
     this.materials.set('armor', new THREE.MeshPhysicalMaterial({
       color: '#202b36', metalness: 0.62, roughness: 0.27, clearcoat: 0.24, clearcoatRoughness: 0.3,
@@ -59,9 +61,15 @@ export class MaterialLibrary {
       color: '#6de8ff', emissive: '#09677e', emissiveIntensity: 1.5, metalness: 0.12, roughness: 0.04,
       transmission: 0.16, transparent: true, opacity: 0.82, clearcoat: 1,
     }));
-    this.materials.set('cyan-light', this.emissive('#5df5ff', 5.2));
-    this.materials.set('amber-light', this.emissive('#ffb34c', 4.5));
-    this.materials.set('red-light', this.emissive('#ff315f', 5));
+    // Modest intensities on purpose. These colours are fully saturated, so they read as
+    // neon without being driven hard; at the old 5.2 a strip close to the camera
+    // clipped to white, and clipped white carries no colour at all.
+    this.materials.set('cyan-light', this.emissive(palette.cyan, 2.4));
+    // `amber-light` keeps its id -- shell casings and pooled FX reference it -- but the
+    // colour moves onto the palette's yellow, which the 3D layer was missing entirely.
+    this.materials.set('amber-light', this.emissive(palette.yellow, 2.2));
+    this.materials.set('yellow-light', this.emissive(palette.yellowHot, 2.6));
+    this.materials.set('red-light', this.emissive(palette.red, 2.4));
     this.materials.set('skin', new THREE.MeshPhysicalMaterial({
       color: '#9b685b', roughness: 0.64, metalness: 0, sheen: 0.2, sheenColor: new THREE.Color('#d99b87'),
     }));

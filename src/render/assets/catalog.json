@@ -4,15 +4,15 @@
     "viewmodel.runner-rifle": {
       "kind": "viewmodel",
       "uri": "/assets/art/viewmodels/runner-rifle.glb",
-      "hash": "sha256:19746ebae6dcd6eae4b69ff5d2b725c4e713624ff651259a775983d2bcd517e0",
-      "byteLength": 236296,
+      "hash": "sha256:1b6808ee8e2148aa97c70cfdcfd4ac164fdc87586da22ced651860a5f6b970f2",
+      "byteLength": 255512,
       "lods": [
         {
           "level": 0,
           "uri": "/assets/art/viewmodels/runner-rifle.glb",
           "minDistance": 0,
-          "hash": "sha256:19746ebae6dcd6eae4b69ff5d2b725c4e713624ff651259a775983d2bcd517e0",
-          "byteLength": 236296
+          "hash": "sha256:1b6808ee8e2148aa97c70cfdcfd4ac164fdc87586da22ced651860a5f6b970f2",
+          "byteLength": 255512
         }
       ],
       "variants": [
@@ -37,8 +37,8 @@
       },
       "preloadGroup": "startup",
       "memoryEstimate": {
-        "cpuBytes": 387784,
-        "gpuBytes": 379256
+        "cpuBytes": 410952,
+        "gpuBytes": 402424
       },
       "source": "art-src/blender/viewmodels/runner-rifle.blend",
       "fallback": "viewmodel-rifle",
@@ -84,15 +84,15 @@
     "character.hunter-ranged": {
       "kind": "character",
       "uri": "/assets/art/characters/hunter-ranged.glb",
-      "hash": "sha256:80a3b7dc8be0c76ef40dbc49f0fcd1bf4ba0769f6921228c4c4a1fcf34b45e39",
-      "byteLength": 195084,
+      "hash": "sha256:6cd3a0fd3a2e584e3c91fdb84e0712777f3e326474ab80fb306817d1618dcacc",
+      "byteLength": 195816,
       "lods": [
         {
           "level": 0,
           "uri": "/assets/art/characters/hunter-ranged.glb",
           "minDistance": 0,
-          "hash": "sha256:80a3b7dc8be0c76ef40dbc49f0fcd1bf4ba0769f6921228c4c4a1fcf34b45e39",
-          "byteLength": 195084
+          "hash": "sha256:6cd3a0fd3a2e584e3c91fdb84e0712777f3e326474ab80fb306817d1618dcacc",
+          "byteLength": 195816
         }
       ],
       "variants": [
@@ -117,8 +117,8 @@
       },
       "preloadGroup": "combat",
       "memoryEstimate": {
-        "cpuBytes": 220992,
-        "gpuBytes": 213608
+        "cpuBytes": 224736,
+        "gpuBytes": 217352
       },
       "source": "art-src/blender/characters/hunter-ranged.blend",
       "fallback": "hunter-ranged",
@@ -161,15 +161,15 @@
     "character.hunter-aggressive": {
       "kind": "character",
       "uri": "/assets/art/characters/hunter-aggressive.glb",
-      "hash": "sha256:5c7bbcd21d4ea1e80ef2452c4fcec2881fefb49bea5ed6f54677db3b8fca79fc",
-      "byteLength": 189192,
+      "hash": "sha256:5e6faa8a83cd59162b8ccafc5f12186ddda3027f0f04460fa744cba24e1a02d5",
+      "byteLength": 189196,
       "lods": [
         {
           "level": 0,
           "uri": "/assets/art/characters/hunter-aggressive.glb",
           "minDistance": 0,
-          "hash": "sha256:5c7bbcd21d4ea1e80ef2452c4fcec2881fefb49bea5ed6f54677db3b8fca79fc",
-          "byteLength": 189192
+          "hash": "sha256:5e6faa8a83cd59162b8ccafc5f12186ddda3027f0f04460fa744cba24e1a02d5",
+          "byteLength": 189196
         }
       ],
       "variants": [
@@ -237,14 +237,14 @@
     "environment.rooftop-platform": {
       "kind": "environment",
       "uri": "/assets/art/environment/rooftop-platform.glb",
-      "hash": "sha256:9898a880850515f5090a4753f4235c6dd444e56032d8a5523ff50df6f2c5b5d3",
+      "hash": "sha256:b2abcc1896e948266739eea02b5d844d48347d452a9138c3714ad8bc9c6312e6",
       "byteLength": 33772,
       "lods": [
         {
           "level": 0,
           "uri": "/assets/art/environment/rooftop-platform.glb",
           "minDistance": 0,
-          "hash": "sha256:9898a880850515f5090a4753f4235c6dd444e56032d8a5523ff50df6f2c5b5d3",
+          "hash": "sha256:b2abcc1896e948266739eea02b5d844d48347d452a9138c3714ad8bc9c6312e6",
           "byteLength": 33772
         }
       ],
@@ -307,15 +307,15 @@
     "environment.wallrun-panel": {
       "kind": "environment",
       "uri": "/assets/art/environment/wallrun-panel.glb",
-      "hash": "sha256:ed5ee04fa74e8a20a5ee6c39fb5f3860589dcfbf15f8b34ddbeb7bc2f724f1d8",
-      "byteLength": 37736,
+      "hash": "sha256:129558ea1ad34d4809802f9368360ea6250d142ef772c9b25b78d6df0b30f9b9",
+      "byteLength": 37740,
       "lods": [
         {
           "level": 0,
           "uri": "/assets/art/environment/wallrun-panel.glb",
           "minDistance": 0,
-          "hash": "sha256:ed5ee04fa74e8a20a5ee6c39fb5f3860589dcfbf15f8b34ddbeb7bc2f724f1d8",
-          "byteLength": 37736
+          "hash": "sha256:129558ea1ad34d4809802f9368360ea6250d142ef772c9b25b78d6df0b30f9b9",
+          "byteLength": 37740
         }
       ],
       "variants": [
@@ -383,14 +383,14 @@
     "environment.vault-barrier": {
       "kind": "environment",
       "uri": "/assets/art/environment/vault-barrier.glb",
-      "hash": "sha256:eab2136564baa8b076a7661b667c7b3f34cac7b67652b3728a3bd9ad73c41a9e",
+      "hash": "sha256:af5b750d896b5b7100eb68b41c8665eec205e5bb7c58521fdd99cdd166093382",
       "byteLength": 22980,
       "lods": [
         {
           "level": 0,
           "uri": "/assets/art/environment/vault-barrier.glb",
           "minDistance": 0,
-          "hash": "sha256:eab2136564baa8b076a7661b667c7b3f34cac7b67652b3728a3bd9ad73c41a9e",
+          "hash": "sha256:af5b750d896b5b7100eb68b41c8665eec205e5bb7c58521fdd99cdd166093382",
           "byteLength": 22980
         }
       ],
@@ -459,15 +459,15 @@
     "environment.grapple-anchor": {
       "kind": "environment",
       "uri": "/assets/art/environment/grapple-anchor.glb",
-      "hash": "sha256:2befe5cea53e12b54b5bde5f7dedf226573cb5e3a08e6638eae02970834607d8",
-      "byteLength": 24504,
+      "hash": "sha256:ffa9ec3083a8aa85f134cb672659b5e7b67e102980228ea739344605c9a0bfe9",
+      "byteLength": 24500,
       "lods": [
         {
           "level": 0,
           "uri": "/assets/art/environment/grapple-anchor.glb",
           "minDistance": 0,
-          "hash": "sha256:2befe5cea53e12b54b5bde5f7dedf226573cb5e3a08e6638eae02970834607d8",
-          "byteLength": 24504
+          "hash": "sha256:ffa9ec3083a8aa85f134cb672659b5e7b67e102980228ea739344605c9a0bfe9",
+          "byteLength": 24500
         }
       ],
       "variants": [
@@ -537,15 +537,15 @@
     "environment.route-sign": {
       "kind": "environment",
       "uri": "/assets/art/environment/route-sign.glb",
-      "hash": "sha256:454689e360f9fc1daabfa89305ec7a09fed27122908823170c1cc843c44f7c3f",
-      "byteLength": 20040,
+      "hash": "sha256:f79fde503d69c7abc73ea0013f1020553d40e98a2f9e451e2cdeb2742c4c0bda",
+      "byteLength": 20052,
       "lods": [
         {
           "level": 0,
           "uri": "/assets/art/environment/route-sign.glb",
           "minDistance": 0,
-          "hash": "sha256:454689e360f9fc1daabfa89305ec7a09fed27122908823170c1cc843c44f7c3f",
-          "byteLength": 20040
+          "hash": "sha256:f79fde503d69c7abc73ea0013f1020553d40e98a2f9e451e2cdeb2742c4c0bda",
+          "byteLength": 20052
         }
       ],
       "variants": [

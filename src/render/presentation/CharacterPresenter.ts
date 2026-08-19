@@ -3,6 +3,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { EntitySnapshot, GameEvent, SaveDataV1, SimulationSnapshot } from '../../contracts';
 import { botColliderBottom } from '../../content/config';
+import { hostileAccent } from '../palette';
 import { MaterialLibrary } from './MaterialLibrary';
 
 interface HunterInstance {
@@ -68,8 +69,11 @@ const HEALTH_MAX_SCALE = 2.6;
 const ACCENT_EMISSIVE_INTENSITY = 0.14;
 
 function profileAccent(profile: 'ranged' | 'aggressive'): string {
-  return profile === 'aggressive' ? '#ff3d63' : '#3ad9ff';
+  return hostileAccent[profile];
 }
+/** Only signal trim and optics carry the accent glow; armour stays dark. */
+const ACCENT_MATERIAL = /(signal|glass|visor|optic)/i;
+
 const LAND_TICKS = 8;
 
 export class CharacterPresenter {
@@ -353,11 +357,24 @@ export class CharacterPresenter {
   }
 
   /** Lifts each enemy off the background with an emissive rim in its profile colour. */
+  /**
+   * Accents the hostile's signal trim, not the whole model.
+   *
+   * This used to make every material on the figure emissive, which is why a hunter read
+   * as a uniform glowing blob rather than a silhouette with a readable marking -- and,
+   * once the palette moved onto fully saturated cyan and red, two self-illuminated
+   * hunters were bright enough to bloom the entire frame white. Dark armour with a
+   * glowing stripe is both the look this is drawn from and far easier to read.
+   */
   private applyProfileAccent(hunter: HunterInstance): void {
     const accent = new THREE.Color(profileAccent(hunter.profile));
     for (const material of hunter.deathMaterials) {
       if (!('emissive' in material)) continue;
       const standard = material as THREE.MeshStandardMaterial;
+      if (!ACCENT_MATERIAL.test(standard.name)) {
+        standard.emissive.setRGB(0, 0, 0);
+        continue;
+      }
       standard.emissive.copy(accent);
       standard.emissiveIntensity = ACCENT_EMISSIVE_INTENSITY;
     }
