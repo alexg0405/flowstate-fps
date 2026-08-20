@@ -1179,3 +1179,134 @@ is still a grid-aligned panel on a flat field. No webfonts were added, so the di
 tiers remain `Impact, 'Arial Narrow'` -- a closer face means a build change, a FOUT
 story and new visual baselines, and that is a decision to take deliberately rather
 than smuggle into a CSS pass.
+
+
+---
+
+## 14. The world: buildings, floors and the sky
+
+Verified: `npm test` **328 passed / 31 files**, `npm run typecheck` clean,
+`npm run build` clean, `FLOWSTATE_STATIC_DIST=1 npm run test:e2e` **41 passed**,
+`npm run art:validate` clean at 1.93 MiB of 25.00 MiB, and the 3 Chromium visual
+baselines **regenerated** -- numbers below.
+
+None of this touched `tools/art/generate_vertical_slice.py`, so `npm run art:build`
+was not needed and no GLB changed. The skyline, the sky and the deck markings are all
+runtime TypeScript in `WorldPresenter`.
+
+### Every building was the same building
+
+`buildCity` instanced one `RoundedBoxGeometry(1, 1, 1)` 180 times and varied only the
+`scale`, so height and width were the entire vocabulary of a 180-tower skyline. Worse,
+panes were placed on a single inward-facing wall -- the other three faces of every
+tower were bare, including the one pointing back up the route, which is the face a
+player running the route sees most.
+
+`src/render/presentation/citySkyline.ts` now owns two pure decisions, tested without a
+WebGL context the way `ResolutionController` and `visualBatching` are:
+
+- **Six masses**, each a stack of blocks in normalised space: a slab with a roof
+  housing, a double setback, an overhanging crown, a podium and shaft, twinned shafts
+  of different heights, and a ziggurat. Each merges into one geometry, so the cost is
+  one draw call per archetype rather than per building. The near tier is weighted
+  toward the solid masses, because a wall of twinned shafts stopped closing the
+  corridor in -- that tier's job.
+- **Four facade patterns** -- grid, ribbon, vertical stack, sparse -- and the same
+  block list tells the pane placer where the wall actually *is* at a given height, so
+  windows step in with a setback instead of hanging off the side of it. Both visible
+  faces are lit now.
+
+Towers also carry a small yaw and one of six building tones. The tone matters more
+than it sounds: every tower was `#0a0f16`, which is very nearly the sky at zenith, so
+with two faces lit the windows read as lights floating in the dark with no mass behind
+them. That was visible in the first capture and is why the tones exist.
+
+Measured at the spawn view, high quality, dynamic resolution pinned off, back to back
+on the same machine:
+
+| | draw calls | triangles | frame |
+| --- | --- | --- | --- |
+| before | 155 | 186,859 | 3.7-3.9 ms |
+| after | **165** | **144,555** | 3.7-4.4 ms |
+
+Ten more draw calls and **42,304 fewer triangles**, because the archetype blocks are
+plain boxes: rounding four or five of them per tower would have multiplied the
+skyline's triangle count for a bevel that is sub-pixel at these distances. Frame time
+is inside the noise -- an earlier pair of readings at 1.2 ms on a quieter machine
+turned out to say more about machine state than about this change, which is why the
+comparison above was re-run back to back.
+
+### The floors were bare, and the reason is worth writing down
+
+Every walkable surface is one 4x4 m `rooftop-platform.glb` scaled up -- a 30x22 m
+arena floor is that asset stretched 7.5 times in X and 5.5 in Z -- and
+`MaterialLibrary.loadSurfaceTextures` sets `RepeatWrapping` but never sets
+`texture.repeat`, while the Blender pipeline UV-unwraps each face 0..1. So the 1024²
+surface sheet is stretched by the same factor the deck is: whatever detail it has is
+smeared to invisibility on a big deck and crisp on a small barrier.
+
+`buildDeckMarkings` lays two overlays over every walkable top face, and the thing that
+makes them work is that **their UVs are computed in world metres at build time**
+rather than inherited from the mesh they sit on. A panel seam is 2 m apart on the
+start floor and 2 m apart on the final arena whatever those decks are scaled by. Both
+are one merged geometry, so the whole route's floor decoration costs two draw calls:
+panel seams with bolt heads, and a yellow hazard band inset from every deck edge,
+which also tells the player where the drop is.
+
+A grime layer was tried and removed. Hard blots read as stains and tiled visibly every
+four metres; softening them to radial gradients at the strength this wants made an
+eight-bit alpha ramp quantise into contour rings, which was worse than the bare deck.
+
+### The sky
+
+The upper third of the frame was empty except for gantries, which is where the player
+is looking through most of a grapple. Four instanced draw calls fill it:
+
+- **Airships.** A merged hull -- ellipsoid, tail cross, gondola -- with an advertising
+  banner down each flank and a third across the belly, drifting on wrapped lanes.
+- **Air traffic.** Light streaks on stacked lanes, red going away and cool white
+  coming toward. Two thirds run *along* the route above it rather than across it,
+  because those are the ones in frame while the player is moving down it.
+
+The counts and the lane lengths are one decision, not two. This is a corridor between
+tower walls, so the visible sky is a slot: the first version spread seven ships and
+thirty cars evenly over a few hundred metres and **nothing was ever inside it**. The
+lanes are short and the traffic dense so something is crossing most of the time.
+
+Banners, lamps and cars are unlit `MeshBasicMaterial` rather than emissive standard
+material, and that is not a shortcut. A standard material's emissive term is not
+multiplied by the instance colour, so the per-ship and per-car tints were drowned by
+the material's own glow and every banner and every streak came out the same white.
+Measured in frame, twice.
+
+**Searchlights were tried and cut.** A flat-filled cone is invisible at an opacity low
+enough to pass for light and reads as a grey concrete wedge at any opacity where it is
+visible; an alpha ramp along its length improved it and did not fix it. Two attempts,
+both looked at in frame, neither produced something that looked like light rather than
+like a mistake -- so it is gone rather than left in looking like a fix.
+
+### The baselines
+
+All three moved, legitimately and enormously, and were regenerated:
+
+| baseline | pixels changed | of frame |
+| --- | --- | --- |
+| White Line high | 452,670 | **49.1%** |
+| Corporate hunters high | 458,331 | **49.7%** |
+| White Line low | 216,237 | **23.5%** |
+
+The sky moves, so the obvious risk was a non-deterministic baseline. It is not one:
+`GameRenderer` pins `time` to a constant and `frameSeconds` to zero under
+`visualRegression`, and every sky position is a pure function of `time` rather than
+integrated per frame. Verified rather than assumed -- the regenerated baselines pass
+at a temporarily tightened `maxDiffPixelRatio` of **0.00001**, about nine pixels of
+921,600, on a fresh run. The threshold is back at 0.035.
+
+One operational note: regenerating these needs `--timeout=150000`. At the default 30 s
+two of the three time out during the update pass, then pass on a normal run.
+
+### Also removed
+
+The menu's route-brief strip -- `03 ARENAS / 09 HOSTILES / 172 METRE ROUTE` -- at the
+user's request, along with `routeBrief()` and the 13 now-dead `.protocol-strip` rules
+in the stylesheet.

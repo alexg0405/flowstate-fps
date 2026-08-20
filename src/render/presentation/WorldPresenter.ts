@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { LevelPrimitive, LightInstance, RuntimeLevelV1, TransformData, Vec3 } from '../../contracts';
 import { isAssetId } from '../assets/catalog';
 import { palette } from '../palette';
 import { MaterialLibrary } from './MaterialLibrary';
+import { facadeAt, facadePatterns, paneLayout, towerArchetypes, towerTones, type FacadePattern } from './citySkyline';
 
 interface GateArt {
   group: THREE.Group;
@@ -27,6 +29,46 @@ interface GateArt {
 const POOLED_POINT_LIGHTS = 2;
 const POOLED_SPOT_LIGHTS = 1;
 
+/**
+ * How many airships, aircars and searchlights the sky carries, and how far their
+ * lanes run before they wrap.
+ *
+ * The counts and the spans are one decision, not two. This is a corridor between
+ * tower walls, so the visible sky is a slot maybe forty degrees wide: sky traffic
+ * spread evenly over a few hundred metres is almost never inside it. The lanes are
+ * therefore short and the traffic dense, so something is crossing the slot most of
+ * the time rather than once a minute.
+ */
+const AIRSHIP_COUNT = 7;
+const TRAFFIC_COUNT = 46;
+const AIRSHIP_SPAN = 300;
+/** Metres one tile of the deck seam and hazard patterns covers, in world units. */
+const SEAM_TILE_METRES = 4;
+const HAZARD_TILE_METRES = 1.1;
+const TRAFFIC_SPAN = 330;
+
+interface Airship { length: number; altitude: number; z: number; speed: number; phase: number; bob: number; tint: string }
+/**
+ * `axis` is which way the lane runs. `x` lanes cross the corridor and are read as
+ * traffic passing overhead; `z` lanes run along it, above the route, and are the ones
+ * a player actually watches while moving -- they come at you or pull away from you.
+ */
+interface Aircar { axis: 'x' | 'z'; altitude: number; offset: number; speed: number; phase: number; scale: number; tint: string }
+
+interface SkyTraffic {
+  hulls: THREE.InstancedMesh;
+  banners: THREE.InstancedMesh;
+  lamps: THREE.InstancedMesh;
+  cars: THREE.InstancedMesh;
+  airships: Airship[];
+  traffic: Aircar[];
+}
+
+/** Position on a looping lane of `span` metres, centred on the origin. */
+function wrapSpan(value: number, span: number): number {
+  return ((value % span) + span * 1.5) % span - span / 2;
+}
+
 /** Screens wash toward white, so they read as lit panels rather than flat neon. */
 const WHITE = new THREE.Color('#ffffff');
 const CYAN = palette.cyan;
@@ -49,6 +91,17 @@ export class WorldPresenter {
   private readonly generatedMaterials: THREE.Material[] = [];
   private readonly generatedTextures: THREE.Texture[] = [];
   private cityGlow?: THREE.InstancedMesh;
+  private cityBeacons?: THREE.InstancedMesh;
+  private sky?: SkyTraffic;
+  /** Reused every frame by `updateSkyTraffic`, which is on the render path. */
+  private readonly scratch = {
+    matrix: new THREE.Matrix4(),
+    position: new THREE.Vector3(),
+    scale: new THREE.Vector3(),
+    orientation: new THREE.Quaternion(),
+    euler: new THREE.Euler(),
+    color: new THREE.Color(),
+  };
 
   constructor(private readonly materials: MaterialLibrary) {
     this.root.name = 'CyberDuskWorld';
@@ -107,6 +160,7 @@ export class WorldPresenter {
       this.buildLightPool();
     }
 
+    this.buildDeckMarkings(level.primitives);
     this.propRoot.add(this.createExitPortal(level.exit));
     level.encounters.forEach((encounter, index) => {
       this.propRoot.add(this.createWayfindingTotem(encounter.label, encounter.checkpoint, index + 1));
@@ -124,6 +178,13 @@ export class WorldPresenter {
     if (this.cityGlow) {
       const material = this.cityGlow.material as THREE.MeshStandardMaterial;
       material.emissiveIntensity = 1.35 + Math.sin(time * 0.28) * 0.12;
+    }
+    this.updateSkyTraffic(time);
+    if (this.cityBeacons) {
+      // Warning beacons blink rather than glow. Slower than the neon and much
+      // harder-edged, because that difference is the whole read.
+      const material = this.cityBeacons.material as THREE.MeshStandardMaterial;
+      material.emissiveIntensity = Math.sin(time * 1.7) > 0.35 ? 3.4 : 0.35;
     }
   }
 
@@ -379,38 +440,99 @@ export class WorldPresenter {
    * A tier of towers each side of the route, a far tier behind it for depth, and
    * gantries overhead so the upper half of the frame is not empty sky.
    *
-   * What makes a facade read as a *building* rather than a dark box is lit windows,
-   * and lots of them. They are instanced quads sized in world units rather than a
-   * texture on the tower material, because an instanced mesh shares one material:
-   * a mapped grid would stretch across a 150 m tower and squash on a 12 m one, while
-   * world-sized quads keep the same storey height on every building. The same
-   * reasoning puts the billboards and the roof masts in their own instanced meshes.
+   * Two things decide whether this reads as a city or as a field of boxes, and the
+   * first version of it got both wrong:
    *
-   * Seven draw calls for the whole city -- towers, windows, bands, billboards,
-   * banners, masts, gantries -- against 138 for the route's main pass.
+   * - **Every tower was the same building.** One `RoundedBoxGeometry(1, 1, 1)` was
+   *   instanced 180 times and varied only by `scale`, so height and width were the
+   *   entire vocabulary. Towers now come in six masses -- setbacks, overhanging
+   *   crowns, podiums, twinned shafts, ziggurats -- defined as block stacks in
+   *   `citySkyline.ts` and merged into one geometry each. Cost is one draw call per
+   *   archetype, not per building. They also carry a little yaw, because a skyline
+   *   perfectly aligned to the world axes reads as a tech demo.
+   * - **Only one wall was ever lit.** Panes were placed on the single face pointing
+   *   at the route, leaving the other three bare -- and the corridor-facing wall is
+   *   the one the player sees most while running the route. Both faces are lit now,
+   *   and the panes follow the block profile, so a setback steps its windows in with
+   *   it instead of leaving them hanging in the air.
+   *
+   * What makes a facade read as a *building* is lit windows, and lots of them. They
+   * are instanced quads sized in world units rather than a texture on the tower
+   * material, because an instanced mesh shares one material: a mapped grid would
+   * stretch across a 150 m tower and squash on a 12 m one, while world-sized quads
+   * keep the same storey height on every building. The same reasoning puts the
+   * billboards, masts and beacons in their own instanced meshes.
    */
   private buildCity(): void {
     const random = this.seededRandom(0xf10a5e7);
-    const quaternion = new THREE.Quaternion();
     const matrix = new THREE.Matrix4();
+    const upright = new THREE.Quaternion();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3();
+    const orientation = new THREE.Quaternion();
+    const euler = new THREE.Euler();
 
     const tiers = [
       // Near tier: fills the dead band beside the route, and tall enough to close the
       // corridor in. Low frontage left the upper half of the frame as empty sky.
-      { count: 96, minX: 29, spreadX: 32, minHeight: 20, spreadHeight: 52, minWidth: 5, spreadWidth: 8, panes: 40, maxColumns: 5, maxRows: 8 },
+      // Weighted toward the solid masses -- a wall of twinned shafts and podiums
+      // leaves gaps the corridor used to be closed by, and this is the tier doing
+      // that job. The exotic silhouettes read better on the skyline anyway.
+      { count: 96, minX: 29, spreadX: 32, minHeight: 20, spreadHeight: 52, minWidth: 7, spreadWidth: 9, panes: 34, shapes: [0, 0, 1, 1, 2, 5] },
       // Far tier: the skyline behind it. More panes because the whole facade is in
       // frame at that distance, and a grid of lights is what makes it read as a city.
-      { count: 84, minX: 62, spreadX: 128, minHeight: 34, spreadHeight: 130, minWidth: 10, spreadWidth: 20, panes: 80, maxColumns: 8, maxRows: 10 },
+      { count: 84, minX: 62, spreadX: 128, minHeight: 34, spreadHeight: 130, minWidth: 10, spreadWidth: 20, panes: 58, shapes: [0, 1, 2, 3, 4, 5] },
     ];
     const total = tiers.reduce((sum, tier) => sum + tier.count, 0);
 
-    const towerGeometry = new RoundedBoxGeometry(1, 1, 1, 2, 0.04);
-    const towerMaterial = this.materials.variant('armor', '#0a0f16');
+    // Each tower is planned before anything is allocated, because an instanced mesh
+    // needs its count up front and the archetypes are chosen at random.
+    interface Plan {
+      archetype: number; tone: number; side: number; x: number; z: number; yaw: number;
+      width: number; depth: number; height: number; pattern: FacadePattern; panes: number; near: boolean;
+    }
+    const plans: Plan[] = [];
+    for (const tier of tiers) {
+      for (let index = 0; index < tier.count; index += 1) {
+        const side = index % 2 ? -1 : 1;
+        plans.push({
+          archetype: tier.shapes[Math.floor(random() * tier.shapes.length) % tier.shapes.length],
+          tone: Math.floor(random() * towerTones.length) % towerTones.length,
+          side,
+          width: tier.minWidth + random() * tier.spreadWidth,
+          depth: tier.minWidth + random() * tier.spreadWidth,
+          height: tier.minHeight + random() * tier.spreadHeight,
+          x: side * (tier.minX + random() * tier.spreadX),
+          z: 56 - random() * 300,
+          // Small: enough to break the axis alignment, not enough to read as rubble.
+          yaw: (random() - 0.5) * 0.34,
+          pattern: facadePatterns[Math.floor(random() * facadePatterns.length) % facadePatterns.length],
+          panes: tier.panes,
+          near: tier.minX < 40,
+        });
+      }
+    }
+
+    // Plain boxes rather than rounded ones: an archetype is four or five blocks, so
+    // rounding every one of them would multiply the skyline's triangle count for a
+    // bevel that is sub-pixel at these distances. Measured, this is cheaper than the
+    // single rounded box it replaces.
+    // White, because the actual albedo arrives per instance through `setColorAt`:
+    // one material for six archetypes and six building tones.
+    const towerMaterial = this.materials.variant('armor', '#ffffff');
     this.generatedMaterials.push(towerMaterial);
-    const towers = new THREE.InstancedMesh(towerGeometry, towerMaterial, total);
-    towers.receiveShadow = true;
+    const archetypeMeshes = towerArchetypes.map((archetype) => {
+      const count = plans.filter((plan) => towerArchetypes[plan.archetype] === archetype).length;
+      const geometry = mergeGeometries(archetype.blocks.map((block) => {
+        const box = new THREE.BoxGeometry(block.width, block.y1 - block.y0, block.depth);
+        box.translate(block.offsetX ?? 0, (block.y0 + block.y1) / 2 - 0.5, block.offsetZ ?? 0);
+        return box;
+      }), false);
+      const mesh = new THREE.InstancedMesh(geometry ?? new THREE.BoxGeometry(1, 1, 1), towerMaterial, Math.max(1, count));
+      mesh.receiveShadow = true;
+      mesh.count = 0;
+      return mesh;
+    });
 
     // Three bands per tower, so a face reads as a lit building rather than one stripe.
     const bandsPerTower = 3;
@@ -418,12 +540,14 @@ export class WorldPresenter {
     const bandMaterial = this.emissiveMaterial(palette.cyan, 1.5);
     const bands = new THREE.InstancedMesh(bandGeometry, bandMaterial, total * bandsPerTower);
 
-    // Storeys of lit windows, budgeted per tier: the near frontage needs enough to
-    // read at a glance, the far skyline needs enough to read as a grid.
-    const paneBudget = tiers.reduce((sum, tier) => sum + tier.count * tier.panes, 0);
+    // Storeys of lit windows, budgeted per tier and split across the two faces a
+    // player can actually see: the one pointing at the route, and the one pointing
+    // back up it.
+    const paneBudget = tiers.reduce((sum, tier) => sum + tier.count * tier.panes, 0) * 2;
     const windowGeometry = new THREE.PlaneGeometry(1, 1);
     const windowMaterial = this.emissiveMaterial('#ffd9a3', 1.15);
     const windows = new THREE.InstancedMesh(windowGeometry, windowMaterial, paneBudget);
+    windows.count = 0;
 
     const bannerGeometry = new THREE.PlaneGeometry(1, 1);
     const bannerMaterial = this.emissiveMaterial(palette.yellow, 1.7);
@@ -445,99 +569,137 @@ export class WorldPresenter {
     this.generatedMaterials.push(mastMaterial);
     const masts = new THREE.InstancedMesh(mastGeometry, mastMaterial, total);
 
+    // Aircraft warning beacons on the tall ones. A red pinprick at the top of a
+    // silhouette is most of what says "that is a building and it is very far away".
+    const beaconGeometry = new THREE.SphereGeometry(1, 6, 4);
+    const beaconMaterial = this.emissiveMaterial(palette.red, 2.4);
+    const beacons = new THREE.InstancedMesh(beaconGeometry, beaconMaterial, total);
+
     const accents = [palette.cyan, palette.red, palette.yellow];
     // Windows are lamplight, not neon: warm office white with the odd cool or amber
     // floor. Uniform neon reads as a games-console skybox rather than a city.
     const windowTints = ['#ffd9a3', '#ffe9c8', '#c9e8ff', '#ff9a5c', '#8ff3ff'];
     const bandColor = new THREE.Color();
-    let tower = 0;
     let band = 0;
     let pane = 0;
 
-    for (const tier of tiers) {
-      for (let index = 0; index < tier.count; index += 1, tower += 1) {
-        const side = index % 2 ? -1 : 1;
-        const width = tier.minWidth + random() * tier.spreadWidth;
-        const depth = tier.minWidth + random() * tier.spreadWidth;
-        const height = tier.minHeight + random() * tier.spreadHeight;
-        const x = side * (tier.minX + random() * tier.spreadX);
-        const z = 56 - random() * 300;
-        position.set(x, height / 2 - 18, z);
-        scale.set(width, height, depth);
-        towers.setMatrixAt(tower, matrix.compose(position, quaternion, scale));
+    plans.forEach((plan, tower) => {
+      const { blocks } = towerArchetypes[plan.archetype];
+      const { side, width, depth, height, yaw, x, z } = plan;
+      const baseY = height / 2 - 18;
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
+      /** Tower-local X/Z to world, through the tower's own yaw. */
+      const toWorld = (localX: number, localZ: number): [number, number] => [x + localX * cos + localZ * sin, z - localX * sin + localZ * cos];
 
-        // Faces turn toward the route, so the neon is pointed at the player.
-        const inward = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, side > 0 ? -Math.PI / 2 : Math.PI / 2, 0));
-        const faceX = x + (side > 0 ? -width / 2 - 0.06 : width / 2 + 0.06);
-        const accent = accents[(tower + index) % accents.length];
+      orientation.setFromEuler(euler.set(0, yaw, 0));
+      const mesh = archetypeMeshes[plan.archetype];
+      const slot = mesh.count;
+      mesh.count = slot + 1;
+      mesh.setMatrixAt(slot, matrix.compose(position.set(x, baseY, z), orientation, scale.set(width, height, depth)));
+      mesh.setColorAt(slot, bandColor.set(towerTones[plan.tone]));
 
-        for (let step = 0; step < bandsPerTower; step += 1, band += 1) {
-          const bandHeight = Math.max(0.35, height * (0.012 + random() * 0.02));
-          const bandY = position.y - height / 2 + height * (0.18 + step * 0.26 + random() * 0.08);
-          bands.setMatrixAt(band, matrix.compose(
-            position.clone().set(faceX, bandY, z),
-            inward,
-            scale.clone().set(depth * (0.5 + random() * 0.4), bandHeight, 1),
-          ));
-          bandColor.set(step === 1 ? accent : accents[(tower + step) % accents.length]);
-          bands.setColorAt(band, bandColor);
+      const accent = accents[(tower * 3 + plan.archetype) % accents.length];
+
+      /**
+       * Places panes on one face of the tower. `axis` picks which wall: 'x' is the
+       * one pointing across the route, 'z' the one pointing back along it. Both are
+       * lit because both are visible from the corridor, and the offsets are read off
+       * the block spanning each row so the grid follows a setback in.
+       */
+      const lightFace = (axis: 'x' | 'z', budget: number): void => {
+        const sample = facadeAt(blocks, 0.4);
+        const faceWidth = axis === 'x' ? depth * sample.depth : width * sample.width;
+        const layout = paneLayout(plan.pattern, budget, faceWidth, height);
+        const rowStep = (height * 0.88) / layout.rows;
+        for (let row = 0; row < layout.rows; row += 1) {
+          const t = (row + 0.5) / layout.rows * 0.9 + 0.04;
+          const block = facadeAt(blocks, t);
+          const halfWidth = (width * block.width) / 2;
+          const halfDepth = (depth * block.depth) / 2;
+          const acrossHalf = axis === 'x' ? halfDepth : halfWidth;
+          const cell = (acrossHalf * 2) / layout.columns;
+          for (let column = 0; column < layout.columns; column += 1) {
+            if (pane >= paneBudget) return;
+            if (random() > layout.litChance) continue;
+            const across = -acrossHalf + (column + 0.5) * cell;
+            // 0.06 m proud of the wall, so the quad never z-fights the mass behind it.
+            const outward = axis === 'x'
+              ? [(block.offsetX ?? 0) * width - side * (halfWidth + 0.06), (block.offsetZ ?? 0) * depth + across] as const
+              : [(block.offsetX ?? 0) * width + across, (block.offsetZ ?? 0) * depth + halfDepth + 0.06] as const;
+            const [worldX, worldZ] = toWorld(outward[0], outward[1]);
+            orientation.setFromEuler(euler.set(0, yaw + (axis === 'x' ? (side > 0 ? -Math.PI / 2 : Math.PI / 2) : 0), 0));
+            windows.setMatrixAt(pane, matrix.compose(
+              position.set(worldX, baseY - height / 2 + height * 0.06 + row * rowStep, worldZ),
+              orientation,
+              scale.set(cell * layout.fillWidth, rowStep * layout.fillHeight, 1),
+            ));
+            windows.setColorAt(pane, bandColor.set(windowTints[(tower * 7 + row * 3 + column) % windowTints.length]));
+            pane += 1;
+          }
         }
+      };
+      lightFace('x', plan.panes);
+      lightFace('z', plan.panes);
+      windows.count = pane;
 
-        // A tall thin sign on roughly half the towers, which is what gives a skyline
-        // its vertical rhythm.
-        const hasSign = random() > 0.5;
-        const signHeight = hasSign ? height * (0.2 + random() * 0.3) : 0;
-        signs.setMatrixAt(tower, matrix.compose(
-          position.clone().set(faceX, position.y + height * (0.1 + random() * 0.2), z + depth * 0.18),
-          inward,
-          scale.clone().set(Math.max(0.4, width * 0.1), signHeight, 1),
+      // The route-facing wall carries the neon: bands, a banner and a screen.
+      const inwardBlock = facadeAt(blocks, 0.45);
+      const inwardHalf = (width * inwardBlock.width) / 2;
+      const [inwardX, inwardZ] = toWorld((inwardBlock.offsetX ?? 0) * width - side * (inwardHalf + 0.07), (inwardBlock.offsetZ ?? 0) * depth);
+      orientation.setFromEuler(euler.set(0, yaw + (side > 0 ? -Math.PI / 2 : Math.PI / 2), 0));
+
+      for (let step = 0; step < bandsPerTower; step += 1, band += 1) {
+        const bandHeight = Math.max(0.35, height * (0.012 + random() * 0.02));
+        const bandT = 0.18 + step * 0.26 + random() * 0.08;
+        const bandBlock = facadeAt(blocks, bandT);
+        const [bandX, bandZ] = toWorld((bandBlock.offsetX ?? 0) * width - side * ((width * bandBlock.width) / 2 + 0.07), (bandBlock.offsetZ ?? 0) * depth);
+        bands.setMatrixAt(band, matrix.compose(
+          position.set(bandX, baseY - height / 2 + height * bandT, bandZ),
+          orientation,
+          scale.set(depth * bandBlock.depth * (0.5 + random() * 0.4), bandHeight, 1),
         ));
-        signs.setColorAt(tower, bandColor.set(accents[tower % accents.length]));
-
-        // Windows, spread over the whole facade rather than stacked at real storey
-        // height: filling a fixed 3 m grid leaves a 150 m tower lit only at its feet.
-        // Roughly a fifth are dark, because a facade where every pane is lit reads as
-        // a light box rather than a building.
-        const columns = Math.max(2, Math.min(tier.maxColumns, Math.round(depth / 2.4)));
-        const rows = Math.max(2, Math.min(tier.maxRows, Math.floor(tier.panes / columns), Math.floor(height / 3.2)));
-        const rowStep = (height * 0.86) / rows;
-        const paneHeight = Math.min(1.35, rowStep * 0.42);
-        const paneWidth = (depth / columns) * 0.46;
-        for (let slot = 0; slot < tier.panes; slot += 1, pane += 1) {
-          const row = slot % rows;
-          const column = Math.floor(slot / rows);
-          const lit = column < columns && random() > 0.2;
-          const paneY = position.y - height / 2 + height * 0.09 + row * rowStep;
-          const paneZ = z + (column - (columns - 1) / 2) * (depth / columns) * 0.86;
-          windows.setMatrixAt(pane, matrix.compose(
-            position.clone().set(faceX, paneY, paneZ),
-            inward,
-            // A dark pane is scaled away rather than hidden: an instanced mesh has no
-            // per-instance visibility, and zero scale costs nothing to rasterise.
-            scale.clone().set(lit ? paneWidth : 0, lit ? paneHeight : 0, 1),
-          ));
-          windows.setColorAt(pane, bandColor.set(windowTints[(tower * 7 + slot) % windowTints.length]));
-        }
-
-        // A screen on a third of the near-tier towers, wide and low on the facade.
-        const screened = tier.minX < 40 && random() > 0.66;
-        const screenWidth = screened ? Math.max(2.6, depth * (0.5 + random() * 0.3)) : 0;
-        billboards.setMatrixAt(tower, matrix.compose(
-          position.clone().set(faceX, position.y - height / 2 + height * (0.3 + random() * 0.34), z + (random() - 0.5) * depth * 0.3),
-          inward,
-          scale.clone().set(screenWidth, screened ? screenWidth * (0.5 + random() * 0.3) : 0, 1),
-        ));
-        billboards.setColorAt(tower, bandColor.set(accents[(tower + 1) % accents.length]).lerp(WHITE, 0.55));
-
-        // Masts on the taller half, so the skyline has a ragged top edge.
-        const masted = height > tier.minHeight + tier.spreadHeight * 0.35;
-        masts.setMatrixAt(tower, matrix.compose(
-          position.clone().set(x + (random() - 0.5) * width * 0.5, position.y + height / 2 + (masted ? height * 0.09 : 0), z + (random() - 0.5) * depth * 0.5),
-          quaternion,
-          scale.clone().set(masted ? 0.32 : 0, masted ? height * 0.18 : 0, masted ? 0.32 : 0),
-        ));
+        bandColor.set(step === 1 ? accent : accents[(tower + step) % accents.length]);
+        bands.setColorAt(band, bandColor);
       }
-    }
+
+      // A tall thin sign on roughly half the towers, which is what gives a skyline
+      // its vertical rhythm.
+      const hasSign = random() > 0.5;
+      signs.setMatrixAt(tower, matrix.compose(
+        position.set(inwardX, baseY + height * (0.1 + random() * 0.2), inwardZ),
+        orientation,
+        scale.set(Math.max(0.4, width * 0.1), hasSign ? height * (0.2 + random() * 0.3) : 0, 1),
+      ));
+      signs.setColorAt(tower, bandColor.set(accents[tower % accents.length]));
+
+      // A screen on a third of the near-tier towers, wide and low on the facade.
+      const screened = plan.near && random() > 0.66;
+      const screenWidth = screened ? Math.max(2.6, depth * (0.5 + random() * 0.3)) : 0;
+      billboards.setMatrixAt(tower, matrix.compose(
+        position.set(inwardX, baseY - height / 2 + height * (0.3 + random() * 0.34), inwardZ),
+        orientation,
+        scale.set(screenWidth, screened ? screenWidth * (0.5 + random() * 0.3) : 0, 1),
+      ));
+      billboards.setColorAt(tower, bandColor.set(accents[(tower + 1) % accents.length]).lerp(WHITE, 0.55));
+
+      // Masts on the taller half, so the skyline has a ragged top edge.
+      const topBlock = facadeAt(blocks, 0.99);
+      const masted = height > 46;
+      const [mastX, mastZ] = toWorld((topBlock.offsetX ?? 0) * width, (topBlock.offsetZ ?? 0) * depth);
+      masts.setMatrixAt(tower, matrix.compose(
+        position.set(mastX, baseY + height / 2 + (masted ? height * 0.09 : 0), mastZ),
+        upright,
+        scale.set(masted ? 0.32 : 0, masted ? height * 0.18 : 0, masted ? 0.32 : 0),
+      ));
+
+      const beaconed = masted && random() > 0.35;
+      beacons.setMatrixAt(tower, matrix.compose(
+        position.set(mastX, baseY + height / 2 + (beaconed ? height * 0.185 : 0), mastZ),
+        upright,
+        scale.setScalar(beaconed ? 0.5 : 0),
+      ));
+    });
 
     // Gantries crossing the route overhead: the upper half of the frame was empty sky.
     // Kept few, high and thin -- this is a rooftop route, and a dense low lattice reads
@@ -552,18 +714,393 @@ export class WorldPresenter {
       const y = 40 + random() * 44;
       const span = 80 + random() * 120;
       gantries.setMatrixAt(index, matrix.compose(
-        position.clone().set((random() - 0.5) * 34, y, z),
-        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, (random() - 0.5) * 0.14)),
-        scale.clone().set(span, 0.9 + random() * 1.6, 3 + random() * 4),
+        position.set((random() - 0.5) * 34, y, z),
+        orientation.setFromEuler(euler.set(0, 0, (random() - 0.5) * 0.14)),
+        scale.set(span, 0.9 + random() * 1.6, 3 + random() * 4),
       ));
     }
 
-    for (const mesh of [towers, windows, bands, billboards, signs, masts, gantries]) {
+    for (const mesh of [...archetypeMeshes, windows, bands, billboards, signs, masts, beacons, gantries]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       this.environmentRoot.add(mesh);
     }
     this.cityGlow = bands;
+    this.cityBeacons = beacons;
+  }
+
+  /**
+   * Markings on the play surfaces.
+   *
+   * The decks were bare. Each one is a single 4x4 m `rooftop-platform.glb` scaled up
+   * -- a 30x22 m arena floor is that one asset stretched 7.5 times in X and 5.5 in Z
+   * -- and the surface sheet is mapped 0..1 across each face with no `repeat` set. So
+   * the texture is stretched by the same factor: whatever detail it has is smeared to
+   * invisibility on a big deck and crisp on a small barrier, and nothing else is drawn
+   * on the floor at all.
+   *
+   * This lays two overlays over every walkable top face, and the thing that makes them
+   * work is that their UVs are computed **in world metres at build time** rather than
+   * inherited from the mesh they sit on. A seam is 2 m apart on the start floor and 2 m
+   * apart on the final arena, whatever those decks are scaled by. Both are one merged
+   * geometry, so the whole route's floor decoration costs two draw calls.
+   */
+  private buildDeckMarkings(primitives: readonly LevelPrimitive[]): void {
+    const decks = primitives.filter((primitive) => primitive.kind === 'box'
+      && !primitive.gateForEncounterId
+      && (primitive.surface === 'default')
+      // A deck is wide, deep and thin. Walls and cover are boxes too.
+      && primitive.transform.scale[0] >= 3
+      && primitive.transform.scale[2] >= 3
+      && primitive.transform.scale[1] <= 2.5);
+    if (decks.length === 0) return;
+
+    const seams = { position: [] as number[], uv: [] as number[], index: [] as number[] };
+    const hazard = { position: [] as number[], uv: [] as number[], index: [] as number[] };
+    /** One quad, with its UVs already in the units the texture tiles in. */
+    const quad = (
+      target: typeof seams,
+      centreX: number, y: number, centreZ: number, halfX: number, halfZ: number,
+      uPerMetre: number, vPerMetre: number, worldUv: boolean,
+    ): void => {
+      const base = target.position.length / 3;
+      const corners: readonly [number, number][] = [[-halfX, -halfZ], [halfX, -halfZ], [halfX, halfZ], [-halfX, halfZ]];
+      for (const [dx, dz] of corners) {
+        target.position.push(centreX + dx, y, centreZ + dz);
+        // World UVs keep the texel density identical on a 6 m platform and a 34 m
+        // arena; local ones run 0..1 across the quad, for a strip that has to start
+        // and end with the edge it follows.
+        target.uv.push(
+          worldUv ? (centreX + dx) * uPerMetre : (dx / halfX * 0.5 + 0.5) * halfX * 2 * uPerMetre,
+          worldUv ? (centreZ + dz) * vPerMetre : (dz / halfZ * 0.5 + 0.5),
+        );
+      }
+      target.index.push(base, base + 2, base + 1, base, base + 3, base + 2);
+    };
+
+    for (const deck of decks) {
+      const [px, py, pz] = deck.transform.position;
+      const [sx, sy, sz] = deck.transform.scale;
+      const halfX = sx / 2;
+      const halfZ = sz / 2;
+      // Just proud of the deck: enough to clear it, far too little to step onto.
+      const top = py + sy / 2 + 0.02;
+      quad(seams, px, top, pz, halfX, halfZ, 1 / SEAM_TILE_METRES, 1 / SEAM_TILE_METRES, true);
+
+      // A hazard band inset from all four edges, which is what a rooftop with a drop
+      // off it actually carries, and it tells the player where the deck ends.
+      const band = Math.min(0.55, Math.min(halfX, halfZ) * 0.16);
+      const inset = band * 0.9;
+      const lengthU = 1 / HAZARD_TILE_METRES;
+      quad(hazard, px, top + 0.002, pz - halfZ + inset, halfX - band, band / 2, lengthU, 1, false);
+      quad(hazard, px, top + 0.002, pz + halfZ - inset, halfX - band, band / 2, lengthU, 1, false);
+      quad(hazard, px - halfX + inset, top + 0.002, pz, band / 2, halfZ - band, 1, lengthU, false);
+      quad(hazard, px + halfX - inset, top + 0.002, pz, band / 2, halfZ - band, 1, lengthU, false);
+    }
+    // The side strips run along Z, so their tiling axis is V rather than U.
+    for (let index = 0; index < hazard.uv.length; index += 2) {
+      const vertex = index / 2;
+      if (vertex % 16 >= 8) [hazard.uv[index], hazard.uv[index + 1]] = [hazard.uv[index + 1], hazard.uv[index]];
+    }
+
+    const build = (source: typeof seams): THREE.BufferGeometry => {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(source.position, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(source.uv, 2));
+      geometry.setIndex(source.index);
+      geometry.computeVertexNormals();
+      return geometry;
+    };
+
+    // Unlit and alpha-masked: these are paint on a surface that is already lit, and
+    // lighting them again would make the markings brighter than the deck they are on.
+    const seamMaterial = new THREE.MeshBasicMaterial({
+      color: '#05090e', transparent: true, opacity: 0.62, alphaMap: this.deckSeamTexture(),
+      depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    });
+    const hazardMaterial = new THREE.MeshBasicMaterial({
+      color: palette.yellow, transparent: true, opacity: 0.5, alphaMap: this.deckHazardTexture(),
+      depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+    });
+    this.generatedMaterials.push(seamMaterial, hazardMaterial);
+
+    const seamMesh = new THREE.Mesh(build(seams), seamMaterial);
+    const hazardMesh = new THREE.Mesh(build(hazard), hazardMaterial);
+    seamMesh.renderOrder = 1;
+    hazardMesh.renderOrder = 2;
+    this.propRoot.add(seamMesh, hazardMesh);
+  }
+
+  /**
+   * Panel seams and bolt heads, as an alpha mask. Drawn white on
+   * transparent because the material tints it: what this texture decides is *where*
+   * the deck is marked, not what colour the mark is.
+   */
+  private deckSeamTexture(): THREE.Texture {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    if (!context) return new THREE.Texture();
+    context.clearRect(0, 0, size, size);
+
+    // No grime layer. Hard blots read as stains, and soft ones banded visibly -- an
+    // eight-bit alpha ramp at the strength this wants quantises into contour rings,
+    // which was worse than the bare deck it was meant to improve. The seams carry it.
+    // A panel every half tile, with a lighter line splitting each panel again.
+    context.globalAlpha = 0.85;
+    context.strokeStyle = '#ffffff';
+    context.lineWidth = 3;
+    for (const at of [0, size / 2]) {
+      context.beginPath();
+      context.moveTo(at + 1.5, 0); context.lineTo(at + 1.5, size);
+      context.moveTo(0, at + 1.5); context.lineTo(size, at + 1.5);
+      context.stroke();
+    }
+    context.globalAlpha = 0.3;
+    context.lineWidth = 1.5;
+    for (const at of [size / 4, (size * 3) / 4]) {
+      context.beginPath();
+      context.moveTo(at, 0); context.lineTo(at, size);
+      context.moveTo(0, at); context.lineTo(size, at);
+      context.stroke();
+    }
+
+    // Bolt heads down the main seams.
+    context.globalAlpha = 0.7;
+    context.fillStyle = '#ffffff';
+    for (let step = 0; step < 8; step += 1) {
+      const along = 16 + step * 32;
+      for (const at of [2, size / 2 + 2]) {
+        context.fillRect(at - 2, along - 2, 5, 5);
+        context.fillRect(along - 2, at - 2, 5, 5);
+      }
+    }
+
+    context.globalAlpha = 1;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.anisotropy = 8;
+    this.generatedTextures.push(texture);
+    return texture;
+  }
+
+  /** Diagonal hazard hatching for the deck edges. One band, tiled along the edge. */
+  private deckHazardTexture(): THREE.Texture {
+    const width = 64;
+    const height = 32;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) return new THREE.Texture();
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = '#ffffff';
+    // Sheared bars rather than a rotated fill, so the pattern tiles seamlessly.
+    for (let index = -1; index < 3; index += 1) {
+      const x = index * 32;
+      context.beginPath();
+      context.moveTo(x, height);
+      context.lineTo(x + 16, height);
+      context.lineTo(x + 16 + height, 0);
+      context.lineTo(x + height, 0);
+      context.closePath();
+      context.fill();
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.anisotropy = 8;
+    this.generatedTextures.push(texture);
+    return texture;
+  }
+
+  /**
+   * What is in the air.
+   *
+   * The sky above the route was empty except for gantries, which meant the upper
+   * third of the frame did nothing while the player was looking up mid-grapple. Three
+   * things fill it, and all of them move:
+   *
+   * - **Airships.** Slow, huge and lit: a dark hull with an advertising banner down
+   *   each flank and a third across the belly, so one passing overhead is the loudest
+   *   thing in the sky.
+   * - **Air traffic.** Fast light streaks crossing between the towers on fixed lanes.
+   *   Nothing about them is legible, and that is the point -- what registers is that
+   *   the city is busy above the player as well as beside them.
+   * - **Searchlights.** Slow cones sweeping from far rooftops.
+   *
+   * All of it is instanced -- six draw calls for the whole sky -- and all of it is
+   * driven off the render clock, which `GameRenderer` pins to a constant under
+   * `visualRegression`. That is what keeps the pixel baselines deterministic with
+   * moving geometry in frame.
+   */
+  private buildSkyTraffic(): void {
+    const random = this.seededRandom(0x5c_1e_a1);
+
+    // Airships. The hull is one merged geometry so a ship costs no more to draw than
+    // a box: an ellipsoid, a tail cross and a gondola slung under the nose.
+    const hullParts = [
+      new THREE.SphereGeometry(1, 14, 9).scale(1, 0.33, 0.33),
+      new THREE.BoxGeometry(0.34, 0.46, 0.05).translate(-0.84, 0.3, 0),
+      new THREE.BoxGeometry(0.34, 0.46, 0.05).translate(-0.84, -0.3, 0),
+      new THREE.BoxGeometry(0.34, 0.05, 0.66).translate(-0.84, 0, 0),
+      new THREE.BoxGeometry(0.52, 0.15, 0.19).translate(0.08, -0.36, 0),
+    ];
+    const hullGeometry = mergeGeometries(hullParts, false) ?? hullParts[0];
+    const hullMaterial = this.materials.variant('armor', '#161d26');
+    this.generatedMaterials.push(hullMaterial);
+    const hulls = new THREE.InstancedMesh(hullGeometry, hullMaterial, AIRSHIP_COUNT);
+
+    // Three banners a ship: both flanks and the belly, which is the one a player
+    // running underneath actually reads.
+    // Unlit rather than emissive, and the difference matters: a standard material's
+    // emissive term is not multiplied by the instance colour, so a per-ship tint on
+    // one would have been drowned by the material's own glow and every banner in the
+    // sky would have come out the same white. These are screens; they are their own
+    // light source and want no shading at all.
+    const bannerGeometry = new THREE.PlaneGeometry(1, 1);
+    const bannerMaterial = new THREE.MeshBasicMaterial({
+      color: '#ffffff', map: this.signContentTexture(), side: THREE.DoubleSide, toneMapped: false,
+    });
+    this.generatedMaterials.push(bannerMaterial);
+    const banners = new THREE.InstancedMesh(bannerGeometry, bannerMaterial, AIRSHIP_COUNT * 3);
+
+    // Gondola glow and the nose and tail lamps, merged into one emissive piece.
+    const lampParts = [
+      new THREE.BoxGeometry(0.44, 0.05, 0.21).translate(0.08, -0.4, 0),
+      new THREE.SphereGeometry(0.07, 6, 4).translate(1.0, 0, 0),
+      new THREE.SphereGeometry(0.07, 6, 4).translate(-1.0, 0.32, 0),
+    ];
+    const lampGeometry = mergeGeometries(lampParts, false) ?? lampParts[0];
+    const lampMaterial = new THREE.MeshBasicMaterial({ color: '#ffe0b0', toneMapped: false });
+    this.generatedMaterials.push(lampMaterial);
+    const lamps = new THREE.InstancedMesh(lampGeometry, lampMaterial, AIRSHIP_COUNT);
+
+    const accents = [palette.cyan, palette.red, palette.yellow, '#ff7ad9', '#8ff3ff'];
+    const airships: Airship[] = [];
+    for (let index = 0; index < AIRSHIP_COUNT; index += 1) {
+      airships.push({
+        length: 24 + random() * 30,
+        altitude: 46 + random() * 44,
+        // Kept in the near half of the route, where the corridor slot actually shows
+        // sky. A ship 250 m out is behind a tower wall for its whole pass.
+        z: -18 - random() * 150,
+        // Half go each way, so the sky is not a conveyor belt.
+        speed: (random() > 0.5 ? 1 : -1) * (2.4 + random() * 3.4),
+        phase: random() * AIRSHIP_SPAN,
+        bob: random() * Math.PI * 2,
+        tint: accents[index % accents.length],
+      });
+    }
+
+    // Air traffic. A bright head with a dim tail merged behind it reads as a streak
+    // at this distance, and costs one instance rather than a particle system.
+    const carParts = [
+      new THREE.BoxGeometry(1, 0.22, 0.22),
+      new THREE.BoxGeometry(3.4, 0.09, 0.09).translate(-2.2, 0, 0),
+    ];
+    const carGeometry = mergeGeometries(carParts, false) ?? carParts[0];
+    const carMaterial = new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false });
+    this.generatedMaterials.push(carMaterial);
+    const cars = new THREE.InstancedMesh(carGeometry, carMaterial, TRAFFIC_COUNT);
+    const traffic: Aircar[] = [];
+    for (let index = 0; index < TRAFFIC_COUNT; index += 1) {
+      const outbound = index % 2 === 0;
+      // Two thirds run along the corridor, above the route, because those are the
+      // ones in frame while the player is moving down it.
+      const axis = index % 3 === 0 ? 'x' : 'z';
+      traffic.push({
+        axis,
+        // Lanes: a handful of altitudes rather than a uniform scatter, because real
+        // traffic is stacked into levels and the stacking is what reads as a lane.
+        // Above the gantries at 40-84 m for the along-route lanes, so they are not
+        // constantly clipping through them.
+        altitude: axis === 'z' ? 30 + (index % 4) * 22 + random() * 8 : 34 + (index % 5) * 16 + random() * 7,
+        // For an x lane this is the z it crosses at; for a z lane it is the x it runs
+        // along, kept inside the corridor's own width.
+        offset: axis === 'x' ? -14 - random() * 150 : (random() - 0.5) * 46,
+        speed: (outbound ? 1 : -1) * (30 + random() * 42),
+        phase: random() * TRAFFIC_SPAN,
+        scale: 1.1 + random() * 1.6,
+        // Red going away, cool white coming toward: the same read as a motorway.
+        tint: outbound ? '#ff2d55' : '#cfefff',
+      });
+    }
+
+    for (const mesh of [hulls, banners, lamps, cars]) {
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      this.environmentRoot.add(mesh);
+    }
+    this.sky = { hulls, banners, lamps, cars, airships, traffic };
+    this.updateSkyTraffic(0);
+  }
+
+  /**
+   * Flies everything in the sky for this frame.
+   *
+   * Positions are a pure function of `time`, not integrated per frame, so a dropped
+   * frame cannot make the sky drift out of step and `visualRegression`'s pinned clock
+   * reproduces the same sky every capture.
+   */
+  private updateSkyTraffic(time: number): void {
+    const sky = this.sky;
+    if (!sky) return;
+    const { matrix, position, scale, orientation, euler, color } = this.scratch;
+
+    sky.airships.forEach((ship, index) => {
+      // Wrapped through a span wider than the frame, so a ship leaves and returns
+      // rather than popping in at the edge of view.
+      const x = wrapSpan(ship.phase + time * ship.speed, AIRSHIP_SPAN);
+      const y = ship.altitude + Math.sin(time * 0.11 + ship.bob) * 1.6;
+      const heading = ship.speed > 0 ? 0 : Math.PI;
+      const radius = ship.length * 0.33;
+      orientation.setFromEuler(euler.set(0, heading, Math.sin(time * 0.07 + ship.bob) * 0.03));
+      sky.hulls.setMatrixAt(index, matrix.compose(position.set(x, y, ship.z), orientation, scale.setScalar(ship.length / 2)));
+      sky.lamps.setMatrixAt(index, matrix.compose(position.set(x, y, ship.z), orientation, scale.setScalar(ship.length / 2)));
+
+      const bannerWidth = ship.length * 0.62;
+      const bannerHeight = ship.length * 0.19;
+      color.set(ship.tint);
+      // Port, starboard, belly. The belly one lies flat and faces down. Written out
+      // rather than built from a list, because this runs every frame for every ship
+      // and a list of fresh Eulers and Vector3s here is garbage on the render path.
+      for (let slot = 0; slot < 3; slot += 1) {
+        const offsetY = slot === 2 ? -radius - 0.12 : 0;
+        const offsetZ = slot === 0 ? radius + 0.12 : slot === 1 ? -radius - 0.12 : 0;
+        euler.set(slot === 2 ? -Math.PI / 2 : 0, slot === 1 ? Math.PI : 0, 0);
+        const target = index * 3 + slot;
+        sky.banners.setMatrixAt(target, matrix.compose(
+          position.set(x, y + offsetY, ship.z + offsetZ),
+          orientation.setFromEuler(euler),
+          scale.set(bannerWidth, bannerHeight, 1),
+        ));
+        sky.banners.setColorAt(target, color);
+      }
+    });
+
+    sky.traffic.forEach((car, index) => {
+      const along = wrapSpan(car.phase + time * car.speed, TRAFFIC_SPAN);
+      // The merged geometry points down +X with its tail behind it, so an along-route
+      // lane is the same shape yawed a quarter turn.
+      const yaw = car.axis === 'x'
+        ? (car.speed > 0 ? 0 : Math.PI)
+        : (car.speed > 0 ? -Math.PI / 2 : Math.PI / 2);
+      orientation.setFromEuler(euler.set(0, yaw, 0));
+      const x = car.axis === 'x' ? along : car.offset;
+      const z = car.axis === 'x' ? car.offset : along - TRAFFIC_SPAN / 2 + 40;
+      sky.cars.setMatrixAt(index, matrix.compose(
+        position.set(x, car.altitude, z),
+        orientation,
+        scale.setScalar(car.scale),
+      ));
+      sky.cars.setColorAt(index, color.set(car.tint));
+    });
+
+    for (const mesh of [sky.hulls, sky.banners, sky.lamps, sky.cars]) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   /**
@@ -637,6 +1174,7 @@ export class WorldPresenter {
     this.environmentRoot.add(floor);
 
     this.buildCity();
+    this.buildSkyTraffic();
 
     const moon = new THREE.Mesh(new THREE.SphereGeometry(14, 32, 20), this.emissiveMaterial('#ffadb9', 1.1));
     moon.position.set(-105, 96, -235);
