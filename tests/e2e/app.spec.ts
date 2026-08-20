@@ -2,6 +2,31 @@ import { type Page } from '@playwright/test';
 import { playerHealth } from '../../src/content/config';
 import { expect, test } from './test';
 
+/**
+ * Budgets for the two waits this suite is slowest on, and why they are not the defaults.
+ *
+ * Entering a run is a click that has to build a WebGL renderer, a Rapier world with
+ * twenty-eight bodies and a Web Audio graph with a generated impulse response before the
+ * standby card comes down. Playwright's default expect budget is five seconds, which is
+ * comfortable on an idle machine and not comfortable on a busy one: measured, the whole
+ * suite failed sixteen cases at a load average of seven and every one of them passed
+ * alone. Walking into the first arena is thirteen seconds of *simulated* time, and a
+ * starved `requestAnimationFrame` makes that longer in wall clock.
+ */
+const ENTERED_RUN_TIMEOUT = 25_000;
+const WALK_IN_TIMEOUT = 120_000;
+/**
+ * How long the standby card is allowed to take to appear.
+ *
+ * Measured: bringing the runtime up -- WebGL renderer, Rapier world, navmesh, character
+ * and viewmodel GLBs -- takes **7.7 to 8.9 seconds**, and it takes the same on the
+ * commit before the crowd landed, so it is the cost of starting rather than a
+ * regression. Against that, the fifteen and twenty second budgets scattered through
+ * this file were never a margin; they were a factor of two, and the whole suite fell
+ * over the moment the machine had anything else to do.
+ */
+const RUNTIME_READY_TIMEOUT = 45_000;
+
 test('opens the menu and gameplay editor', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /flow state/i })).toBeVisible();
@@ -13,7 +38,7 @@ test('opens the menu and gameplay editor', async ({ page }) => {
 test('loads the game runtime shell', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: /start run/i }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
   await expect(page.getByText(/wasd move/i)).toBeVisible();
 });
 
@@ -79,7 +104,7 @@ test.describe('with motion enabled', () => {
 test('bakes editor navigation data in a worker', async ({ page }) => {
   await page.goto('/?mode=editor');
   await page.getByRole('button', { name: /bake navmesh/i }).click();
-  await expect(page.getByText(/navmesh baked/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/navmesh baked/i)).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
 });
 
 test('persists camera accessibility settings', async ({ page }) => {
@@ -105,7 +130,7 @@ test('shows grapple guidance, reduced motion, and responsive editorial UI', asyn
   await page.goto('/');
   await expect(page.getByText(/grapple lines/i)).toBeVisible();
   await page.getByRole('button', { name: /start run/i }).click();
-  await expect(page.getByText(/F\s*HOOK/i)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/F\s*HOOK/i)).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
   await page.getByText(/camera & accessibility/i).click();
   await page.getByLabel('Reduced motion').check();
   const reducedMotion = await page.evaluate(() => JSON.parse(localStorage.getItem('flowstate-fps-save-v1') ?? '{}').settings?.reducedMotion);
@@ -122,7 +147,7 @@ test('falls back to embedded-preview controls when pointer lock is rejected', as
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
   await expect(page.getByText(/runtime fault/i)).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
   // The runtime needs a few rendered frames before the fixed step accumulates,
   // so poll the telemetry instead of sampling it after a fixed delay.
@@ -132,7 +157,7 @@ test('falls back to embedded-preview controls when pointer lock is rejected', as
   }, { timeout: 10_000 }).toBeGreaterThan(0);
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
 });
 
 test('shows a recoverable fault instead of a blank page when WebGL is unavailable', async ({ page }) => {
@@ -159,7 +184,7 @@ test('drives the active HUD while input is captured', async ({ page }) => {
   await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
 
   const hud = page.locator('.hud');
   await expect(hud).toBeVisible();
@@ -185,7 +210,7 @@ test('drives the active HUD while input is captured', async ({ page }) => {
 test('keeps Enter run reachable without scrolling on a 720p viewport', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/?mode=game');
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
 
   const fit = await page.evaluate(() => {
     const card = document.querySelector('.start-card')!;
@@ -216,7 +241,7 @@ test('keeps Enter run reachable without scrolling on a 720p viewport', async ({ 
 
 test('presents the completion panel and records the run', async ({ page }) => {
   await page.goto('/?mode=game&scene=finish');
-  await expect(page.getByRole('heading', { name: /run complete/i })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: /run complete/i })).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
   await expect(page.locator('.completion-summary')).toContainText('points');
   await expect(page.locator('.completion-grid')).toContainText('White Line');
   // The graded run is now shown, not just persisted: rank, and the record flags the
@@ -271,10 +296,10 @@ test('resolves a double-tapped jump into a dash in the live runtime', async ({ p
   await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
 
   // Let the capsule settle so the first tap is a grounded jump.
-  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: ENTERED_RUN_TIMEOUT * 2 }).toBe(true);
 
   await page.evaluate(() => {
     const press = (code: string) => {
@@ -303,8 +328,8 @@ test('swings both blades and the sidearm in the live runtime', async ({ page }) 
   await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
-  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: ENTERED_RUN_TIMEOUT * 2 }).toBe(true);
 
   // The blade is on the left button now, and it is held rather than clicked, so the
   // action has to enter and stay in `melee` for as long as the button is down.
@@ -347,8 +372,8 @@ async function fightIntoTheAtrium(page: Page): Promise<void> {
   await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
-  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: ENTERED_RUN_TIMEOUT * 2 }).toBe(true);
 
   // Straight forward, no jumping: the route rises on a ramp and drops onto the arena
   // deck, and a jump only throws the player off it.
@@ -428,15 +453,15 @@ test('turns a telegraphed shot into a perfect dodge', async ({ page }) => {
   await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
-  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: ENTERED_RUN_TIMEOUT * 2 }).toBe(true);
   await expect(page.locator('.debug-panel')).toContainText('dodge      ready');
 
   // Into the atrium, where a hunter holds distance and telegraphs every shot.
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
   await expect.poll(
     async () => Number((await page.locator('.debug-panel').innerText()).match(/position\s+\S+ \S+ (\S+)/)?.[1] ?? 0),
-    { timeout: 60_000 },
+    { timeout: WALK_IN_TIMEOUT },
   ).toBeLessThan(-42);
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
 
@@ -457,7 +482,7 @@ test('turns a telegraphed shot into a perfect dodge', async ({ page }) => {
       });
       await expect.poll(
         async () => Number((await page.locator('.debug-panel').innerText()).match(/position\s+\S+ \S+ (\S+)/)?.[1] ?? 0),
-        { timeout: 60_000 },
+        { timeout: WALK_IN_TIMEOUT },
       ).toBeLessThan(-42);
       await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
       continue;
@@ -500,7 +525,7 @@ test('builds and drives the audio graph in a real browser without faulting', asy
   await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
-  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: ENTERED_RUN_TIMEOUT * 2 }).toBe(true);
 
   // Stated, because the mix silently degrades to dry and unlimited without them.
   expect(await page.evaluate(() => {
@@ -517,7 +542,7 @@ test('builds and drives the audio graph in a real browser without faulting', asy
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
   await expect.poll(
     async () => Number((await page.locator('.debug-panel').innerText()).match(/position\s+\S+ \S+ (\S+)/)?.[1] ?? 0),
-    { timeout: 60_000 },
+    { timeout: WALK_IN_TIMEOUT },
   ).toBeLessThan(-42);
   // Blade and sidearm together, turning through incoming fire: shots, impacts, hits,
   // telegraphs, kills, damage taken and the ducks over the top of all of it.
@@ -562,7 +587,7 @@ test('builds a weapon in the armory and carries it into a run', async ({ page })
 
   await page.getByRole('button', { name: 'Done' }).click();
   await page.getByRole('button', { name: /start run/i }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
   // 6 base shells with an extended magazine resolves to 9.
   // Uppercasing is a CSS transform, so match the underlying text.
   await expect(page.getByRole('group', { name: /carried weapons/i })).toContainText(/breacher/i);
@@ -577,7 +602,7 @@ test('swaps between the two carried weapons in the live runtime', async ({ page 
   await page.goto('/');
   await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
 
   const weapon = page.locator('.hud-ammo .ammo-weapon');
   await expect(weapon).toContainText(/carbine/i, { timeout: 20_000 });
@@ -593,5 +618,5 @@ test('opens the gun builder from the pause overlay', async ({ page }) => {
   await page.getByRole('button', { name: /gun builder/i }).click({ timeout: 20_000 });
   await expect(page.getByText(/next checkpoint respawn/i)).toBeVisible();
   await page.getByRole('button', { name: 'Done' }).click();
-  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
 });

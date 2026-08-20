@@ -295,6 +295,12 @@ export class GameRenderer {
     this.environmentTexture?.dispose();
     this.materials.dispose();
     this.renderer.dispose();
+    // `dispose()` frees three's own objects and leaves the WebGL context alive. A
+    // browser caps how many of those exist at once -- Chromium at sixteen -- and it
+    // kills the oldest to make room, so a session that enters and leaves a run enough
+    // times loses the renderer out from under a run that is still using it. Handing the
+    // context back is the only way to actually release it.
+    this.renderer.forceContextLoss?.();
   }
 
   /**
