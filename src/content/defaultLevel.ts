@@ -14,11 +14,46 @@ function box(id: string, position: Vec3, scale: Vec3, color: string, surface: Co
   };
 }
 
-function ramp(id: string, position: Vec3, scale: Vec3, rotationX: number, color = '#d9ddd8'): CollisionPrimitiveV2 {
+const RAMP_THICKNESS = 0.8;
+
+/**
+ * A ramp that meets the two decks it joins, derived from where they are rather than
+ * authored as a rotation and hoped for.
+ *
+ * Both ramps on this route were previously written as a centre, a size and a hand-set
+ * `rotationX`, and both had the sign the wrong way round: `rise-a` sloped *down* away
+ * from the start floor, so its walkable face was 2.9 m in the air at the near end and
+ * 0.4 m at the far end, leaving an eight-metre hole between the start floor and the
+ * bridge. Walking forward from the spawn fell through it and died at tick 263 -- on
+ * this commit's parent as well, tick for tick, so the route has never been walkable.
+ * Nothing caught it because nothing walked it: the completion e2e enters through
+ * `?scene=finish`.
+ *
+ * `near` is the end with the larger Z, which is the end the player arrives from.
+ * `routeIsWalkable` in `tests/routeTraversal.test.ts` now holds the whole thing.
+ */
+function rampBetween(
+  id: string,
+  near: { z: number; y: number },
+  far: { z: number; y: number },
+  width: number,
+  color = '#d9ddd8',
+): CollisionPrimitiveV2 {
+  const run = near.z - far.z;
+  const rise = far.y - near.y;
+  const angle = Math.atan2(rise, run);
+  const length = Math.hypot(run, rise);
+  // The transform positions the box's centre, and what has to line up is the middle of
+  // its top face, so back off half the thickness along the rotated up axis.
+  const position: Vec3 = [
+    0,
+    (near.y + far.y) / 2 - (RAMP_THICKNESS / 2) * Math.cos(angle),
+    (near.z + far.z) / 2 - (RAMP_THICKNESS / 2) * Math.sin(angle),
+  ];
   return {
     id,
     kind: 'ramp',
-    transform: { position, rotation: [rotationX, 0, 0], scale },
+    transform: { position, rotation: [angle, 0, 0], scale: [width, RAMP_THICKNESS, length] },
     color,
     collision: true,
     surface: 'default',
@@ -33,7 +68,7 @@ const defaultCollision: CollisionPrimitiveV2[] = [
     box('start-wall-right', [9, 3, 0], [1, 7, 24], '#d8ddd8', 'wall-run'),
     box('vault-a', [-3, 0.75, -2], [4, 1.5, 1.3], '#e63746', 'vault'),
     box('vault-b', [3, 1.1, -8], [3, 2.2, 1.2], '#e63746', 'mantle'),
-    ramp('rise-a', [0, 1.3, -16], [8, 0.8, 9], -0.28),
+    rampBetween('rise-a', { z: -12, y: 0 }, { z: -20.5, y: 3.5 }, 8),
     box('bridge-a', [0, 3, -27], [9, 1, 13], '#f2f0e8'),
     box('wallrun-a', [-6, 6, -27], [1, 6, 13], '#22aab3', 'wall-run'),
     box('arena-one', [0, 1.5, -44], [30, 1, 22], '#f2f0e8'),
@@ -55,7 +90,7 @@ const defaultCollision: CollisionPrimitiveV2[] = [
     box('arena-two-left', [-17, 9, -94], [1, 8, 24], '#d8ddd8', 'wall-run'),
     box('arena-two-right', [17, 9, -94], [1, 8, 24], '#d8ddd8', 'wall-run'),
     { ...box('gate-two', [0, 9, -106.5], [33, 7, 0.5], '#e63746', 'no-traverse'), gateForEncounterId: 'arena-2' },
-    ramp('rise-three', [0, 8, -111], [9, 0.8, 12], -0.24),
+    rampBetween('rise-three', { z: -106, y: 6 }, { z: -116, y: 10.5 }, 9),
     box('sky-route', [0, 10, -126], [10, 1, 20], '#f2f0e8'),
     box('sky-wall-left', [-5.5, 14, -126], [1, 8, 20], '#22aab3', 'wall-run'),
     box('final-arena', [0, 10, -148], [28, 1, 24], '#f2f0e8'),

@@ -283,6 +283,42 @@ export const runScoring = {
 } as const;
 
 /**
+ * Hitstop: how long the presentation clock stops on a landed blow.
+ *
+ * This is the genre's signature feedback and it is **presentation only**. The
+ * simulation keeps stepping at a deterministic 60 Hz throughout -- gating the fixed
+ * step on a rendered effect would make gameplay a function of presentation, which is
+ * the one layering rule this codebase does not bend, and would stop the run clock
+ * every time the player connected.
+ *
+ * Two decisions in here are worth reading:
+ *
+ * - **Only the blade and kills freeze the frame.** A rifle round chipping a hunter
+ *   does not. That is a design statement -- the blade has weight, the sidearm is a
+ *   chain extender -- and it also disposes of an arithmetic problem: at 1020 rounds a
+ *   minute an SMG lands a round every 3.5 frames, so a three-frame freeze per round is
+ *   not hitstop, it is permanent slow motion.
+ * - **A refractory gap** keeps a crowd from doing the same thing. A freeze cannot be
+ *   armed again until this much *running* time has passed, so the worst case stays a
+ *   stutter rather than a stall. Consecutive slashes are 0.24 s apart and clear it
+ *   comfortably.
+ */
+export const hitstop = {
+  /** Floor, at trivial damage. Three frames at 60 Hz. */
+  minSeconds: 3 / 60,
+  /** Ceiling, at `fullDamage` or on any kill. Six frames. */
+  maxSeconds: 6 / 60,
+  /**
+   * Damage at which the freeze reaches its ceiling. Set just above a full slash, so a
+   * clean cut nearly maxes it and a slash a shield arc ate barely registers -- which
+   * is the same cue the grey hitmarker gives, said again in the frame.
+   */
+  fullDamage: 70,
+  /** Running seconds that must pass after a freeze before another may be armed. */
+  refractorySeconds: 0.1,
+} as const;
+
+/**
  * Timings for the interface's reveal sequences, in seconds. These are presentation
  * only -- nothing in `src/simulation/` reads them -- but they live here rather than
  * inline in the stylesheet because the same numbers have to be known in two places:

@@ -11,6 +11,7 @@ import { GrapplePresenter } from './presentation/GrapplePresenter';
 import { MaterialLibrary } from './presentation/MaterialLibrary';
 import { PostPipeline } from './presentation/PostPipeline';
 import { accentMaterial, canBatch, groupVisualBatches, resolveVariantAccent, type VariantAccent } from './presentation/visualBatching';
+import { HitstopController } from './presentation/hitstop';
 import { palette } from './palette';
 import { ResolutionController } from './ResolutionController';
 import { ViewmodelPresenter } from './presentation/ViewmodelPresenter';
@@ -35,6 +36,15 @@ export interface RenderStats {
   renderScale: number;
   assetCpuBytes: number;
   assetGpuBytes: number;
+  /** Seconds of hitstop left on the presentation clock. Zero when nothing is frozen. */
+  hitstopSeconds: number;
+  /**
+   * Total seconds the presentation clock has spent frozen. The instantaneous figure is
+   * only ever a few frames wide, so it is close to unobservable from outside; the
+   * running total is what says whether hitstop is firing at all and what fraction of
+   * the run it is eating.
+   */
+  hitstopTotalSeconds: number;
 }
 
 export class GameRenderer {
@@ -65,6 +75,17 @@ export class GameRenderer {
   private readonly resolution = new ResolutionController();
   private cameraImpulse = 0;
   private cameraImpulsePhase = 0;
+  private readonly hitstop = new HitstopController();
+  /**
+   * The presentation clock, accumulated rather than read off the wall.
+   *
+   * Everything that animates -- the sky, the traffic, effect birthdays, the shaders --
+   * is a function of this, so hitstop is simply a frame where it does not advance.
+   * Reading `performance.now()` here instead, as this used to, would have left the
+   * world drifting through a freeze.
+   */
+  private presentationTime = 0;
+  private hitstopTotalSeconds = 0;
   private lastLocomotion: SimulationSnapshot['player']['locomotion'] | null = null;
   private readonly deterministicPresentation = new URLSearchParams(location.search).get('visualRegression') === '1';
   private disposed = false;
@@ -188,13 +209,23 @@ export class GameRenderer {
     ghostPosition: Vec3 | null = null,
   ): RenderStats {
     const renderStarted = performance.now();
-    const frameSeconds = this.deterministicPresentation
+    const realFrameSeconds = this.deterministicPresentation
       ? 0
       : Math.min(0.1, Math.max(1 / 240, (renderStarted - this.lastFrameAt) / 1000));
     this.lastFrameAt = renderStarted;
-    const time = this.deterministicPresentation ? 12 : renderStarted / 1000;
 
     const playerId = snapshot.entities[0]?.id;
+    // Hitstop is a stopped presentation clock and nothing else: the simulation has
+    // already stepped, and the snapshot it produced is still what gets drawn. What
+    // freezes is every animation, every effect and the whole camera damping chain --
+    // in first person the largest of those is the viewmodel, so a swing stopping dead
+    // mid-arc is most of the read.
+    const frozen = this.hitstop.update(events, playerId, realFrameSeconds, this.presentationMotionEnabled());
+    const frameSeconds = frozen ? 0 : realFrameSeconds;
+    if (frozen) this.hitstopTotalSeconds += realFrameSeconds;
+    this.presentationTime += frameSeconds;
+    const time = this.deterministicPresentation ? 12 : this.presentationTime;
+
     this.consumeEvents(events, playerId);
     this.applyWeaponVisual(snapshot);
     this.consumeLocomotionImpulse(snapshot);
@@ -217,8 +248,11 @@ export class GameRenderer {
     this.post.render(frameSeconds);
     const renderMs = performance.now() - renderStarted;
     // Fed the true frame delta, not the renderer's own slice of it: simulation, React
-    // and compositing all land inside the budget the scale is protecting.
-    if (!this.deterministicPresentation) this.updateDynamicResolution(frameSeconds * 1000);
+    // and compositing all land inside the budget the scale is protecting. And the
+    // *real* delta rather than the frozen one -- hitstop is a stopped animation clock,
+    // not a free frame, and reporting zero milliseconds through a freeze would have the
+    // controller upscale into a stutter it caused itself.
+    if (!this.deterministicPresentation) this.updateDynamicResolution(realFrameSeconds * 1000);
     return {
       drawCalls: this.renderer.info.render.calls,
       triangles: this.renderer.info.render.triangles,
@@ -226,7 +260,19 @@ export class GameRenderer {
       renderScale: this.effectiveRenderScale(),
       assetCpuBytes: this.assetCpuBytes,
       assetGpuBytes: this.assetGpuBytes,
+      hitstopSeconds: this.hitstop.seconds,
+      hitstopTotalSeconds: this.hitstopTotalSeconds,
     };
+  }
+
+  /**
+   * Whether decorative motion may run at all. Reduced motion is a save-file toggle as
+   * well as a media query, so it is checked here rather than left to the stylesheet --
+   * and a player who turns it on mid-run has to be released from any live freeze,
+   * which is why `HitstopController.update` is still called rather than skipped.
+   */
+  private presentationMotionEnabled(): boolean {
+    return !this.settings.reducedMotion && !this.deterministicPresentation;
   }
 
   setCollisionDebug(visible: boolean): void {
@@ -531,6 +577,9 @@ export class GameRenderer {
     if (this.settings.reducedMotion) return;
     for (const event of events) {
       if (event.kind === 'shot') this.addCameraImpulse(0.0075, event.id);
+      // A swing that connected punches harder than a shot; one that cut air does not
+      // punch at all, so the kick is part of the confirmation rather than decoration.
+      else if (event.kind === 'melee' && event.targetEntityId !== undefined) this.addCameraImpulse(0.02, event.id);
       // Only damage the player took shakes the camera. This used to compare against
       // a hardcoded `1`, which held only because the player is entity one.
       else if (event.kind === 'hit' && playerId !== undefined && (event.targetEntityId ?? event.entityId) === playerId) this.addCameraImpulse(0.026, event.id);

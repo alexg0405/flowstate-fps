@@ -1,3 +1,4 @@
+import { type Page } from '@playwright/test';
 import { expect, test } from './test';
 
 test('opens the menu and gameplay editor', async ({ page }) => {
@@ -313,6 +314,85 @@ test('slashes on the left mouse button in the live runtime', async ({ page }) =>
   await page.evaluate(() => window.dispatchEvent(new MouseEvent('mousedown', { button: 2 })));
   await expect.poll(async () => Number(await ammo.innerText()), { timeout: 20_000 }).toBeLessThan(30);
   await page.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 2 })));
+});
+
+/** Total seconds the presentation clock has spent frozen, off the debug channel. */
+async function hitstopTotalSeconds(page: Page): Promise<number> {
+  const panel = await page.locator('.debug-panel').innerText();
+  return Number(panel.match(/hitstop\s+.*?\/\s*([\d.]+) s total/)?.[1] ?? -1);
+}
+
+/**
+ * Walks the route into the first arena and fights until a hostile goes down.
+ *
+ * The spin is not decoration. The brawler closes to inside the blade and then circles:
+ * measured, it sits 2.4 m away at a bearing of 135 degrees, which is behind the
+ * player's shoulder. A player turns to face it; a test has to say so, and dispatching
+ * `movementX` is how look input reaches `InputController` outside pointer lock.
+ */
+async function fightIntoTheAtrium(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /start run/i }).click();
+  await page.getByRole('button', { name: /debug/i }).click();
+  await page.getByRole('button', { name: /enter run/i }).click();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+
+  // Straight forward, no jumping: the route rises on a ramp and drops onto the arena
+  // deck, and a jump only throws the player off it.
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
+  await expect.poll(async () => {
+    const z = Number((await page.locator('.debug-panel').innerText()).match(/position\s+\S+ \S+ (\S+)/)?.[1] ?? 0);
+    return z;
+  }, { timeout: 60_000 }).toBeLessThan(-40);
+  await page.evaluate(() => {
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }));
+    window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+  });
+
+  const hostiles = async (): Promise<number> => Number(await page.locator('.objective-count').innerText().catch(() => '0'));
+  for (let sweep = 0; sweep < 24 && (await hostiles()) > 1; sweep += 1) {
+    await page.evaluate(() => {
+      for (let step = 0; step < 8; step += 1) window.dispatchEvent(new MouseEvent('mousemove', { movementX: 40 }));
+    });
+    await page.waitForTimeout(250);
+  }
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 0 })));
+  expect(await hostiles()).toBeLessThan(2);
+}
+
+test('freezes the frame on a landed blow', async ({ page }) => {
+  // Walking the route and fighting through an arena is the slowest thing this suite
+  // does, and `test.slow()` triples the default to ninety seconds, which is not enough.
+  test.setTimeout(180_000);
+  await page.addInitScript(() => {
+    HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
+  });
+  // Stated rather than assumed. AUDIT.md section 13 records that headless Chromium
+  // reported `prefers-reduced-motion: reduce` and that the save was seeded from it, so
+  // no test saw any motion. Measured on this Playwright build, both Chromium and
+  // Firefox now report `no-preference`, so the default has flipped -- which makes it
+  // worth asking for explicitly at both ends rather than inheriting whatever the
+  // pinned browser happens to say this month.
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+  await fightIntoTheAtrium(page);
+  // The running total, not the instantaneous figure: a freeze is three to six frames
+  // wide and the telemetry refreshes at 20 Hz, so sampling the live value from outside
+  // the page lands between freezes almost every time.
+  expect(await hitstopTotalSeconds(page)).toBeGreaterThan(0);
+});
+
+test('never freezes the frame with reduced motion on', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.addInitScript(() => {
+    HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
+  });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  await fightIntoTheAtrium(page);
+  // The same fight, the same kills, and the frame never stopped once. Hitstop is a
+  // save-file toggle as well as a media query, and this suite reports `reduce`.
+  expect(await hitstopTotalSeconds(page)).toBe(0);
 });
 
 test('builds a weapon in the armory and carries it into a run', async ({ page }) => {

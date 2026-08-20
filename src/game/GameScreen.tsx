@@ -160,6 +160,10 @@ function DebugPanel({ update }: { update: RuntimeUpdate }) {
       <pre>{[
         `tick       ${snapshot.tick}`,
         `state      ${snapshot.player.locomotion} / ${snapshot.player.action}`,
+        // Where the player actually is. Authoring or driving a route without this
+        // means guessing from the view, and a run that falls off the level looks
+        // exactly like one that stopped against a lip.
+        `position   ${(snapshot.entities[0]?.position ?? [0, 0, 0]).map((axis) => axis.toFixed(1)).join(' ')}`,
         `speed      ${snapshot.player.speed.toFixed(2)} m/s`,
         `air charge ${snapshot.player.airCharge}`,
         `deaths     ${snapshot.player.deaths}${snapshot.player.awaitingRespawn ? ' (down)' : ''}`,
@@ -167,6 +171,7 @@ function DebugPanel({ update }: { update: RuntimeUpdate }) {
         `ghost      ${update.ghost?.deltaSeconds === undefined || update.ghost?.deltaSeconds === null ? 'none' : `${update.ghost.deltaSeconds >= 0 ? '+' : ''}${update.ghost.deltaSeconds.toFixed(2)}s`}`,
         `grapple    ${snapshot.player.grapple.active ? `${snapshot.player.grapple.ropeLength.toFixed(2)} m` : `cooldown ${snapshot.player.grapple.cooldown.toFixed(2)}`}`,
         `frame      ${stats.frameMs.toFixed(2)} ms`,
+        `hitstop    ${stats.hitstopSeconds > 0 ? `${(stats.hitstopSeconds * 1000).toFixed(0)} ms` : 'clear'} / ${stats.hitstopTotalSeconds.toFixed(2)} s total`,
         `simulation ${stats.simulationMs.toFixed(2)} ms (${stats.steps} steps)`,
         `draw calls ${stats.drawCalls}`,
         `triangles  ${stats.triangles}`,
