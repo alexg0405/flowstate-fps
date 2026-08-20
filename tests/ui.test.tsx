@@ -45,6 +45,15 @@ function setFieldValue(element: HTMLInputElement | HTMLSelectElement, value: str
   act(() => element.dispatchEvent(new Event('change', { bubbles: true })));
 }
 
+/**
+ * The results screen counts its numbers up and settles on any key or click, so a
+ * test that wants the final figures presses a key rather than waiting out the
+ * sequence. This is the same escape the player gets.
+ */
+function skipSequence(): void {
+  act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); });
+}
+
 function query(selector: string): HTMLElement {
   const element = container.querySelector<HTMLElement>(selector);
   if (!element) throw new Error(`Expected the DOM to contain "${selector}".`);
@@ -150,7 +159,7 @@ describe('HUD grapple presentation', () => {
   });
 
   it('keeps the reticle cluster to the readouts a player acts on mid-air', () => {
-    render(<Hud snapshot={snapshotFixture()} ghost={{ deltaSeconds: -0.5, finished: false }} />);
+    render(<Hud snapshot={snapshotFixture()} ghost={{ deltaSeconds: -0.5, finished: false }} ovation={{ id: 3, links: 6 }} />);
     const cluster = query('.flow-cluster');
     // Hook state, chain and the ghost delta — and specifically not the five-chip
     // chain rail that reported availability the multiplier already implies.
@@ -159,6 +168,11 @@ describe('HUD grapple presentation', () => {
     expect(cluster.querySelector('.ghost-delta')).not.toBeNull();
     expect(container.querySelector('.chain-rail')).toBeNull();
     expect(container.querySelectorAll('.chain-step')).toHaveLength(0);
+    // The chain flourish is a frame layer, not a fifth thing in the cluster. It is
+    // masked hollow around the centre in CSS; what the DOM has to guarantee is that
+    // it never becomes part of the set the player reads off the crosshair.
+    expect(cluster.querySelector('.chain-ovation')).toBeNull();
+    expect(query('.chain-ovation').parentElement?.className).toContain('hud');
   });
 
   it('drops the modules that said the same number twice', () => {
@@ -354,6 +368,29 @@ describe('hit feedback', () => {
     expect(query('.damage-number').className).not.toContain('is-deflected');
   });
 
+  it('draws the chain flourish only while the runtime is publishing one', () => {
+    render(<Hud snapshot={snapshotFixture()} />);
+    // Nothing persistent: with no ovation in flight there is no element at all.
+    expect(container.querySelector('.chain-ovation')).toBeNull();
+
+    render(<Hud snapshot={snapshotFixture()} ovation={{ id: 12, links: 10 }} />);
+    const flourish = query('.chain-ovation');
+    expect(flourish.getAttribute('aria-hidden')).toBe('true');
+    expect(query('.ovation-mark b').textContent).toBe('10');
+  });
+
+  it('marks a kill on the confirm and the number rather than adding a module for it', () => {
+    render(<Hud snapshot={snapshotFixture()} hits={[hit({ id: 21, amount: 34 })]} />);
+    const plain = container.querySelectorAll('.hud > *').length;
+
+    render(<Hud snapshot={snapshotFixture()} hits={[hit({ id: 21, kill: true, amount: 34 })]} />);
+    expect(query('.hitmarker').className).toContain('is-kill');
+    expect(query('.damage-number').className).toContain('is-kill');
+    // The burst is a restyle of two elements that were already inside the reticle
+    // budget, so a kill adds no node to the play frame at all.
+    expect(container.querySelectorAll('.hud > *')).toHaveLength(plain);
+  });
+
   it('renders one number per hit in a batch', () => {
     render(<Hud snapshot={snapshotFixture()} hits={[hit({ id: 1 }), hit({ id: 2, amount: 59 }), hit({ id: 3, amount: 12 })]} />);
     expect([...container.querySelectorAll('.damage-number')].map((node) => node.textContent)).toEqual(['34', '59', '12']);
@@ -443,6 +480,7 @@ describe('gameplay overlay states', () => {
   it('presents completion telemetry rather than the standby guidance', () => {
     render(<GameOverlay {...baseProps} screenState="complete" snapshot={snapshotFixture({ health: 64, score: 1830 }, { completed: true, elapsedSeconds: 126.25 })} />);
     expect(query('#game-overlay-title').textContent).toBe('Run complete');
+    skipSequence();
     expect(query('.completion-summary').textContent).toBe('2:06.25 · 1830 points');
     const grid = query('.completion-grid').textContent ?? '';
     expect(grid).toContain('2:06.25');
@@ -524,6 +562,56 @@ describe('gameplay overlay states', () => {
     expect(rows[0].querySelector('.split-delta')?.className).toContain('is-better');
     // No reference split for Gallery, so there is nothing honest to compare against.
     expect(rows[1].querySelector('.split-delta')?.textContent).toBe('—');
+  });
+
+  it('runs the results as a skippable sequence rather than a grid that appears at once', () => {
+    render(<GameOverlay
+      {...baseProps}
+      screenState="complete"
+      snapshot={snapshotFixture({ health: 64, score: 1830 }, { completed: true, elapsedSeconds: 126.25 })}
+      result={{
+        save: saveFixture(),
+        run: { timeSeconds: 126.25, score: 1830, rank: 'A' as const, deaths: 0, peakCombo: 9, splits: [] },
+        previousBest: null,
+        isBestRun: true,
+        isFastest: true,
+      }}
+    />);
+    // Before anything is skipped the screen is mid-sequence and the headline
+    // numbers are still on their way up, not printed.
+    expect(query('.completion-state').className).toContain('is-sequencing');
+    expect(query('.completion-summary').textContent).not.toContain('1830');
+    // Every revealed line carries the stagger index CSS animates off.
+    const steps = [...container.querySelectorAll<HTMLElement>('.completion-state .reveal-line')];
+    expect(steps.length).toBeGreaterThan(4);
+    expect(steps.every((line) => line.style.getPropertyValue('--step') !== '')).toBe(true);
+    // The rank slams and the clear stamps; both are their own motion, not a line.
+    expect(query('.grade-letter').className).toContain('reveal-slam');
+    expect(query('.completion-stamp').className).toContain('reveal-stamp');
+
+    skipSequence();
+    expect(query('.completion-state').className).toContain('is-settled');
+    // Skipping lands the real values, not an eased approximation of them.
+    expect(query('.completion-summary').textContent).toBe('2:06.25 · 1830 points');
+    expect(query('.completion-grid').textContent).toContain('64%');
+  });
+
+  it('presents the results settled from the first frame under reduced motion', () => {
+    render(<GameOverlay
+      {...baseProps}
+      settings={{ ...settingsFixture, reducedMotion: true }}
+      screenState="complete"
+      snapshot={snapshotFixture({ health: 64, score: 1830 }, { completed: true, elapsedSeconds: 126.25 })}
+    />);
+    expect(query('.completion-state').className).toContain('is-settled');
+    expect(query('.completion-summary').textContent).toBe('2:06.25 · 1830 points');
+  });
+
+  it('leaves the pause screen splits unsequenced, since nothing is revealing there', () => {
+    render(<GameOverlay {...baseProps} screenState="standby" snapshot={snapshotFixture({}, {
+      splits: [{ encounterId: 'arena-1', label: 'Atrium', seconds: 30.5 }],
+    })} />);
+    expect(query('.run-status .split-row').className).not.toContain('reveal-line');
   });
 
   it('keeps a recoverable exit on the fault state', () => {

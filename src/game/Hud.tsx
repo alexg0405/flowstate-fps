@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { RunModifier, SimulationSnapshot } from '../contracts';
 import { movementProfile, runScoring } from '../content/config';
-import type { DamageFeedback, GhostStanding, HitFeedback } from '../runtime/GameRuntime';
+import type { ChainOvation, DamageFeedback, GhostStanding, HitFeedback } from '../runtime/GameRuntime';
 import { formatTime } from './format';
 
 /**
@@ -21,16 +21,25 @@ const DEATH_TIME_PENALTY_SECONDS = runScoring.deathTimePenaltySeconds;
  * - The top bar: objective, hostiles left, run clock, the day's contract.
  * - Everything else is on the pause screen (`RunStatusPanel` in `GameOverlay`).
  *
+ * The one thing added since: a comic burst on a kill and an all-out flourish when the
+ * chain crosses a threshold. Neither is a module. The kill burst is a restyle of the
+ * hitmarker and damage number that were already there, so nothing new enters the
+ * fifteen-degree budget around the crosshair; the chain flourish is a transient
+ * frame-edge layer whose paint is masked out of the middle 170 px entirely, and it
+ * unmounts on its own clock in `GameRuntime`.
+ *
  * What was cut was mostly the same number said twice: health as a value *and* a
  * twelve-segment meter, ammo as a value *and* ten pips *and* a weapon strip,
  * speed as a value *and* a twelve-segment spectrum, and a five-chip chain rail
  * that reported availability the combo multiplier already implies.
  */
-export function Hud({ snapshot, hits = [], damage = [], ghost = null, modifier = null }: {
+export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = null, modifier = null }: {
   snapshot: SimulationSnapshot;
   hits?: readonly HitFeedback[];
   damage?: readonly DamageFeedback[];
   ghost?: GhostStanding | null;
+  /** Set only for the few hundred milliseconds after a chain crosses a threshold. */
+  ovation?: ChainOvation | null;
   modifier?: RunModifier | null;
 }) {
   const grapple = snapshot.player.grapple;
@@ -95,6 +104,16 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, modifier =
           >{hit.amount}</span>
         ))}
       </div>
+      {/* The all-out flourish. Masked hollow in the middle, so nothing it draws lands
+          inside the fifteen degrees the reticle cluster is budgeted -- 93 px at 720p
+          and a 92-degree vertical FOV, against a 170 px hole. Keyed on the event so a
+          second threshold replays the animation instead of extending the first. */}
+      {ovation && (
+        <div className="chain-ovation" key={ovation.id} aria-hidden="true">
+          <i className="ovation-burst" />
+          <span className="ovation-mark"><b>{ovation.links}</b><em>CHAIN</em></span>
+        </div>
+      )}
       <div className="threat-compass" aria-hidden="true">
         {damage.map((wedge) => (
           <span

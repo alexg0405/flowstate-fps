@@ -16,6 +16,23 @@ interface Voice {
   bend?: number;
 }
 
+/**
+ * What the interface can ask the mix for. Deliberately a short list: these are
+ * acknowledgements, not gameplay cues, and every one of them is built from the same
+ * two primitives the rest of the bus uses.
+ */
+export type UiCue = 'hover' | 'select' | 'confirm' | 'cancel' | 'result';
+
+/**
+ * How long the results stinger waits before it plays.
+ *
+ * The `complete` event fires as the run finishes and the results screen mounts on
+ * the same frame, so a stinger at zero would land on top of a cue that is still
+ * ringing -- and AUDIT.md section 5 records what it cost the last time two sounds
+ * were confused for each other. `complete` runs 0.12 s + 0.42 s; this clears it.
+ */
+const RESULT_STINGER_DELAY = 0.58;
+
 /** Beyond this a source contributes nothing, so distant fights stay out of the way. */
 const MAX_AUDIBLE_METRES = 55;
 /** Cap on impact ticks per batch, so a shotgun shell does not fire eight voices. */
@@ -140,6 +157,54 @@ export class AudioManager {
         default:
           break;
       }
+    }
+  }
+
+  /**
+   * An acknowledgement from the interface. Kept audibly apart from the combat mix on
+   * purpose: hover and select are noise ticks an order of magnitude below the
+   * hit-confirm blip, and confirm and cancel are square-wave intervals rather than
+   * the sine pairs that `checkpoint` and `complete` use, so nothing here can be
+   * mistaken for something that happened in the run.
+   */
+  cue(kind: UiCue): void {
+    if (!this.context || this.context.state !== 'running') return;
+    switch (kind) {
+      case 'hover':
+        // Barely there. A menu that clicks loudly under the pointer is a menu the
+        // player mutes, so this sits well under every other voice in the bus.
+        this.tone({ frequency: 1520, duration: 0.024, gain: 0.014, type: 'triangle' }, 0, 0);
+        break;
+      case 'select':
+        this.crack(2400, 0.018, 0.028, 0);
+        this.tone({ frequency: 880, duration: 0.03, gain: 0.022, type: 'square' }, 0, 0);
+        break;
+      case 'confirm':
+        // Rises a fifth. Square, so it cannot blur into the sine pair `checkpoint`
+        // and `complete` are built from.
+        this.tone({ frequency: 620, duration: 0.06, gain: 0.05, type: 'square' }, 0, 0);
+        this.tone({ frequency: 930, duration: 0.09, gain: 0.04, type: 'square' }, 0.05, 0);
+        this.crack(1800, 0.03, 0.03, 0);
+        break;
+      case 'cancel':
+        // The inverse: one note, falling.
+        this.tone({ frequency: 480, duration: 0.11, gain: 0.045, type: 'square', bend: 0.6 }, 0, 0);
+        break;
+      case 'result': {
+        // A stab under the rank landing. Delayed so it does not sit on top of the
+        // `complete` cue the run itself just played.
+        const notes: readonly [number, number][] = [[523, 0], [784, 0.075], [1046, 0.15]];
+        for (const [frequency, offset] of notes) {
+          this.tone({ frequency, duration: 0.5 - offset, gain: 0.05, type: 'square' }, RESULT_STINGER_DELAY + offset, 0);
+        }
+        // A root under the stab. A tone rather than a noise burst because `crack`
+        // has no delay -- it would have fired at zero, straight over the tail of the
+        // `complete` cue this whole thing is offset to avoid.
+        this.tone({ frequency: 131, duration: 0.5, gain: 0.045, type: 'triangle' }, RESULT_STINGER_DELAY, 0);
+        break;
+      }
+      default:
+        break;
     }
   }
 

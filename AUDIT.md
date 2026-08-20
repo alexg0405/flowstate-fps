@@ -1007,3 +1007,175 @@ That is the whole of the visual-baseline change: regenerating the hunters shot m
 **18,330 px (2.0%)**, and the diff image is two health bars and nothing else. The
 baseline had been capturing a bug whose severity depended on the calendar. The
 regenerated one reproduces pixel-exactly on a fresh run.
+
+
+---
+
+## 13. A Persona-style pass over the interface
+
+Verified: `npm test` **317 passed / 30 files**, `npm run typecheck` clean,
+`npm run build` clean, `FLOWSTATE_STATIC_DIST=1 npm run test:e2e` **41 passed**
+(Chromium + Firefox), `npm run art:validate` clean at 1.93 MiB of 25.00 MiB, and the
+3 Chromium visual baselines pass **unregenerated** -- which is the correct result for
+a pure interface pass, per the trap in section 12: the baselines hide everything
+except the canvas, so UI work that moved them would mean something was wrong.
+
+Nothing in `src/simulation/` was touched. One field was added to `RuntimeUpdate` and
+one event kind was read in `GameRuntime`; the rest is `src/ui/`, `src/game/`,
+`src/audio/` and the stylesheet.
+
+### The whole e2e suite has always run with reduced motion on
+
+Worth knowing before anyone reads the flake risk in this pass as low by luck.
+Headless Chromium reports `prefers-reduced-motion: reduce`, and `saveDefaults()`
+seeds the save's `reducedMotion` from exactly that query. So all 35 pre-existing e2e
+tests run with every animation in this pass switched off, which is why none of them
+needed changing. The two new tests that actually exercise the transition call
+`page.emulateMedia({ reducedMotion: 'no-preference' })` first.
+
+### The results screen is a sequence
+
+`CompletionState` computed a letter rank, signed deltas, record flags and per-split
+deltas already and rendered them as a static grid. It now staggers them in on a shear
+off a `--step` custom property, counts the headline numbers up, slams the rank in at
+3.6x and settles it, and stamps the record flag. Timings live in `presentation` in
+`content/config.ts` and are handed to CSS as custom properties rather than written
+twice. `useRevealSequence` reports only *when the sequence is over*, because that is
+the only thing React needs to know: the motion is CSS, and the numbers have to land
+on their real values rather than an eased approximation.
+
+The action button is deliberately not animated. Playwright treats an element whose
+box is still moving as unstable and waits on it, and this is the button every
+completion test presses. The rows above it hold their layout from the first frame,
+so it never shifts.
+
+**A real bug the environment surfaced.** The preview pane reports
+`visibilityState: 'hidden'` permanently, which starves `requestAnimationFrame`. The
+results screen froze on its first frame -- every line at zero opacity, every number
+at zero -- which is exactly what a player who alt-tabbed mid-results would have got.
+Both the sequence and the wipe now carry a `setTimeout` floor that only ever
+*settles* them; the frame loop is still what drives the motion.
+
+### A wipe between screens
+
+`menu`, `game`, `builder` and `editor` swapped with no transition. A sheared band
+with a three-colour leading blade now carries the wordmark across the frame while
+the new screen mounts behind it. `go()` in `App.tsx` sets the mode and raises the
+wipe in the same commit, so `GameScreen`'s WebGL and Rapier mount is neither delayed
+nor doubled, and the layer is `pointer-events: none` for its whole life.
+
+Two things are worth recording:
+
+- **React's `onAnimationEnd` does not fire for a dispatched `animationend` under
+  jsdom**, which would have left the removal path untested. The component uses a
+  native listener instead; it behaves identically in a browser.
+- **Playwright cannot observe the wipe from outside the page.** Mounting the next
+  screen blocks the main thread long enough that the first external poll runs after
+  the band has already gone -- `toHaveCSS` reported "element(s) not found" for a full
+  five seconds against an element that had certainly existed. The e2e test installs a
+  `MutationObserver` inside the page instead, which also lets it assert
+  `pointer-events` for every frame the band was mounted.
+
+### Menu and overlay chrome, and a fit bug that depended on the calendar
+
+One shear angle for the whole interface, declared once as `--cut`. Sheared blocks
+counter-shear their own children, so the block is off-axis and the words on it are
+not. **Buttons and the control chips take the tilt as a `clip-path` parallelogram
+rather than a transform**, because their labels are bare text nodes with nothing to
+counter-shear -- skewing them came out italic. A dot screen grades across the menu's
+yellow slab and the two cards, the record card now runs off the right edge of the
+frame, and hovering a menu row shuffles it 11 px out of line with a blade on its
+leading edge rather than only tinting it.
+
+The standby card carried a real bug, and it was on `main` before this pass:
+
+| at 1280x720 | before | after |
+| --- | --- | --- |
+| `.start-card` overflow | **45 px** | **0 px** |
+| `Enter run` | clipped to a 10 px sliver of a 34 px button | fully visible, bottom at 639 of a 659 px content box |
+| headroom before it clips again | 0 | **69 px** |
+
+Section 12 measured 25 px of overflow with the button visible. It is 45 px today
+because **the day's contract sets the tallest block on that card and its copy is not
+fixed-length** -- today's `Glass Cannon` wraps to two lines. This is the same class of
+bug as the health bar in section 12: correct on the day it was measured, wrong on
+another day.
+
+The fix is not a shave. `overlay-state` is a flex column with its own `gap`, so every
+block margin inside it was doubled spacing -- 110 px of it, measured. Dropping the
+redundant margins under the short-viewport rule reclaims more than the contract can
+plausibly consume, and an e2e test now asserts the overflow is zero, the button sits
+inside the content box, and there is at least 30 px of slack left.
+
+Every geometric move on this card is height-neutral by construction: shear, clip and
+a tone layer are transforms and paint, and none of them occupy a pixel of layout.
+
+### Kill and chain feedback, and the part of it that was wrong
+
+The kill treatment adds **no DOM at all**. It restyles the hitmarker and damage
+number that were already inside the reticle budget -- the marker becomes a repeating
+conic spoke burst, hollow at the centre so the two confirm strokes still read. A unit
+test asserts the HUD's direct-child count is identical with and without a kill.
+
+The chain flourish is new, and the first version of it was a mistake worth recording.
+It was the series' signature: spokes radiating from the centre across the whole
+frame, hollowed out for 170 px so the reticle stayed clear. Measured against a
+control frame with the canvas hidden, it changed **228,983 pixels -- a quarter of the
+frame** -- with **0 inside the 93 px reticle budget** and the nearest changed pixel at
+204 px. So it passed the rule as written and was still wrong: it fired in the same
+yellow the grapple anchors and wall-run trim are drawn in, while the player was
+airborne, and the periphery is where a movement shooter reads the geometry it is
+about to land on. Clearing the crosshair is not sufficient.
+
+What shipped is corner-anchored -- spokes exist only past 330 px from centre, so at
+720p everything around the horizon line is untouched -- and the count sits on a solid
+ink plate, because hollow type over the city was unreadable.
+
+| | changed px | inside 93 px | nearest changed px |
+| --- | --- | --- | --- |
+| first version | 228,983 | 0 | 204 |
+| shipped | **100,423** | **0** | **333** |
+
+`chainEarnsFlourish` is extracted as a pure predicate in `content/config.ts` rather
+than left inline in `GameRuntime`, because that class needs WebGL and Rapier to
+construct and cannot be reached from a unit test -- and how often a full-frame effect
+fires at an airborne player is the one part of this worth testing directly. Four
+tests cover it, including that it can fire at most 4 times across the longest chain
+the scoring allows, and that it is reachable inside a run that earns an S.
+
+Under `reducedMotion` the flourish is not softened, it is **not drawn**. The chain
+multiplier in the reticle cluster already reports the same fact without moving.
+
+### Interface audio
+
+`AudioManager` gained a `cue()` method with five voices built from the same two synth
+primitives as the rest of the bus. `src/audio/interfaceAudio.ts` owns a second
+`AudioManager` instance for the interface, because `GameRuntime` disposes its own --
+and disposing it closes the `AudioContext`, which would silence the menu at exactly
+the moment the player returns to it. Cues are delegated from the document rather than
+threaded through `MainMenu`, `GameOverlay`, `WeaponBuilder` and the editor's
+toolbars, and the tone is read off the classes the stylesheet already uses, so a
+button that looks like the primary action sounds like one.
+
+Kept audibly apart from the combat mix on purpose, since section 5 records what it
+cost when taking damage played the hit-confirm sound: hover is 0.014 gain against the
+hit-confirm blip's 0.055, and every interface voice is square or triangle, leaving
+the sine pairs to `checkpoint`, `split` and `complete`. The results stinger is
+delayed 0.58 s so it clears `complete`'s 0.54 s tail -- and its percussive layer is a
+low tone rather than a noise burst, because `crack` takes no delay and would have
+fired at zero, straight over the cue the offset exists to avoid.
+
+jsdom has no Web Audio at all, so the cues are tested against a recorder that
+implements exactly the surface `AudioManager` uses; without it these would have been
+typechecked and never heard by anything. Verified in a real browser as well: **zero
+oscillators before the first gesture** -- the context cannot legally start earlier --
+and the expected 880 Hz square on the first press followed by 1520 Hz triangles on
+hover.
+
+### Not done
+
+The gun bench got the shared primitives and the display type but no bespoke pass; it
+is still a grid-aligned panel on a flat field. No webfonts were added, so the display
+tiers remain `Impact, 'Arial Narrow'` -- a closer face means a build change, a FOUT
+story and new visual baselines, and that is a decision to take deliberately rather
+than smuggle into a CSS pass.

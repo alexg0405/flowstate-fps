@@ -1,5 +1,6 @@
 import type { GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveDataV1, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
 import { AudioManager } from '../audio/AudioManager';
+import { chainEarnsFlourish } from '../content/config';
 import { InputController } from '../input/InputController';
 import { GameRenderer, type RenderStats } from '../render/GameRenderer';
 import { FlowSimulation } from '../simulation/FlowSimulation';
@@ -18,6 +19,12 @@ const HIT_MERGE_MS = 260;
 const DAMAGE_LIFETIME_MS = 900;
 const MAX_ACTIVE_HITS = 24;
 const MAX_ACTIVE_DAMAGE = 8;
+/**
+ * How long the chain flourish stays mounted. Long enough for its animation to run
+ * and short enough that it is gone before the player has to read the frame again --
+ * it fires while they are moving, which is the whole reason it is not persistent.
+ */
+const OVATION_LIFETIME_MS = 900;
 
 /** A confirmed hit on an enemy, already projected to canvas pixels for the HUD. */
 export interface HitFeedback {
@@ -57,6 +64,15 @@ interface ActiveDamage extends DamageFeedback {
   expiresAt: number;
 }
 
+/**
+ * A chain that has just crossed a flourish threshold. Transient by construction:
+ * one entry with its own short expiry, so the HUD has nothing persistent to draw.
+ */
+export interface ChainOvation {
+  id: number;
+  links: number;
+}
+
 /** How the run stands against the record path, for the HUD. */
 export interface GhostStanding {
   /** Negative means ahead of the record, positive means behind it. */
@@ -69,6 +85,8 @@ export interface RuntimeUpdate {
   stats: RenderStats & { simulationMs: number; steps: number };
   hits: readonly HitFeedback[];
   damage: readonly DamageFeedback[];
+  /** Null except in the brief window after the chain crosses a flourish threshold. */
+  ovation: ChainOvation | null;
   /** Null when no record path exists for this route yet. */
   ghost: GhostStanding | null;
 }
@@ -86,6 +104,7 @@ export class GameRuntime {
   private pendingEvents: GameEvent[] = [];
   private activeHits: ActiveHit[] = [];
   private activeDamage: ActiveDamage[] = [];
+  private activeOvation: (ChainOvation & { expiresAt: number }) | null = null;
   private running = false;
   private disposed = false;
   private lastUiUpdate = 0;
@@ -180,6 +199,13 @@ export class GameRuntime {
     const playerId = this.playerId();
     const kills = new Set(events.filter((event) => event.kind === 'kill').map((event) => event.targetEntityId ?? event.entityId));
     for (const event of events) {
+      if (event.kind === 'comboLink') {
+        // The simulation already counts the chain; this only decides which lengths
+        // are worth a flourish, and the thresholds live in `content/config.ts`.
+        const links = Math.round(event.value ?? 0);
+        if (chainEarnsFlourish(links)) this.activeOvation = { id: event.id, links, expiresAt: now + OVATION_LIFETIME_MS };
+        continue;
+      }
       if (event.kind === 'enemyAttack') {
         // A miss still reports, with zero damage; only landed shots get a wedge.
         if ((event.value ?? 0) <= 0) continue;
@@ -241,6 +267,11 @@ export class GameRuntime {
       projected.push({ id: hit.id, screen, amount: hit.amount, headshot: hit.headshot, kill: hit.kill, deflected: hit.deflected });
     }
     return projected;
+  }
+
+  private currentOvation(now: number): ChainOvation | null {
+    if (this.activeOvation && this.activeOvation.expiresAt <= now) this.activeOvation = null;
+    return this.activeOvation && { id: this.activeOvation.id, links: this.activeOvation.links };
   }
 
   private activeDamageWedges(now: number): readonly DamageFeedback[] {
@@ -307,6 +338,7 @@ export class GameRuntime {
         stats: { ...stats, simulationMs, steps },
         hits: this.projectHits(now),
         damage: this.activeDamageWedges(now),
+        ovation: this.currentOvation(now),
         ghost: this.ghostStanding(),
       });
       this.lastUiUpdate = now;

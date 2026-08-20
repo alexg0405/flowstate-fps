@@ -1,9 +1,11 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import type { RuntimeLevelV1, SaveDataV4 } from './contracts';
+import { installInterfaceAudio } from './audio/interfaceAudio';
 import { cookLevel, defaultLevel } from './content/defaultLevel';
 import { modifierForDate } from './content/modifiers';
 import { formatTime } from './game/format';
 import { loadSave, writeSave } from './persistence/saveStore';
+import { ScreenWipe } from './ui/ScreenWipe';
 import { WeaponBuilder } from './ui/WeaponBuilder';
 
 const EditorScreen = lazy(() => import('./editor/EditorScreen').then((module) => ({ default: module.EditorScreen })));
@@ -15,46 +17,82 @@ export function App() {
   const initialMode = new URLSearchParams(location.search).get('mode');
   const [mode, setMode] = useState<AppMode>(initialMode === 'editor' || initialMode === 'game' ? initialMode : 'menu');
   const [level, setLevel] = useState<RuntimeLevelV1>(initialRuntimeLevel);
+  // Null when no wipe is playing; otherwise a key that changes per transition so the
+  // CSS animation restarts even on two moves in a row.
+  const [wipe, setWipe] = useState<number | null>(null);
+  // Re-read on every move rather than held from the first render: the pause screen
+  // and the bench can both change the setting while a screen is open.
+  const [reducedMotion, setReducedMotion] = useState(() => loadSave().settings.reducedMotion);
 
-  if (mode === 'game') {
-    return (
-      <Suspense fallback={<LoadingScreen />}>
-        <GameScreen level={level} onExit={() => setMode('menu')} />
-      </Suspense>
-    );
-  }
+  // Installed once for the whole interface: hover, confirm, cancel and select are
+  // delegated from the document rather than threaded through every screen.
+  useEffect(installInterfaceAudio, []);
 
-  if (mode === 'editor') {
-    return (
-      <Suspense fallback={<LoadingScreen />}>
-        <EditorScreen
-          onPlay={(next) => {
-            setLevel(next);
-            setMode('game');
-          }}
-          onExit={() => setMode('menu')}
-        />
-      </Suspense>
-    );
-  }
+  useEffect(() => {
+    // `game-shell` already carries this while a run is open, but the menu, the bench
+    // and the wipe itself sit outside it. On the root element it reaches every screen,
+    // which matters because `reducedMotion` is a save toggle as well as a media query.
+    document.documentElement.classList.toggle('reduced-motion', reducedMotion);
+  }, [reducedMotion]);
 
-  if (mode === 'builder') {
+  /**
+   * The single seam between screens. The new screen is set immediately -- nothing
+   * here waits on the transition -- and the wipe is raised alongside it.
+   */
+  const go = (next: AppMode) => {
+    if (next === mode) return;
+    const settled = loadSave().settings.reducedMotion;
+    setReducedMotion(settled);
+    if (!settled) setWipe((key) => (key ?? 0) + 1);
+    setMode(next);
+  };
+  const clearWipe = useCallback(() => setWipe(null), []);
+
+  const screen = (() => {
+    if (mode === 'game') {
+      return (
+        <Suspense fallback={<LoadingScreen />}>
+          <GameScreen level={level} onExit={() => go('menu')} />
+        </Suspense>
+      );
+    }
+    if (mode === 'editor') {
+      return (
+        <Suspense fallback={<LoadingScreen />}>
+          <EditorScreen
+            onPlay={(next) => {
+              setLevel(next);
+              go('game');
+            }}
+            onExit={() => go('menu')}
+          />
+        </Suspense>
+      );
+    }
+    if (mode === 'builder') {
+      return (
+        <main className="builder-shell">
+          <BuilderRoute onClose={() => go('menu')} />
+        </main>
+      );
+    }
     return (
-      <main className="builder-shell">
-        <BuilderRoute onClose={() => setMode('menu')} />
-      </main>
+      <MainMenu
+        onPlay={() => {
+          setLevel(cookLevel(defaultLevel));
+          go('game');
+        }}
+        onEdit={() => go('editor')}
+        onBuild={() => go('builder')}
+      />
     );
-  }
+  })();
 
   return (
-    <MainMenu
-      onPlay={() => {
-        setLevel(cookLevel(defaultLevel));
-        setMode('game');
-      }}
-      onEdit={() => setMode('editor')}
-      onBuild={() => setMode('builder')}
-    />
+    <>
+      {screen}
+      {wipe !== null && <ScreenWipe key={wipe} onDone={clearWipe} />}
+    </>
   );
 }
 
@@ -119,20 +157,6 @@ function LoadingScreen() {
   );
 }
 
-/**
- * What a run is, in numbers, taken from the level rather than written down beside
- * it: the arena count, how many hostiles are in them, and the length of the route
- * from the player's spawn to the exit.
- */
-function routeBrief(): { arenas: number; hostiles: number; metres: number } {
-  const spawn = defaultLevel.spawns.find((candidate) => candidate.kind === 'player');
-  return {
-    arenas: defaultLevel.encounters.length,
-    hostiles: defaultLevel.spawns.filter((candidate) => candidate.kind !== 'player').length,
-    metres: Math.round(Math.abs(defaultLevel.exit[2] - (spawn?.position[2] ?? 0))),
-  };
-}
-
 function MainMenu({ onPlay, onEdit, onBuild }: { onPlay: () => void; onEdit: () => void; onBuild: () => void }) {
   const save = loadSave();
   const best = save.bestRun;
@@ -141,7 +165,6 @@ function MainMenu({ onPlay, onEdit, onBuild }: { onPlay: () => void; onEdit: () 
   // it is called out separately instead of being folded into the record card.
   const fastest = save.bestTimeSeconds;
   const showsSeparateFastest = fastest !== null && best !== null && fastest < best.timeSeconds;
-  const route = routeBrief();
   const routeName = defaultLevel.name;
 
   return (
@@ -181,15 +204,6 @@ function MainMenu({ onPlay, onEdit, onBuild }: { onPlay: () => void; onEdit: () 
           A first-person movement shooter. Chain dashes, wall runs and grapple lines along a neon
           rooftop route, clear the arenas in your way, and race the ghost of your best run.
         </p>
-
-        {/* The route in numbers, read from the level itself so it cannot drift from
-            what a run actually is. A numbered list of mechanic names told a new
-            player nothing about what they were about to press play on. */}
-        <ul className="protocol-strip" aria-label="Route brief">
-          <li><b>{route.arenas.toString().padStart(2, '0')}</b><span>Arenas</span><i aria-hidden="true" /></li>
-          <li><b>{route.hostiles.toString().padStart(2, '0')}</b><span>Hostiles</span><i aria-hidden="true" /></li>
-          <li><b>{route.metres}</b><span>Metre route</span><i aria-hidden="true" /></li>
-        </ul>
 
         <div className="menu-contract" aria-label="Today's contract">
           <div className="contract-heading">

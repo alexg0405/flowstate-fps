@@ -430,10 +430,6 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 .menu-title-lockup h1{ display: grid; margin: 0 0 1.1rem; font-size: clamp(5rem,8.7vw,8.2rem); line-height: .69; }
 .menu-title-lockup h1 span,.menu-title-lockup h1 em{ display: block; }
 .menu-deck{ margin: 1.5rem 0 1rem; max-width: 580px; padding: .7rem .9rem .7rem 1rem; font-size: .72rem; line-height: 1.55; }
-.protocol-strip{ display: flex; max-width: 610px; margin: 0 0 .8rem; padding: 0; list-style: none; }
-.protocol-strip li{ position: relative; display: grid; grid-template-columns: 24px auto; gap: .4rem; min-width: 138px; padding: .45rem .7rem; color: #809097; background: rgba(12,19,24,.84); border-right: 1px solid rgba(8,247,255,.13); font: 700 .46rem ui-monospace,monospace; text-transform: uppercase; }
-.protocol-strip li b{ color: var(--cyber-red); }
-.protocol-strip li i{ position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg,var(--cyber-cyan) 42%,#2d3c42 42%); }
 .menu-actions{ gap: 4px; }
 .menu-actions button{ height: 62px; min-width: 248px !important; display: grid; grid-template-columns: 32px 1fr 30px; align-items: center; gap: .6rem; padding: .6rem .8rem !important; text-align: left; }
 .menu-actions button > span{ float: none; color: inherit; font-size: inherit; }
@@ -587,7 +583,6 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
   .menu-copy{ top: 50%; width: 88vw; transform: translateY(-51%); }
   .menu-title-lockup h1{ font-size: clamp(4.6rem,15vw,7.2rem); }
   .menu-deck{ max-width: 620px; }
-  .protocol-strip li{ min-width: 0; flex: 1; }
   .menu-footer{ padding-inline: 1.1rem; }
   .footer-controls{ display: none; }
   .boot-readout{ padding: 2rem 1.5rem 1.5rem; }
@@ -612,7 +607,6 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
   .menu-copy{ top: 51%; }
   .menu-title-lockup h1{ font-size: clamp(4.2rem,8vw,6.2rem); }
   .menu-deck{ margin-block: .8rem; padding-block: .5rem; }
-  .protocol-strip{ margin-bottom: .55rem; }
   .menu-actions button{ height: 54px; }
   .start-card h1{ font-size: clamp(2.5rem,5vw,3.8rem); }
   .start-card{ max-height: calc(100vh - 2.6rem); padding-top: 1.35rem; }
@@ -1032,9 +1026,9 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
    for anything above about a rem, `display-edge` -- solid fill, one offset -- for the
    small tracked-out labels, which would turn to mush hollowed out at 7px. */
 .display-cut,
+.completion-state .completion-summary,
 .menu-actions .action-secondary .action-copy strong,
 .contract-heading strong,
-.protocol-strip li b,
 .run-record header p,
 .record-time strong,
 .start-card h1,
@@ -1048,8 +1042,8 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 }
 
 .display-edge,
+.completion-state .grade-copy .micro-label,
 .menu-actions .action-copy small,
-.protocol-strip li span,
 .contract-heading .micro-label,
 .contract-heading small,
 .run-record .record-stats dt,
@@ -1065,8 +1059,6 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 
 /* The variance: each block takes a different colour off the same three. */
 .contract-heading strong { -webkit-text-stroke-color: var(--cyber-cyan); text-shadow: .09em .07em 0 var(--cyber-yellow), -.03em -.025em 0 var(--cyber-red); }
-.protocol-strip li b { font-size: 1.05rem; -webkit-text-stroke-color: var(--cyber-red); text-shadow: .09em .07em 0 var(--cyber-cyan); }
-.protocol-strip li span { color: var(--cyber-paper); font-size: .62rem; letter-spacing: .14em; text-shadow: .06em .05em 0 var(--cyber-cyan); }
 .run-record header p { font-size: 1.15rem; -webkit-text-stroke-color: var(--cyber-cyan); text-shadow: .09em .07em 0 var(--cyber-red); }
 .record-time strong { -webkit-text-stroke-color: var(--cyber-yellow); text-shadow: .07em .06em 0 var(--cyber-cyan), -.025em -.02em 0 var(--cyber-red); }
 .run-record .record-stats dt { color: var(--cyber-dim); text-shadow: none; }
@@ -1091,3 +1083,336 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 .contract-heading .micro-label, .contract-heading small { font-size: .62rem; letter-spacing: .13em; }
 .contract-heading small { color: var(--cyber-dim); text-shadow: none; }
 .start-card h1, .builder-header h2 { -webkit-text-stroke-width: .022em; }
+
+/* ── The results screen, as a sequence ───────────────────────────────────────
+   Nothing here is new data: the rank, the signed deltas, the record flags and the
+   splits were all already computed and rendered as a static grid. What changes is
+   the order they arrive in, and the register they arrive in — sheared blocks with
+   cut edges over a dot screen, a rank letter that lands oversized and settles, and
+   a flag that stamps.
+
+   The motion is CSS off a `--step` custom property, because a JS-driven transform
+   races React's render. The component only has to know when the sequence is over,
+   which is what `useRevealSequence` reports; the stagger and line durations come in
+   as `--results-stagger` and `--results-line` so `content/config.ts` stays the one
+   place the timings are written down.
+
+   Every rule has a `.reduced-motion` escape as well as the media guard: the setting
+   is a save-file toggle and not only a media query. */
+
+.completion-state{ position: relative; }
+/* The dot screen. Pure CSS, and deliberately faint — it is a texture under the
+   panel, not a pattern on top of the numbers. */
+.completion-state::before{
+  content: ''; position: absolute; inset: -1.2rem -2.6rem; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(var(--cyber-yellow) .9px, transparent 1px);
+  background-size: 5px 5px; opacity: .085;
+  -webkit-mask-image: linear-gradient(118deg, #000 0 12%, transparent 46%);
+  mask-image: linear-gradient(118deg, #000 0 12%, transparent 46%);
+}
+
+/* The grade block bleeds off the left edge of the card rather than sitting inside
+   it, and the letter is sized to be the loudest thing on the screen. */
+.completion-state .run-grade{ position: relative; margin: 1.1rem 0 .9rem -2.6rem; padding: .7rem 1rem .7rem 2.6rem; align-items: stretch; background: linear-gradient(96deg,rgba(8,247,255,.14),rgba(255,255,255,.04) 46%,transparent); border-left-width: 5px; transform: skewX(-5deg); clip-path: polygon(0 0,100% 0,calc(100% - 22px) 100%,0 100%); }
+/* The children carry the shear back out so only the block is off-axis; sheared type
+   at this size reads as a rendering fault rather than as a decision. */
+.completion-state .run-grade > *{ transform: skewX(5deg); }
+.completion-state .grade-letter{ width: 104px; height: 92px; margin: -1.6rem 0 -1.2rem; font-size: 4.6rem; line-height: .8; letter-spacing: -.03em; transform: skewX(5deg) rotate(-5deg); box-shadow: 8px 8px 0 rgba(0,0,0,.55), 15px 14px 0 rgba(255,45,85,.5); clip-path: polygon(0 0,84% 0,100% 20%,100% 100%,16% 100%,0 80%); }
+.completion-state .grade-flag{ --rest: rotate(-5deg); align-self: center; transform: skewX(5deg) rotate(-5deg); box-shadow: 5px 5px 0 rgba(0,0,0,.5); }
+.completion-state .completion-summary{ font-size: 2.4rem; -webkit-text-stroke-color: var(--cyber-yellow); text-shadow: .07em .055em 0 var(--cyber-red), -.025em -.02em 0 var(--cyber-cyan); font-variant-numeric: tabular-nums; }
+.completion-state .grade-copy .micro-label{ font-size: .72rem; letter-spacing: .16em; }
+
+/* Rows take a cut corner and a shear, and the splits alternate their indent so the
+   column reads as a stack of cards rather than a table. */
+.completion-state .completion-grid > div{ padding: .18rem .5rem; background: rgba(255,255,255,.04); border-left: 2px solid rgba(8,247,255,.4); clip-path: polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%); }
+.completion-state .split-row{ transform: skewX(-2.5deg); clip-path: polygon(0 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%); }
+.completion-state .split-row > *{ display: block; transform: skewX(2.5deg); }
+.completion-state .split-row:nth-child(even){ margin-left: .9rem; }
+.completion-state .completion-stamp{ --rest: skewX(-4deg); }
+
+/* The sequence itself. */
+@media (prefers-reduced-motion: no-preference) {
+  .completion-state.is-sequencing .reveal-line{ animation: results-shear-in var(--results-line,.38s) cubic-bezier(.16,.9,.3,1.3) both; animation-delay: calc(var(--step,0) * var(--results-stagger,.055s)); }
+  .completion-state.is-sequencing .reveal-slam{ animation: results-slam .5s cubic-bezier(.2,1.35,.35,1) both; }
+  .completion-state.is-sequencing .reveal-stamp{ animation: results-stamp .32s cubic-bezier(.2,1.5,.4,1) both; animation-delay: calc(var(--step,0) * var(--results-stagger,.055s)); }
+}
+.reduced-motion .completion-state .reveal-line,
+.reduced-motion .completion-state .reveal-slam,
+.reduced-motion .completion-state .reveal-stamp{ animation: none !important; }
+
+/* Overshoot on the way in and a settle on the way out: the line arrives past its
+   mark, then comes back to it. That overshoot is most of what reads as the series. */
+@keyframes results-shear-in {
+  from{ opacity: 0; transform: translate3d(-1.7rem,.3rem,0) skewX(-16deg); }
+  62%{ opacity: 1; transform: translate3d(.3rem,0,0) skewX(3deg); }
+  to{ opacity: 1; transform: none; }
+}
+/* The letter is thrown at the screen from in front of it, undershoots, and settles. */
+@keyframes results-slam {
+  from{ opacity: 0; transform: skewX(5deg) scale(3.6) rotate(-16deg); }
+  48%{ opacity: 1; transform: skewX(5deg) scale(.8) rotate(6deg); }
+  72%{ transform: skewX(5deg) scale(1.12) rotate(-8deg); }
+  to{ opacity: 1; transform: skewX(5deg) rotate(-5deg); }
+}
+@keyframes results-stamp {
+  from{ opacity: 0; transform: scale(2.7) rotate(-26deg); }
+  60%{ opacity: 1; transform: scale(.92) rotate(2deg); }
+  to{ opacity: 1; transform: var(--rest, none); }
+}
+/* The flag sits inside the sheared grade block, so its stamp has to carry the shear
+   through or it snaps back to square on the last frame. */
+@keyframes results-stamp-flag {
+  from{ opacity: 0; transform: skewX(5deg) scale(2.7) rotate(-26deg); }
+  60%{ opacity: 1; transform: skewX(5deg) scale(.92) rotate(2deg); }
+  to{ opacity: 1; transform: skewX(5deg) rotate(-5deg); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .completion-state.is-sequencing .grade-flag.reveal-stamp{ animation-name: results-stamp-flag; }
+}
+
+@media (max-height: 760px) {
+  .completion-state .run-grade{ margin-block: .7rem .6rem; }
+  .completion-state .grade-letter{ width: 82px; height: 74px; margin-block: -.9rem -.7rem; font-size: 3.5rem; }
+  .completion-state .completion-summary{ font-size: 1.9rem; }
+}
+
+/* ── Between-screen wipe ─────────────────────────────────────────────────────
+   `menu`, `game`, `builder` and `editor` used to swap with no transition at all —
+   the DOM simply changed under the player. A sheared band now carries the wordmark
+   across the frame while the new screen mounts behind it.
+
+   `pointer-events: none` is not decoration. The e2e suite steps straight from one
+   screen to the next, and a layer that intercepted clicks for half a second would
+   make ten tests flaky; the band is transparent to hit testing for its whole life.
+   It also never gates the screen behind it — `GameScreen` builds WebGL and Rapier
+   on mount and that mount is not delayed by a frame. See `ScreenWipe`. */
+.screen-wipe{
+  position: fixed; inset: -14vh -34vw; z-index: 999; pointer-events: none;
+  display: grid; place-items: center;
+  transform: translate3d(-128%,0,0) skewX(-13deg);
+  animation: screen-wipe var(--wipe,.52s) cubic-bezier(.62,.02,.35,1) both;
+}
+.wipe-fill{ position: absolute; inset: 0; background: linear-gradient(100deg,#05080c 0 62%,#0d151b 62% 100%); }
+/* The dot screen rides the band rather than the frame, so it sweeps with it. */
+.wipe-fill::after{
+  content: ''; position: absolute; inset: 0;
+  background-image: radial-gradient(var(--cyber-yellow) 1px, transparent 1.1px);
+  background-size: 7px 7px; opacity: .1;
+}
+/* The leading edge: a yellow blade with the other two accents trailing it, so the
+   band arrives as three hard-edged colours rather than as a black rectangle. */
+.wipe-lead{ position: absolute; inset: 0 auto 0 100%; width: 3.2vw; background: var(--cyber-yellow); box-shadow: 3.4vw 0 0 var(--cyber-red), 6.8vw 0 0 var(--cyber-cyan); }
+/* Counter-sheared: the band is off-axis, the type on it is not. */
+.wipe-mark{ position: relative; transform: skewX(13deg); font-size: clamp(3.2rem,9vw,8.5rem); line-height: .8; letter-spacing: .01em; white-space: nowrap; }
+.wipe-mark em{ font-style: normal; -webkit-text-stroke-color: var(--cyber-red); }
+
+/* Covers fast, holds long enough to read the mark, leaves fast. */
+@keyframes screen-wipe {
+  from{ transform: translate3d(-128%,0,0) skewX(-13deg); }
+  40%{ transform: translate3d(0,0,0) skewX(-13deg); }
+  58%{ transform: translate3d(0,0,0) skewX(-13deg); }
+  to{ transform: translate3d(128%,0,0) skewX(-13deg); }
+}
+/* The component is not rendered at all when the save toggle is on, so this is the
+   belt to that braces: a media-query-only preference still gets a still frame. */
+.reduced-motion .screen-wipe{ display: none !important; }
+@media (prefers-reduced-motion: reduce) { .screen-wipe{ display: none; } }
+
+/* ── Menu and overlay chrome ─────────────────────────────────────────────────
+   The pieces that read as this series, applied to the two screens the player sees
+   most: blocks sheared off-axis instead of aligned to a grid, cut-out edges rather
+   than straight ones, a dot screen over flat colour, elements that bleed off the
+   frame instead of fitting inside it, and hover states that shuffle a row rather
+   than merely tinting it.
+
+   One angle for the whole interface, declared once. The atmosphere layers already
+   sit at -17 and -7 degrees; content takes the shallower angle, because type stops
+   being readable long before a background does. Every sheared block counter-shears
+   its own children, so the block is off-axis and the words on it are not. */
+:root{ --cut: -6deg; --cut-back: 6deg; }
+
+/* Screen tone over the flat colour. The menu's yellow slab was a single unbroken
+   field; a dot screen graded across it is what the series does with any large area
+   of one colour. The first layer is opaque yellow fading out, which is what grades
+   the dots rather than a second mask. */
+.menu-shell::before{
+  background-color: var(--cyber-yellow);
+  background-image:
+    linear-gradient(166deg, var(--cyber-yellow) 0 34%, rgba(244,236,24,0) 78%),
+    radial-gradient(rgba(7,11,16,.55) 1.7px, transparent 1.8px);
+  background-size: auto, 11px 11px;
+}
+
+/* The contract card: sheared, cut and carrying its own dot screen so it does not
+   read as a plain tinted rectangle. */
+.menu-contract{ position: relative; overflow: hidden; border-left-width: 4px; transform: skewX(var(--cut)); clip-path: polygon(0 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%); }
+.menu-contract::after{
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(var(--cyber-cyan) 1px, transparent 1.1px);
+  background-size: 7px 7px; opacity: .11;
+  -webkit-mask-image: linear-gradient(255deg, #000 0 20%, transparent 60%);
+  mask-image: linear-gradient(255deg, #000 0 20%, transparent 60%);
+}
+.menu-contract > *{ position: relative; z-index: 1; transform: skewX(var(--cut-back)); }
+
+/* Buttons take the same tilt through `clip-path` rather than `transform`.
+   A skewed box skews the text on it, and a button's label is a bare text node with
+   nothing to counter-shear -- the words came out italic. A parallelogram clip cuts
+   the same silhouette and leaves the type upright, which is what the series does:
+   the block is off-axis, the words on it never are. */
+.menu-actions button{ clip-path: polygon(8px 0,100% 0,calc(100% - 8px) calc(100% - 12px),calc(100% - 20px) 100%,0 100%); transition: transform .16s cubic-bezier(.2,1.32,.4,1), background .14s ease, color .14s ease; }
+.menu-actions button::after{ content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--cyber-cyan); opacity: 0; transition: opacity .14s ease, width .16s cubic-bezier(.2,1.32,.4,1); }
+/* Hovering shuffles the row out of line rather than only recolouring it. */
+.menu-actions button:hover:not(:disabled),
+.menu-actions button:focus-visible{ transform: translate(11px,-3px); }
+.menu-actions button:hover:not(:disabled)::after{ width: 11px; opacity: 1; }
+.menu-actions .action-primary::after{ background: var(--cyber-ink); }
+
+/* The record card runs off the right edge of the frame instead of sitting inside it.
+   `clip-path` clips a card's children too, so the bleed cannot be a blade poking out
+   of it -- the card itself has to leave the frame, with its right padding widened so
+   the numbers stay on screen while the block does not. */
+.run-record{ right: -1.7rem; width: 322px; padding-right: 3.1rem; transform: skewX(var(--cut)); }
+.run-record > *{ transform: skewX(var(--cut-back)); }
+/* The shared panel-in keyframe settles on `transform: none`, which would flatten
+   the shear on the last frame. The card gets its own, ending where it rests. */
+@media (prefers-reduced-motion: no-preference) {
+  .run-record{ animation-name: record-panel-in; }
+}
+@keyframes record-panel-in {
+  from{ opacity: 0; transform: skewX(var(--cut)) translateX(18px); filter: blur(2px); }
+  to{ opacity: 1; transform: skewX(var(--cut)); filter: none; }
+}
+.reduced-motion .run-record{ animation: none !important; }
+
+/* ── The standby card ────────────────────────────────────────────────────────
+   Same grammar, with one constraint the menu does not have: this is also the pause
+   screen, and `Enter run` has to be reachable without scrolling at 1280x720. Every
+   move below is height-neutral by construction -- shear, clip and a tone layer are
+   all transforms and paint, and none of them occupy a pixel of layout. */
+.start-card{ position: relative; }
+.standby-state{ position: relative; }
+.standby-state::before{
+  content: ''; position: absolute; inset: -1rem -2.6rem; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(var(--cyber-cyan) 1px, transparent 1.1px);
+  background-size: 6px 6px; opacity: .09;
+  -webkit-mask-image: linear-gradient(250deg, #000 0 16%, transparent 52%);
+  mask-image: linear-gradient(250deg, #000 0 16%, transparent 52%);
+}
+.standby-state .run-brief > div{ transform: skewX(var(--cut)); clip-path: polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%); }
+.standby-state .run-brief > div > *{ transform: skewX(var(--cut-back)); }
+/* The control chips carry a bare label beside the key cap, so they take the tilt as
+   a clip rather than a transform -- same reason as the buttons above. */
+.standby-state .control-guide span{ clip-path: polygon(6px 0,100% 0,calc(100% - 6px) calc(100% - 8px),calc(100% - 14px) 100%,0 100%); }
+.standby-state .modifier-brief{ position: relative; border-left-width: 4px; transform: skewX(var(--cut)); clip-path: polygon(0 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%); }
+.standby-state .modifier-brief > *{ transform: skewX(var(--cut-back)); }
+
+.overlay-actions button{ clip-path: polygon(5px 0,100% 0,calc(100% - 5px) calc(100% - 9px),calc(100% - 14px) 100%,0 100%); transition: transform .16s cubic-bezier(.2,1.32,.4,1), background .14s ease, color .14s ease; }
+.overlay-actions button:hover:not(:disabled),
+.overlay-actions button:focus-visible{ transform: translate(9px,-2px); }
+
+@media (max-height: 760px) {
+  /* `overlay-state` is a flex column with its own `gap`, so every block margin
+     inside it is doubled spacing -- 110 px of it, measured. Today's contract runs to
+     two lines and pushed the card 45 px past its own scroll box, which clipped
+     `Enter run` down to a 10 px sliver of a 34 px button. Dropping the redundant
+     margins is what makes room for it, and it is calendar-proof: the reclaim does
+     not depend on how long the day's contract text happens to be. */
+  .standby-state > *{ margin-block: 0 !important; }
+}
+
+/* ── Kill and chain feedback ─────────────────────────────────────────────────
+   The one place the series' language belongs inside the play frame, and the only
+   place this pass touches it. Two rules govern everything below:
+
+   1. Nothing new inside fifteen degrees of the crosshair. At 1280x720 with the
+      game's 92-degree vertical FOV that is 93 px. The kill treatment adds no DOM at
+      all -- it restyles the hitmarker and damage number that were already in that
+      budget -- and the chain flourish is masked hollow for 170 px around the centre,
+      so its paint never enters it.
+   2. Transient only. The flourish is mounted by `GameRuntime` for 900 ms and then
+      unmounted; there is nothing here that persists while the player is moving. */
+
+/* A kill turns the existing hitmarker into a comic burst: the two strokes stay, and
+   a ring of spokes fires out behind them. Same element, same lifetime, same budget. */
+.hitmarker.is-kill{
+  width: 46px; height: 46px;
+  background: repeating-conic-gradient(from 0deg, var(--cyber-red) 0 3.5deg, transparent 3.5deg 22.5deg, var(--cyber-yellow) 22.5deg 26deg, transparent 26deg 45deg);
+  /* Hollow at the centre so the two confirm strokes still read, and faded at the rim
+     so the spokes end rather than stopping at a hard circle. */
+  -webkit-mask-image: radial-gradient(circle, transparent 0 26%, #000 34% 76%, transparent 88%);
+  mask-image: radial-gradient(circle, transparent 0 26%, #000 34% 76%, transparent 88%);
+}
+.damage-number.is-kill{ font-size: 2.15rem; -webkit-text-stroke: .035em var(--cyber-ink); text-shadow: .06em .05em 0 var(--cyber-yellow), 0 2px 6px rgba(0,0,0,.9); }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Bigger throw and a snap back, rather than the plain fade the other hits take. */
+  .hitmarker.is-kill{ animation: kill-burst .34s cubic-bezier(.15,.9,.3,1) forwards; }
+  .damage-number.is-kill{ animation: kill-number .8s cubic-bezier(.15,1.25,.35,1) forwards; }
+}
+.reduced-motion .hitmarker.is-kill,
+.reduced-motion .damage-number.is-kill{ animation: none !important; opacity: .9; }
+@keyframes kill-burst {
+  from{ opacity: 1; transform: translate(-50%,-50%) scale(.35) rotate(-16deg); }
+  55%{ opacity: .95; transform: translate(-50%,-50%) scale(1.1) rotate(6deg); }
+  to{ opacity: 0; transform: translate(-50%,-50%) scale(1.7) rotate(14deg); }
+}
+@keyframes kill-number {
+  from{ opacity: 1; transform: translate(-50%,-50%) scale(1.9) skewX(-10deg); }
+  22%{ opacity: 1; transform: translate(-50%,-60%) scale(1) skewX(-4deg); }
+  to{ opacity: 0; transform: translate(-50%,-210%) scale(1) skewX(-4deg); }
+}
+
+/* The all-out flourish, and the shape of it is the whole argument.
+
+   The first version was the series' signature: spokes radiating from the centre
+   across the whole frame, hollowed out for 170 px so the reticle stayed clear.
+   Measured, it changed 229,000 pixels -- a quarter of the frame -- in the same
+   yellow the grapple anchors and wall-run trim are drawn in, and it fired while the
+   player was airborne. Clearing the crosshair is not enough: the periphery is where
+   a movement shooter reads the geometry it is about to land on, and this covered it.
+
+   What survives is corner-anchored. The spokes exist only past 330 px from centre,
+   which at 720p leaves everything above and below the horizon line untouched and
+   puts colour only in the four corners, and the count sits on a solid plate rather
+   than hollow over the city, where it was unreadable. */
+.chain-ovation{ position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.ovation-burst{
+  position: absolute; inset: -10%;
+  background: repeating-conic-gradient(from 8deg at 50% 50%, rgba(244,236,24,.36) 0 2.2deg, transparent 2.2deg 11deg);
+  -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 0 330px, #000 500px, #000 100%);
+  mask-image: radial-gradient(circle at 50% 50%, transparent 0 330px, #000 500px, #000 100%);
+  opacity: 0;
+}
+/* Off to the left, clear of the reticle cluster, the two corners and the top bar. */
+.ovation-mark{
+  position: absolute; left: 8%; top: 30%; display: flex; gap: .55rem; align-items: baseline;
+  padding: .3rem 1rem .45rem .8rem; background: var(--cyber-ink);
+  box-shadow: 7px 7px 0 rgba(255,45,85,.75);
+  clip-path: polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%);
+  transform: skewX(-9deg); white-space: nowrap; opacity: 0;
+}
+.ovation-mark b{ color: transparent; font: 900 3.6rem/.85 Impact,'Arial Narrow',sans-serif; -webkit-text-stroke: .035em var(--cyber-yellow); text-shadow: .07em .06em 0 var(--cyber-red); }
+.ovation-mark em{ color: var(--cyber-paper); font: 900 .72rem ui-monospace,monospace; font-style: normal; letter-spacing: .28em; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ovation-burst{ animation: ovation-flare .42s cubic-bezier(.1,.8,.3,1) forwards; }
+  .ovation-mark{ animation: ovation-mark .7s cubic-bezier(.15,1.3,.35,1) forwards; }
+}
+/* Under reduced motion the flourish is not softened, it is not drawn: a full-frame
+   burst is exactly what the setting exists to suppress, and the chain multiplier in
+   the reticle cluster already reports the same fact without moving. */
+.reduced-motion .chain-ovation{ display: none !important; }
+@media (prefers-reduced-motion: reduce) { .chain-ovation{ display: none; } }
+
+@keyframes ovation-flare {
+  from{ opacity: 0; transform: scale(.72) rotate(-7deg); }
+  35%{ opacity: 1; }
+  to{ opacity: 0; transform: scale(1.25) rotate(9deg); }
+}
+@keyframes ovation-mark {
+  from{ opacity: 0; transform: skewX(-9deg) translateX(-3rem) scale(1.5); }
+  26%{ opacity: 1; transform: skewX(-9deg) translateX(.4rem) scale(1); }
+  70%{ opacity: 1; transform: skewX(-9deg) scale(1); }
+  to{ opacity: 0; transform: skewX(-9deg) translateX(1.6rem) scale(.96); }
+}

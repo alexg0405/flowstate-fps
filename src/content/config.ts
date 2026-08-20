@@ -165,7 +165,29 @@ export const comboScoring = {
   linkScore: 15,
   /** Chain length at which links begin paying out. */
   payFromLink: 2,
+  /**
+   * Chain length that earns the all-out flourish, and how many further links earn it
+   * again. Set where it is rare on purpose: an S rank needs a peak of eight links, so
+   * a strong run sees this once or twice rather than on every link. A flourish that
+   * fires constantly is decoration on the play frame, which is the thing the HUD pass
+   * in AUDIT.md section 12 spent a phase removing.
+   */
+  flourishFromLink: 6,
+  flourishEveryLinks: 4,
 } as const;
+
+/**
+ * Whether a chain of this length has earned the all-out flourish.
+ *
+ * Kept here as a pure predicate rather than inline in `GameRuntime`, because that
+ * class needs WebGL and Rapier to construct and so cannot be reached from a unit
+ * test -- and this is the rule that decides how often a full-frame effect fires at a
+ * player who is mid-air. It is the one part of the feature worth testing directly.
+ */
+export function chainEarnsFlourish(links: number): boolean {
+  const past = links - comboScoring.flourishFromLink;
+  return past >= 0 && past % comboScoring.flourishEveryLinks === 0;
+}
 
 export const ghostTrack = {
   /** Run-clock seconds between samples. Interpolated, 20 Hz keeps jump arcs faithful. */
@@ -211,6 +233,32 @@ export const runScoring = {
     { rank: 'A', parMultiple: 1.25, maxDeaths: 1, minPeakCombo: 4 },
     { rank: 'B', parMultiple: 1.6, maxDeaths: 3, minPeakCombo: 0 },
   ],
+} as const;
+
+/**
+ * Timings for the interface's reveal sequences, in seconds. These are presentation
+ * only -- nothing in `src/simulation/` reads them -- but they live here rather than
+ * inline in the stylesheet because the same numbers have to be known in two places:
+ * CSS drives the motion, and the components have to know when the sequence is over
+ * so it can be skipped and so the numbers land on their real values.
+ */
+export const presentation = {
+  /** Gap between one revealed line of the results screen and the next. */
+  resultsStaggerSeconds: 0.055,
+  /** How long a single line takes to shear into place, overshoot included. */
+  resultsLineSeconds: 0.38,
+  /**
+   * Revealed elements in the results sequence. Only used to size the total, so an
+   * extra row is a cheap change; the sequence self-terminates either way.
+   */
+  resultsSteps: 16,
+  /** How long the headline numbers take to count onto their final value. */
+  resultsCountSeconds: 0.8,
+  /**
+   * The between-screen wipe. Kept short because every e2e step that changes screen
+   * pays it, and because a transition the player waits on stops being a flourish.
+   */
+  wipeSeconds: 0.52,
 } as const;
 
 export const defaultSave: SaveDataV1 = {

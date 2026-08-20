@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import type { RunModifier, RuntimeLevelV1, SaveDataV4, SaveSettingsV2, SimulationSnapshot } from '../contracts';
+import { playUiCue } from '../audio/interfaceAudio';
 import type { RecordedRun } from '../persistence/saveStore';
+import { presentation } from '../content/config';
 import { Meter, UiPanel } from '../ui/Primitives';
 import { WeaponBuilder } from '../ui/WeaponBuilder';
+import { countTo, resultsSequenceSeconds, stepDelaySeconds, useRevealSequence } from '../ui/sequence';
 import { formatTime } from './format';
 
 export type ScreenState = 'fault' | 'complete' | 'booting' | 'active' | 'standby';
@@ -59,7 +62,7 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
             <div className="overlay-actions"><button className="primary" onClick={onExit}><span aria-hidden="true">←</span>Return to menu</button></div>
           </div>
         ) : snapshot?.completed ? (
-          <CompletionState snapshot={snapshot} level={level} result={result ?? null} modifier={modifier} onExit={onExit} />
+          <CompletionState snapshot={snapshot} level={level} result={result ?? null} modifier={modifier} reducedMotion={settings.reducedMotion} onExit={onExit} />
         ) : !loading ? (
           <div className="overlay-state standby-state">
             <p className="state-deck">Input is released. Click back in to restore movement and combat.</p>
@@ -146,18 +149,21 @@ function RunStatusPanel({ snapshot }: { snapshot: SimulationSnapshot }) {
  * optional because mid-run there may not be one, and inventing a delta against
  * a split that was never set would be a lie.
  */
-function SplitTable({ splits, reference = [] }: {
+function SplitTable({ splits, reference = [], sequenced = false, firstStep = 0 }: {
   splits: SimulationSnapshot['splits'];
   reference?: readonly { encounterId: string; seconds: number }[];
+  /** Set on the results screen, where the rows arrive one at a time. */
+  sequenced?: boolean;
+  firstStep?: number;
 }) {
   return (
     <div className="split-table" aria-label="Checkpoint splits">
-      <div className="guide-heading"><span>Splits</span></div>
-      {splits.map((split) => {
+      <div className={`guide-heading ${sequenced ? 'reveal-line' : ''}`} style={sequenced ? step(firstStep) : undefined}><span>Splits</span></div>
+      {splits.map((split, index) => {
         const matched = reference.find((candidate) => candidate.encounterId === split.encounterId);
         const delta = matched ? split.seconds - matched.seconds : null;
         return (
-          <div className="split-row" key={split.encounterId}>
+          <div className={`split-row ${sequenced ? 'reveal-line' : ''}`} key={split.encounterId} style={sequenced ? step(firstStep + index + 1) : undefined}>
             <span className="split-label">{split.label}</span>
             <b className="split-time">{formatTime(split.seconds)}</b>
             <span className={`split-delta ${delta === null ? '' : delta <= 0 ? 'is-better' : 'is-worse'}`}>
@@ -188,52 +194,94 @@ export function ModifierBrief({ modifier }: { modifier: RunModifier }) {
   );
 }
 
-function CompletionState({ snapshot, level, result, modifier, onExit }: {
+/**
+ * The results screen, as a sequence rather than a grid that appears all at once.
+ *
+ * Nothing here is new data -- the rank, the deltas, the record flags and the splits
+ * were all already computed. What changes is the order they arrive in: lines shear
+ * in one after another, the headline numbers count onto their values, the rank slams
+ * in oversized and settles, and the record flag stamps last. All of it collapses to
+ * the finished state on any key or click, and none of it runs at all under reduced
+ * motion.
+ */
+function CompletionState({ snapshot, level, result, modifier, reducedMotion, onExit }: {
   snapshot: SimulationSnapshot;
   level: RuntimeLevelV1;
   result: RecordedRun | null;
   modifier: RunModifier | null;
+  reducedMotion: boolean;
   onExit: () => void;
 }) {
   const run = result?.run;
   const previous = result?.previousBest ?? null;
   const scoreDelta = previous ? snapshot.player.score - previous.score : null;
   const timeDelta = previous ? snapshot.elapsedSeconds - previous.timeSeconds : null;
+  const sequence = useRevealSequence(reducedMotion, resultsSequenceSeconds());
+  // Once, on arrival, and not tied to the reveal: the stinger is the screen saying
+  // the run is graded, which is true whether or not the lines are animating.
+  useEffect(() => { playUiCue('result'); }, []);
+
+  const health = Math.max(0, Math.ceil(snapshot.player.health));
+  // Each figure counts up behind the line that carries it, so a number never runs
+  // while the row it belongs to is still off-frame.
+  const elapsed = countTo(snapshot.elapsedSeconds, sequence, stepDelaySeconds(1));
+  const score = Math.round(countTo(snapshot.player.score, sequence, stepDelaySeconds(1)));
+  const cells: { label: string; value: string; step: number }[] = [
+    { label: 'Elapsed', value: formatTime(countTo(snapshot.elapsedSeconds, sequence, stepDelaySeconds(5))), step: 5 },
+    { label: 'Run score', value: Math.round(countTo(snapshot.player.score, sequence, stepDelaySeconds(6))).toLocaleString(), step: 6 },
+    { label: 'Route', value: level.name, step: 7 },
+    { label: 'Integrity', value: `${Math.round(countTo(health, sequence, stepDelaySeconds(8)))}%`, step: 8 },
+    { label: 'Deaths', value: String(Math.round(countTo(snapshot.player.deaths, sequence, stepDelaySeconds(9)))), step: 9 },
+    { label: 'Peak chain', value: String(Math.round(countTo(snapshot.player.combo.peakLinks, sequence, stepDelaySeconds(10)))), step: 10 },
+  ];
+  if (modifier) cells.push({ label: 'Contract', value: modifier.label, step: 11 });
 
   return (
-    <div className="overlay-state completion-state">
-      <p className="completion-summary">{formatTime(snapshot.elapsedSeconds)} · {snapshot.player.score} points</p>
+    <div
+      className={`overlay-state completion-state ${sequence.settled ? 'is-settled' : 'is-sequencing'}`}
+      // The stagger and line durations are handed to CSS rather than written twice:
+      // `content/config.ts` stays the one place the sequence's timing is stated.
+      style={{ '--results-stagger': `${presentation.resultsStaggerSeconds}s`, '--results-line': `${presentation.resultsLineSeconds}s` } as CSSProperties}
+    >
+      <p className="completion-summary reveal-line" style={step(1)}>{formatTime(elapsed)} · {score} points</p>
       {run && (
         <div className={`run-grade grade-${run.rank}`}>
-          <strong className="grade-letter" aria-label={`Rank ${run.rank}`}>{run.rank}</strong>
+          <strong className="grade-letter reveal-slam" style={step(0)} aria-label={`Rank ${run.rank}`}>{run.rank}</strong>
           <div className="grade-copy">
-            <span className="micro-label">{result?.isBestRun ? 'NEW BEST RUN' : 'GRADED'}</span>
+            <span className="micro-label reveal-line" style={step(2)}>{result?.isBestRun ? 'NEW BEST RUN' : 'GRADED'}</span>
             {previous ? (
-              <p className="grade-delta">
+              <p className="grade-delta reveal-line" style={step(3)}>
                 {/* Signed against the previous best, so a near miss still reads as progress. */}
                 <b className={scoreDelta !== null && scoreDelta >= 0 ? 'is-better' : 'is-worse'}>{formatDelta(scoreDelta, (value) => value.toLocaleString())} pts</b>
                 <b className={timeDelta !== null && timeDelta <= 0 ? 'is-better' : 'is-worse'}>{formatDelta(timeDelta, (value) => `${value.toFixed(2)}s`)}</b>
                 <span>vs best ({previous.rank})</span>
               </p>
-            ) : <p className="grade-delta"><span>First clear on this route</span></p>}
+            ) : <p className="grade-delta reveal-line" style={step(3)}><span>First clear on this route</span></p>}
           </div>
-          {result?.isFastest && <span className="grade-flag">FASTEST</span>}
+          {result?.isFastest && <span className="grade-flag reveal-stamp" style={step(4)}>FASTEST</span>}
         </div>
       )}
       <dl className="completion-grid">
-        <div><dt>Elapsed</dt><dd>{formatTime(snapshot.elapsedSeconds)}</dd></div>
-        <div><dt>Run score</dt><dd>{snapshot.player.score.toLocaleString()}</dd></div>
-        <div><dt>Route</dt><dd>{level.name}</dd></div>
-        <div><dt>Integrity</dt><dd>{Math.max(0, Math.ceil(snapshot.player.health))}%</dd></div>
-        <div><dt>Deaths</dt><dd>{snapshot.player.deaths}</dd></div>
-        <div><dt>Peak chain</dt><dd>{snapshot.player.combo.peakLinks}</dd></div>
-        {modifier && <div><dt>Contract</dt><dd>{modifier.label}</dd></div>}
+        {cells.map((cell) => (
+          <div className="reveal-line" key={cell.label} style={step(cell.step)}>
+            <dt>{cell.label}</dt><dd>{cell.value}</dd>
+          </div>
+        ))}
       </dl>
-      {snapshot.splits.length > 0 && <SplitTable splits={snapshot.splits} reference={previous?.splits ?? []} />}
-      <div className="completion-stamp" aria-hidden="true"><span>VALIDATED</span><strong>/// CLEAR</strong></div>
+      {snapshot.splits.length > 0 && <SplitTable splits={snapshot.splits} reference={previous?.splits ?? []} sequenced firstStep={12} />}
+      <div className="completion-stamp reveal-stamp" style={step(16)} aria-hidden="true"><span>VALIDATED</span><strong>/// CLEAR</strong></div>
+      {/* Deliberately not animated. Playwright treats an element whose box is still
+          moving as unstable and waits on it, and this is the button every completion
+          test presses; the rows above it hold their layout from the first frame, so
+          the action never shifts under the pointer. */}
       <div className="overlay-actions"><button className="primary" onClick={onExit}><span aria-hidden="true">←</span>Return to menu</button></div>
     </div>
   );
+}
+
+/** The stagger index a line reveals on, handed to CSS as a custom property. */
+function step(index: number): CSSProperties {
+  return { '--step': index } as CSSProperties;
 }
 
 /** Always signed, so the direction of a delta is readable without reading the label. */

@@ -120,7 +120,7 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
         <div className="scanline-field" />
         <div className="visor-noise" />
       </div>
-      {snapshot && <Hud snapshot={snapshot} hits={update?.hits} damage={update?.damage} ghost={update?.ghost} modifier={modifier} />}
+      {snapshot && <Hud snapshot={snapshot} hits={update?.hits} damage={update?.damage} ghost={update?.ghost} ovation={update?.ovation} modifier={modifier} />}
       {debug && update && <DebugPanel update={update} />}
       <div className="top-actions" role="toolbar" aria-label="Run controls">
         <span className="run-link-status" aria-hidden="true"><i />SIM/LINK</span>

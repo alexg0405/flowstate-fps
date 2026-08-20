@@ -15,6 +15,65 @@ test('loads the game runtime shell', async ({ page }) => {
   await expect(page.getByText(/wasd move/i)).toBeVisible();
 });
 
+/**
+ * Headless Chromium reports `prefers-reduced-motion: reduce` by default, and the
+ * save seeds itself from that media query -- which is why every other test in this
+ * file runs with the transition switched off entirely, and why none of them had to
+ * change for it. This block asks for the motion on purpose.
+ */
+test.describe('with motion enabled', () => {
+  test('wipes between screens without swallowing the click that follows', async ({ page }) => {
+    // Before `goto`: the save seeds `reducedMotion` from this query on first load.
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.goto('/');
+    // Watched from inside the page rather than polled from outside it. Mounting the
+    // next screen blocks the main thread, so an external poll can only run once the
+    // wipe has already taken itself down -- it would report "never appeared".
+    await page.evaluate(() => {
+      const seen: { pointerEvents: string; display: string; mark: string }[] = [];
+      Object.assign(window, { __wipeSightings: seen });
+      new MutationObserver(() => {
+        const element = document.querySelector('.screen-wipe');
+        if (!element) return;
+        const style = getComputedStyle(element);
+        seen.push({ pointerEvents: style.pointerEvents, display: style.display, mark: element.querySelector('.wipe-mark')?.textContent ?? '' });
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+
+    await page.getByRole('button', { name: /open gun builder/i }).click();
+    // The screen behind it mounted; nothing waited on the transition.
+    await expect(page.getByRole('heading', { level: 2 })).toBeVisible();
+
+    const sightings = await page.evaluate(() => (window as unknown as { __wipeSightings: { pointerEvents: string; display: string; mark: string }[] }).__wipeSightings);
+    expect(sightings.length).toBeGreaterThan(0);
+    // Transparent to input for its whole life: an overlay that took pointer events
+    // for half a second would make every screen-to-screen step in this file racy.
+    expect(sightings.every((sighting) => sighting.pointerEvents === 'none')).toBe(true);
+    expect(sightings[0].display).not.toBe('none');
+    expect(sightings[0].mark).toBe('FLOW/STATE');
+    // And it takes itself back down rather than parking across the frame.
+    await expect(page.locator('.screen-wipe')).toHaveCount(0, { timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('heading', { name: /flow state/i })).toBeVisible();
+  });
+
+  test('leaves the transition out when the player has asked for reduced motion', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.goto('/');
+    await page.evaluate(() => {
+      const save = JSON.parse(localStorage.getItem('flowstate-fps-save-v1') ?? '{}');
+      save.settings = { ...save.settings, reducedMotion: true };
+      localStorage.setItem('flowstate-fps-save-v1', JSON.stringify(save));
+    });
+    await page.reload();
+    await page.getByRole('button', { name: /open gun builder/i }).click();
+    await expect(page.getByRole('heading', { level: 2 })).toBeVisible();
+    // The save toggle, not only the media query: the element is never rendered.
+    await expect(page.locator('.screen-wipe')).toHaveCount(0);
+  });
+});
+
 test('bakes editor navigation data in a worker', async ({ page }) => {
   await page.goto('/?mode=editor');
   await page.getByRole('button', { name: /bake navmesh/i }).click();
@@ -116,6 +175,38 @@ test('drives the active HUD while input is captured', async ({ page }) => {
   }, { timeout: 20_000 }).toBeGreaterThan(0);
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
   await expect(page.locator('.hud-objective')).toContainText(/clear|finish/i);
+});
+
+test('keeps Enter run reachable without scrolling on a 720p viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/?mode=game');
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: 20_000 });
+
+  const fit = await page.evaluate(() => {
+    const card = document.querySelector('.start-card')!;
+    const enter = document.querySelector('.enter-action')!.getBoundingClientRect();
+    return {
+      overflow: card.scrollHeight - card.clientHeight,
+      // How much taller the card could grow before it started clipping again. Once
+      // the content fits, `scrollHeight` equals `clientHeight`, so the slack has to
+      // come from the cap the card is allowed to reach.
+      headroom: Math.round(parseFloat(getComputedStyle(card).maxHeight) - card.scrollHeight),
+      enterBottom: enter.bottom,
+      contentBottom: card.getBoundingClientRect().top + card.clientHeight,
+      viewportHeight: window.innerHeight,
+    };
+  });
+
+  // This card is also the pause screen, and this button is how a run resumes. The
+  // card scrolls, so a `toBeVisible` assertion is not enough on its own -- an
+  // overflowing card clips the button while still reporting it visible.
+  expect(fit.overflow).toBe(0);
+  expect(fit.enterBottom).toBeLessThanOrEqual(fit.contentBottom);
+  expect(fit.enterBottom).toBeLessThanOrEqual(fit.viewportHeight);
+  // The day's contract sets the tallest block on this card and its copy is not
+  // fixed-length, so leave slack for a longer one than today's rather than passing
+  // by a pixel on the calendar's say-so.
+  expect(fit.headroom).toBeGreaterThan(30);
 });
 
 test('presents the completion panel and records the run', async ({ page }) => {
