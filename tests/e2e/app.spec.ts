@@ -432,6 +432,23 @@ test('turns a telegraphed shot into a perfect dodge', async ({ page }) => {
   // 29 per cent uptime, so this is several shots' worth of attempts, not one.
   const seen = async (): Promise<string> => page.evaluate(() => (window as unknown as { __dodge: { seen: string } }).__dodge.seen);
   for (let attempt = 0; attempt < 60 && !(await seen()); attempt += 1) {
+    // Dying is part of standing in an arena trading with a hunter, and the checkpoint is
+    // back at the spawn -- so a run that goes down has to redeploy and walk in again,
+    // or the rest of the loop double-taps at nothing fifty metres away. That is what
+    // made this flake once in a full-suite run while passing on its own.
+    if (await page.locator('.down-panel').count()) {
+      await page.evaluate(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space' }));
+        window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space' }));
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+      });
+      await expect.poll(
+        async () => Number((await page.locator('.debug-panel').innerText()).match(/position\s+\S+ \S+ (\S+)/)?.[1] ?? 0),
+        { timeout: 60_000 },
+      ).toBeLessThan(-42);
+      await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
+      continue;
+    }
     // Dash sideways, alternating, so the player works the middle of the arena instead
     // of piling into the gate at the far end.
     await page.evaluate((strafe) => {
@@ -447,6 +464,66 @@ test('turns a telegraphed shot into a perfect dodge', async ({ page }) => {
     await page.waitForTimeout(220);
   }
   expect(await seen()).toContain('PERFECT');
+});
+
+test('builds and drives the audio graph in a real browser without faulting', async ({ page }) => {
+  test.setTimeout(180_000);
+  // The whole mix is synthesised and every optional node is feature-detected, which is
+  // what lets it run against a test double with no Web Audio at all. The cost of that
+  // is that a wrong node name, a bad parameter or an unsupported buffer shape fails
+  // silently in jsdom and only ever surfaces in a browser -- so this drives the real
+  // graph through real combat and insists nothing throws.
+  const faults: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') faults.push(message.text());
+  });
+  page.on('pageerror', (error) => faults.push(error.message));
+
+  await page.addInitScript(() => {
+    HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
+  });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+  await page.getByRole('button', { name: /start run/i }).click();
+  await page.getByRole('button', { name: /debug/i }).click();
+  await page.getByRole('button', { name: /enter run/i }).click();
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+
+  // Stated, because the mix silently degrades to dry and unlimited without them.
+  expect(await page.evaluate(() => {
+    const context = new AudioContext();
+    const support = {
+      convolver: typeof context.createConvolver === 'function',
+      compressor: typeof context.createDynamicsCompressor === 'function',
+      panner: typeof context.createStereoPanner === 'function',
+    };
+    void context.close();
+    return support;
+  })).toEqual({ convolver: true, compressor: true, panner: true });
+
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
+  await expect.poll(
+    async () => Number((await page.locator('.debug-panel').innerText()).match(/position\s+\S+ \S+ (\S+)/)?.[1] ?? 0),
+    { timeout: 60_000 },
+  ).toBeLessThan(-42);
+  // Blade and sidearm together, turning through incoming fire: shots, impacts, hits,
+  // telegraphs, kills, damage taken and the ducks over the top of all of it.
+  await page.evaluate(() => {
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }));
+    window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+    window.dispatchEvent(new MouseEvent('mousedown', { button: 2 }));
+  });
+  for (let sweep = 0; sweep < 16; sweep += 1) {
+    await page.evaluate(() => {
+      for (let step = 0; step < 4; step += 1) window.dispatchEvent(new MouseEvent('mousemove', { movementX: 40 }));
+    });
+    await page.waitForTimeout(200);
+  }
+  await page.evaluate(() => {
+    window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+    window.dispatchEvent(new MouseEvent('mouseup', { button: 2 }));
+  });
+  expect(faults).toEqual([]);
 });
 
 test('builds a weapon in the armory and carries it into a run', async ({ page }) => {

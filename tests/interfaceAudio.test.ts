@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GameEvent } from '../src/contracts';
 import { AudioManager } from '../src/audio/AudioManager';
 import { cueFor, installInterfaceAudio } from '../src/audio/interfaceAudio';
 
-interface Voice { frequency: number; gain: number; type: string; startAt: number }
-interface Noise { cutoff: number; gain: number }
+interface Voice { frequency: number; gain: number; type: string; startAt: number; filter: string | null }
+interface Noise { cutoff: number; gain: number; filter: string }
+/** An automation written to a gain node that belongs to no voice: the bus, ducking. */
+interface Duck { value: number; at: number }
 
 /**
  * jsdom has no Web Audio at all, so the bus is exercised against a recorder that
@@ -11,17 +14,29 @@ interface Noise { cutoff: number; gain: number }
  * typechecked and never heard by anything -- which is how the bug in AUDIT.md
  * section 5, where taking damage played the hit-confirm sound, survived as long as
  * it did.
+ *
+ * Voices are attributed by construction order, which is the only signal available: a
+ * source node is created, then optionally a filter, then the gain whose envelope is
+ * written. Attributing at the moment the gain is *created* rather than when it is
+ * written is what makes the sub layer land in `voices` with its lowpass named, instead
+ * of leaving a stray cutoff behind for the next node to pick up.
  */
 function recordingContext() {
   const voices: Voice[] = [];
   const noises: Noise[] = [];
-  let pending: Partial<Noise> = {};
+  const ducks: Duck[] = [];
+  /** Which shared bus each voice was connected to, in order, so sends are observable. */
+  const sends: string[] = [];
+  const shared: string[] = ['bus', 'wetNear', 'wetFar'];
+  let sharedCount = 0;
 
   class Param {
     value = 0;
     constructor(private readonly onSet?: (value: number, at: number) => void) {}
     setValueAtTime(value: number, at: number) { this.value = value; this.onSet?.(value, at); return this; }
-    exponentialRampToValueAtTime() { return this; }
+    exponentialRampToValueAtTime(_value: number, _at: number): Param { return this; }
+    linearRampToValueAtTime() { return this; }
+    cancelScheduledValues() { return this; }
   }
   class Node {
     connect(next: Node) { return next; }
@@ -32,13 +47,15 @@ function recordingContext() {
     startedAt = 0;
     frequency = new Param((value, at) => { this.pitch = value; this.startedAt = at; });
     pitch = 0;
-    level = 0;
     onended: (() => void) | null = null;
-    start() { voices.push({ frequency: this.pitch, gain: this.level, type: this.type, startAt: this.startedAt }); }
+    start() {}
     stop() {}
   }
 
-  let openOscillator: Oscillator | null = null;
+  type Source = { kind: 'osc'; node: Oscillator } | { kind: 'buffer' };
+  let pendingSource: Source | null = null;
+  let pendingFilter: { type: string; frequency: number } | null = null;
+
   const context = {
     state: 'running',
     currentTime: 0,
@@ -46,43 +63,86 @@ function recordingContext() {
     destination: new Node(),
     async resume() {},
     createGain() {
-      const target = openOscillator;
-      const node = new Node() as Node & { gain: Param };
+      const source = pendingSource;
+      const filter = pendingFilter;
+      pendingSource = null;
+      pendingFilter = null;
+      const node = new Node() as Node & { gain: Param; label?: string };
+      if (!source) {
+        // The shared nodes are built first and in a known order: the bus everything
+        // passes through, then the two reverb sends. Only the bus is ever automated,
+        // and unlike a voice envelope its *ramps* are the interesting part -- the duck
+        // is a ramp down, a hold, and a ramp back -- so they are recorded too.
+        node.label = shared[sharedCount] ?? `shared-${sharedCount}`;
+        sharedCount += 1;
+        const param = new Param((value, at) => ducks.push({ value, at }));
+        param.exponentialRampToValueAtTime = (value: number, at: number) => {
+          ducks.push({ value, at });
+          return param;
+        };
+        node.gain = param;
+        return node;
+      }
+      node.connect = (next: Node & { label?: string }) => {
+        if (next.label) sends.push(next.label);
+        return next;
+      };
       node.gain = new Param((value) => {
-        if (target) target.level = value;
-        else if (pending.cutoff !== undefined) { noises.push({ cutoff: pending.cutoff, gain: value }); pending = {}; }
+        if (source.kind === 'osc') {
+          voices.push({ frequency: source.node.pitch, gain: value, type: source.node.type, startAt: source.node.startedAt, filter: filter?.type ?? null });
+        } else if (filter) {
+          noises.push({ cutoff: filter.frequency, gain: value, filter: filter.type });
+        }
       });
       return node;
     },
     createOscillator() {
-      openOscillator = new Oscillator();
-      const made = openOscillator;
-      // The gain node is created right after, and belongs to this voice.
-      queueMicrotask(() => { openOscillator = null; });
+      const made = new Oscillator();
+      pendingSource = { kind: 'osc', node: made };
       return made;
     },
     createBufferSource() {
-      openOscillator = null;
+      pendingSource = { kind: 'buffer' };
       return Object.assign(new Node(), { buffer: null, onended: null as (() => void) | null, start() {}, stop() {} });
     },
     createBiquadFilter() {
+      const record = { type: '', frequency: 0 };
       const node = new Node() as Node & { type: string; frequency: { value: number }; Q: { value: number } };
-      node.type = '';
-      node.frequency = { value: 0 };
-      node.Q = { value: 0 };
-      Object.defineProperty(node.frequency, 'value', {
-        set(value: number) { pending = { cutoff: value }; },
-        get() { return pending.cutoff ?? 0; },
+      Object.defineProperty(node, 'type', {
+        set(value: string) { record.type = value; pendingFilter = record; },
+        get() { return record.type; },
       });
+      node.frequency = {
+        set value(next: number) { record.frequency = next; pendingFilter = record; },
+        get value() { return record.frequency; },
+      } as { value: number };
+      node.Q = { value: 0 };
       return node;
     },
-    createBuffer(_channels: number, length: number) {
-      const data = new Float32Array(length);
-      return { getChannelData: () => data };
+    createWaveShaper() {
+      return Object.assign(new Node(), { curve: null as unknown });
+    },
+    createStereoPanner() {
+      const node = new Node() as Node & { pan: { value: number } };
+      node.pan = { value: 0 };
+      return node;
+    },
+    createConvolver() {
+      return Object.assign(new Node(), { buffer: null as unknown });
+    },
+    createDynamicsCompressor() {
+      return Object.assign(new Node(), {
+        threshold: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 },
+        attack: { value: 0 }, release: { value: 0 },
+      });
+    },
+    createBuffer(channels: number, length: number) {
+      const data = Array.from({ length: channels }, () => new Float32Array(length));
+      return { numberOfChannels: channels, getChannelData: (channel: number) => data[channel] };
     },
     close() {},
   };
-  return { context, voices, noises };
+  return { context, voices, noises, ducks, sends };
 }
 
 async function busWith(recorder: ReturnType<typeof recordingContext>): Promise<AudioManager> {
@@ -103,15 +163,31 @@ describe('interface cues on the synth bus', () => {
     expect(() => bus.cue('result')).not.toThrow();
   });
 
-  it('keeps hover an order of magnitude under the hit-confirm blip', async () => {
+  it('keeps hover an order of magnitude under the hit confirm', async () => {
     const recorder = recordingContext();
     const bus = await busWith(recorder);
     bus.cue('hover');
     const [hover] = recorder.voices;
     expect(hover).toBeDefined();
-    // The confirm blip a landed body shot plays is 0.055. A menu that ticks anywhere
-    // near that under the pointer is a menu the player turns off.
+    // The confirm a landed body shot plays is 0.055. A menu that ticks anywhere near
+    // that under the pointer is a menu the player turns off.
     expect(hover.gain).toBeLessThan(0.055 / 3);
+  });
+
+  it('sits the interface above the run rather than below it', async () => {
+    // The run is built under 200 Hz now, so the separation between the two is register
+    // as well as material: an interface cue in the same octave as a gunshot is a cue
+    // the player mistakes for one.
+    const pitches: number[] = [];
+    for (const kind of ['hover', 'select', 'confirm', 'cancel'] as const) {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.cue(kind);
+      pitches.push(...recorder.voices.map((voice) => voice.frequency));
+    }
+    expect(Math.min(...pitches)).toBeGreaterThan(190);
+    // And still well clear of the beep register this pass exists to remove.
+    expect(Math.max(...pitches)).toBeLessThan(700);
   });
 
   it('rises to confirm and falls to cancel, so the two are not the same event', async () => {
@@ -133,10 +209,11 @@ describe('interface cues on the synth bus', () => {
     const recorder = recordingContext();
     const bus = await busWith(recorder);
     bus.cue('result');
-    // `complete` plays 0.35 s from zero and 0.42 s from 0.12, so it is done at 0.54.
-    // Landing the stinger on top of it is how two cues get confused for one.
+    // `complete` now runs 0.9 s of sub and 0.6 s of tone from zero, plus a second
+    // voice from 0.18. Landing the stinger on top of it is how two cues get confused
+    // for one.
     const earliest = Math.min(...recorder.voices.map((voice) => voice.startAt));
-    expect(earliest).toBeGreaterThan(0.54);
+    expect(earliest).toBeGreaterThan(0.9);
   });
 
   it('leaves no part of the stinger sounding before the delay, noise included', async () => {
@@ -174,8 +251,9 @@ describe('the mix distinguishes a dodge from a hit', () => {
     hitBus.consume([{ id: 1, tick: 1, kind: 'hit', value: 34, targetEntityId: 7, sourceEntityId: 1 }]);
 
     // A perfect dodge fires at the moment a telegraph is still ringing, so it has to
-    // cut through it: more voices, and a louder one than the body-shot confirm.
-    expect(dodgeRecorder.voices.length).toBeGreaterThan(hitRecorder.voices.length);
+    // cut through it: more layers, and a louder one than the body-shot confirm.
+    const layers = (recorder: { voices: unknown[]; noises: unknown[] }) => recorder.voices.length + recorder.noises.length;
+    expect(layers(dodgeRecorder)).toBeGreaterThan(layers(hitRecorder));
     const loudestDodge = Math.max(...dodgeRecorder.voices.map((voice) => voice.gain));
     const loudestHit = Math.max(...hitRecorder.voices.map((voice) => voice.gain));
     expect(loudestDodge).toBeGreaterThan(loudestHit);
@@ -186,36 +264,255 @@ describe('the mix distinguishes a dodge from a hit', () => {
   });
 
   it('is not the telegraph it answers', async () => {
-    const recorder = recordingContext();
-    const bus = await busWith(recorder);
-    bus.consume([{ id: 1, tick: 1, kind: 'enemyTelegraph', value: 0.42, sourceEntityId: 2, targetEntityId: 1 }]);
-    const telegraph = Math.max(...recorder.voices.map((voice) => voice.frequency));
+    const telegraphRecorder = recordingContext();
+    const telegraphBus = await busWith(telegraphRecorder);
+    telegraphBus.consume([{ id: 1, tick: 1, kind: 'enemyTelegraph', value: 0.42, sourceEntityId: 2, targetEntityId: 1 }]);
 
     const dodgeRecorder = recordingContext();
     const dodgeBus = await busWith(dodgeRecorder);
     dodgeBus.consume([{ id: 1, tick: 1, kind: 'dodge', value: 10, targetEntityId: 1, sourceEntityId: 2 }]);
-    // Well clear of the wind-up's register, so the answer is not mistaken for another
-    // warning arriving on top of the first.
-    expect(Math.min(...dodgeRecorder.voices.map((voice) => voice.frequency))).toBeGreaterThan(telegraph);
+
+    // Both live in the low register now, so the dodge is no longer distinguished by
+    // being higher than the warning -- it is distinguished by weight and by punctuation.
+    // It is half again as loud, it has a body layer the swell does not, and it is the
+    // only one of the two that stops the rest of the mix.
+    const loudest = (recorder: { voices: { gain: number }[] }) => Math.max(...recorder.voices.map((voice) => voice.gain));
+    expect(loudest(dodgeRecorder)).toBeGreaterThan(loudest(telegraphRecorder) * 1.5);
+    expect(dodgeRecorder.noises.filter((noise) => noise.filter === 'lowpass').length).toBeGreaterThan(0);
+    expect(telegraphRecorder.noises.filter((noise) => noise.filter === 'lowpass')).toHaveLength(0);
+    expect(dodgeRecorder.ducks.length).toBeGreaterThan(0);
+    expect(telegraphRecorder.ducks).toHaveLength(0);
+  });
+
+  it('keeps the warning locatable without making it a beep', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume(
+      [{ id: 1, tick: 1, kind: 'enemyTelegraph', value: 0.42, sourceEntityId: 2, targetEntityId: 1, origin: [8, 0, -6], position: [8, 0, -6] }],
+      { position: [0, 0, 0], yaw: 0, playerId: 1 },
+    );
+    // One short tick at the front, so the ear can place where it came from, and nothing
+    // else above the register the rest of the mix lives in.
+    expect(recorder.noises.filter((noise) => noise.filter === 'bandpass')).toHaveLength(1);
+    expect(Math.max(...recorder.voices.map((voice) => voice.frequency))).toBeLessThan(200);
   });
 });
 
-describe('which control earns which acknowledgement', () => {
-  const control = (className: string) => {
-    const element = document.createElement('button');
-    element.className = className;
-    return element;
-  };
+describe('the mix has weight, space and punctuation', () => {
+  const at = (kind: string, extra: Record<string, unknown> = {}) => ({ id: 7, tick: 1, kind, ...extra } as never);
 
-  it('reads the tone off the classes the stylesheet already uses', () => {
-    // Sound and colour cannot drift apart if they are driven by the same class.
-    expect(cueFor(control('primary jumbo action-primary'))).toBe('confirm');
-    expect(cueFor(control('ui-button tone-primary'))).toBe('confirm');
-    expect(cueFor(control('danger'))).toBe('cancel');
-    expect(cueFor(control('ui-button tone-danger'))).toBe('cancel');
-    expect(cueFor(control('utility-action exit-action'))).toBe('cancel');
-    expect(cueFor(control('jumbo ghost action-secondary'))).toBe('select');
-    expect(cueFor(control(''))).toBe('select');
+  it('ducks the whole bus on a kill and lets it back to the resting level', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([at('kill', { targetEntityId: 7, value: 100 })]);
+
+    // Down hard, held, then back. The floor has to be a real reduction and the last
+    // value written has to be the level it started from, or the mix stays quiet.
+    expect(recorder.ducks.length).toBeGreaterThanOrEqual(3);
+    const values = recorder.ducks.map((duck) => duck.value);
+    const resting = values[0];
+    expect(Math.min(...values)).toBeLessThan(resting * 0.6);
+    expect(values.at(-1)).toBeCloseTo(resting, 6);
+    // And the attack is far quicker than the release: a slow duck sounds like a
+    // mistake, a slow recovery sounds like a decision.
+    const times = recorder.ducks.map((duck) => duck.at);
+    expect(times[1] - times[0]).toBeLessThan((times.at(-1)! - times[0]) / 5);
+  });
+
+  it('refuses a second duck inside a live one, so a run does not pump', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([at('kill', { targetEntityId: 7 })]);
+    const afterFirst = recorder.ducks.length;
+    // Context time does not advance in the recorder, so this second kill is inside the
+    // first duck's release by construction -- which is the case being guarded.
+    bus.consume([at('kill', { id: 8, targetEntityId: 8 })]);
+    expect(recorder.ducks).toHaveLength(afterFirst);
+  });
+
+  it('leaves the interface out of the duck entirely', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    for (const kind of ['hover', 'select', 'confirm', 'cancel', 'result'] as const) bus.cue(kind);
+    // The duck is the run's punctuation. A menu that pulled the mix down under the
+    // pointer would spend the effect on nothing.
+    expect(recorder.ducks).toHaveLength(0);
+  });
+
+  it('gives a landed slash material a whiff does not have', async () => {
+    const whiffRecorder = recordingContext();
+    const whiffBus = await busWith(whiffRecorder);
+    whiffBus.consume([at('melee', { sourceEntityId: 1 })]);
+
+    const cutRecorder = recordingContext();
+    const cutBus = await busWith(cutRecorder);
+    cutBus.consume([at('melee', { sourceEntityId: 1, targetEntityId: 9 })]);
+
+    // Not the same sound at two levels. The whiff is dark air and nothing else; the cut
+    // has a transient for definition and a driven sub under it. This is the primary verb
+    // and the cue heard most, so it is the one that most has to have weight.
+    expect(cutRecorder.noises.length).toBeGreaterThan(whiffRecorder.noises.length);
+    expect(cutRecorder.noises.some((noise) => noise.filter === 'bandpass')).toBe(true);
+    expect(whiffRecorder.noises.some((noise) => noise.filter === 'bandpass')).toBe(false);
+    expect(cutRecorder.voices.some((voice) => voice.filter === 'lowpass')).toBe(true);
+    expect(whiffRecorder.voices).toHaveLength(0);
+  });
+
+  it('puts a sub under everything that is meant to be felt', async () => {
+    // The layer the mix had none of. Without it a hit can only get louder, never
+    // heavier, which is the whole difference this pass was aimed at.
+    for (const event of [
+      at('shot', { sourceEntityId: 1 }),
+      at('kill', { targetEntityId: 7 }),
+      at('melee', { targetEntityId: 7 }),
+      at('death', { entityId: 1 }),
+      at('gateOpen', { gateId: 'gate-one' }),
+      at('hit', { targetEntityId: 1, value: 14 }),
+    ]) {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([event], { position: [0, 0, 0], yaw: 0, playerId: 1 });
+      const subs = recorder.voices.filter((voice) => voice.filter === 'lowpass');
+      expect(subs.length, `${(event as { kind: string }).kind} should carry a sub`).toBeGreaterThan(0);
+      // Under 200 Hz, or it is not a sub.
+      expect(Math.min(...subs.map((voice) => voice.frequency))).toBeLessThan(200);
+    }
+  });
+
+  it('does not put a sub under a shot the shield ate', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([at('hit', { targetEntityId: 7, value: 11, deflected: true })]);
+    // The cue is a flat clank on purpose: the player connected and it did not count,
+    // so it must not carry the weight a real hit does.
+    expect(recorder.voices.filter((voice) => voice.filter === 'lowpass')).toHaveLength(0);
+  });
+
+  it('sends a distant event further into the room than a near one', async () => {
+    const listener = { position: [0, 0, 0] as const, yaw: 0, playerId: 1 };
+    const near = recordingContext();
+    const nearBus = await busWith(near);
+    nearBus.consume([at('enemyAttack', { sourceEntityId: 2, targetEntityId: 1, value: 0, position: [0, 0, -4], origin: [0, 0, -4] })], listener);
+
+    const far = recordingContext();
+    const farBus = await busWith(far);
+    farBus.consume([at('enemyAttack', { sourceEntityId: 2, targetEntityId: 1, value: 0, position: [0, 0, -40], origin: [0, 0, -40] })], listener);
+
+    // Depth comes from wetness, not only from level: something forty metres away
+    // arrives mostly as its own reflections.
+    expect(near.sends).toContain('wetNear');
+    expect(far.sends).toContain('wetFar');
+    expect(far.sends).not.toContain('wetNear');
+  });
+
+  it('keeps the player\'s own weapon dry', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([at('shot', { sourceEntityId: 1 })], { position: [0, 0, 0], yaw: 0, playerId: 1 });
+    // It is in their hands, so it has no room around it -- and it is the one sound
+    // that must never be softened by anything.
+    expect(recorder.sends.filter((send) => send === 'wetFar')).toHaveLength(0);
+  });
+
+  it('varies a repeated shot without ever varying the same shot', async () => {
+    const pitchesFor = async (id: number): Promise<number[]> => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([{ id, tick: 1, kind: 'shot', sourceEntityId: 1 }]);
+      return recorder.voices.map((voice) => voice.frequency);
+    };
+    const first = await pitchesFor(1);
+    const second = await pitchesFor(2);
+    // A held trigger must not be the identical waveform over and over.
+    expect(first).not.toEqual(second);
+    // But the variation is hashed from the event id, not rolled, so the same shot
+    // sounds the same way every time it is replayed.
+    expect(await pitchesFor(1)).toEqual(first);
+  });
+});
+
+describe('the register itself', () => {
+  /**
+   * One of every cue the run can play, with the fields each one reads. This is the
+   * guard on the thing the whole pass was about: it is easy to add a cue, and just as
+   * easy to reach for a 900 Hz square while doing it.
+   */
+  const runCues: readonly GameEvent[] = [
+    { id: 1, tick: 1, kind: 'shot', sourceEntityId: 1 },
+    { id: 2, tick: 1, kind: 'dryFire', sourceEntityId: 1 },
+    { id: 3, tick: 1, kind: 'impact', sourceEntityId: 1, position: [0, 0, -6] },
+    { id: 4, tick: 1, kind: 'hit', targetEntityId: 7, value: 34 },
+    { id: 5, tick: 1, kind: 'hit', targetEntityId: 7, value: 60, headshot: true },
+    { id: 6, tick: 1, kind: 'hit', targetEntityId: 7, value: 11, deflected: true },
+    { id: 7, tick: 1, kind: 'hit', targetEntityId: 1, value: 14 },
+    { id: 8, tick: 1, kind: 'kill', targetEntityId: 7 },
+    { id: 9, tick: 1, kind: 'melee', sourceEntityId: 1 },
+    { id: 10, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 },
+    { id: 11, tick: 1, kind: 'enemyTelegraph', sourceEntityId: 2, targetEntityId: 1, value: 0.42 },
+    { id: 12, tick: 1, kind: 'enemyAttack', sourceEntityId: 2, targetEntityId: 1, value: 10 },
+    { id: 13, tick: 1, kind: 'death', entityId: 1 },
+    { id: 14, tick: 1, kind: 'respawn', entityId: 1 },
+    { id: 15, tick: 1, kind: 'comboLink', value: 6 },
+    { id: 16, tick: 1, kind: 'comboBreak', value: 6 },
+    { id: 17, tick: 1, kind: 'dodge', targetEntityId: 1, value: 10 },
+    { id: 18, tick: 1, kind: 'split', value: 30 },
+    { id: 19, tick: 1, kind: 'reloadStart' },
+    { id: 20, tick: 1, kind: 'reloadComplete' },
+    { id: 21, tick: 1, kind: 'checkpoint' },
+    { id: 22, tick: 1, kind: 'complete' },
+    { id: 23, tick: 1, kind: 'gateOpen', gateId: 'gate-one' },
+    { id: 24, tick: 1, kind: 'grappleAttach' },
+    { id: 25, tick: 1, kind: 'grapplePull' },
+    { id: 26, tick: 1, kind: 'grappleRelease' },
+    { id: 27, tick: 1, kind: 'grappleFail' },
+  ];
+
+  const listener = { position: [0, 0, 0] as const, yaw: 0, playerId: 1 };
+
+  it('has no tonal layer anywhere near the beep register', async () => {
+    for (const event of runCues) {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([event], listener);
+      for (const voice of recorder.voices) {
+        // 200 Hz is roughly G3. Everything the run plays starts at or below it, which
+        // is an octave and a half under where this mix used to sit.
+        expect(voice.frequency, `${event.kind} plays a ${Math.round(voice.frequency)} Hz voice`).toBeLessThanOrEqual(200);
+      }
+    }
+  });
+
+  it('keeps every high-frequency layer short and quiet enough to be an edge', async () => {
+    for (const event of runCues) {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([event], listener);
+      for (const noise of recorder.noises.filter((entry) => entry.cutoff > 1000)) {
+        // Definition, not content. Past this it stops being a transient and starts
+        // being the thing the pass removed.
+        expect(noise.gain, `${event.kind} has a loud high layer`).toBeLessThanOrEqual(0.045);
+        expect(noise.filter, `${event.kind} has an unbanded high layer`).toBe('bandpass');
+      }
+    }
+  });
+
+  it('puts weight under every cue that is meant to land, and none under the ones that are not', async () => {
+    // A driven sub is what makes a hit heavy rather than loud, so anything the player is
+    // supposed to feel has one. The exceptions are deliberate and each is a statement:
+    // a surface tick is debris, a deflected round is dead, a whiff is air, and a
+    // magazine coming out is mechanism rather than impact.
+    const weightless = new Set(['impact', 'dryFire', 'grappleFail', 'reloadStart']);
+    for (const event of runCues) {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([event], listener);
+      const subs = recorder.voices.filter((voice) => voice.filter === 'lowpass' && voice.type === 'sine');
+      const deliberatelyDry = weightless.has(event.kind)
+        || (event.kind === 'hit' && event.deflected === true)
+        || (event.kind === 'melee' && event.targetEntityId === undefined);
+      if (deliberatelyDry) expect(subs, `${event.kind} should carry no sub`).toHaveLength(0);
+      else expect(subs.length, `${event.kind} should carry a sub`).toBeGreaterThan(0);
+    }
   });
 });
 
