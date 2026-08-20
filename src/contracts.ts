@@ -126,6 +126,18 @@ export interface SimulationSnapshot {
       aim: { point: Vec3; valid: boolean } | null;
     };
     dashAvailable: boolean;
+    /**
+     * The defensive verb. A dash arms invulnerability frames, and a telegraphed shot
+     * that would have connected inside them is a perfect dodge instead of damage.
+     */
+    dodge: {
+      /** True while the frames are live, so nothing incoming can land. */
+      invulnerable: boolean;
+      /** Whether the next dash would arm them. */
+      ready: boolean;
+      /** Seconds until it would, so presentation can draw the wait. */
+      cooldown: number;
+    };
     jumpCancelAvailable: boolean;
     wallJumpAvailable: boolean;
     /** Entity id the ADS assist is tracking, or null when nothing is locked. */
@@ -159,7 +171,7 @@ export interface SimulationSnapshot {
 export interface GameEvent {
   id: number;
   tick: number;
-  kind: 'shot' | 'impact' | 'hit' | 'kill' | 'melee' | 'checkpoint' | 'death' | 'complete' | 'grappleAttach' | 'grapplePull' | 'grappleRelease' | 'grappleFail' | 'reloadStart' | 'reloadComplete' | 'enemyTelegraph' | 'enemyAttack' | 'gateOpen' | 'dryFire' | 'respawn' | 'split' | 'comboLink' | 'comboBreak';
+  kind: 'shot' | 'impact' | 'hit' | 'kill' | 'melee' | 'checkpoint' | 'death' | 'complete' | 'grappleAttach' | 'grapplePull' | 'grappleRelease' | 'grappleFail' | 'reloadStart' | 'reloadComplete' | 'enemyTelegraph' | 'enemyAttack' | 'gateOpen' | 'dryFire' | 'respawn' | 'split' | 'comboLink' | 'comboBreak' | 'dodge';
   position?: Vec3;
   /**
    * Start of the segment an event describes, when `position` is its end. Set on
@@ -520,7 +532,7 @@ export interface BotProfile {
  * Tech that can extend a flow chain. Every movement kind links at most once per
  * chain; only `kill` repeats, and that is bounded by the number of hostiles.
  */
-export type ComboLinkKind = 'dash' | 'wall-run' | 'wall-jump' | 'vault' | 'hook' | 'pull' | 'kill';
+export type ComboLinkKind = 'dash' | 'wall-run' | 'wall-jump' | 'vault' | 'hook' | 'pull' | 'kill' | 'dodge';
 
 /** Bounded, multiplicative tweaks a modifier may apply to every bot profile. */
 export type BotProfileScaling = Partial<Record<

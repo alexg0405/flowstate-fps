@@ -395,6 +395,60 @@ test('never freezes the frame with reduced motion on', async ({ page }) => {
   expect(await hitstopTotalSeconds(page)).toBe(0);
 });
 
+test('turns a telegraphed shot into a perfect dodge', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.addInitScript(() => {
+    HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
+    // The confirmation is a 620 ms transient that unmounts on its own clock, so polling
+    // for the element races it: it can appear and go between two queries, or expire
+    // between the poll that saw it and the assertion that checks it. An observer
+    // records that it happened, which is the fact under test.
+    const record = { seen: '' };
+    (window as unknown as { __dodge: typeof record }).__dodge = record;
+    new MutationObserver(() => {
+      const mark = document.querySelector('.perfect-dodge');
+      if (mark) record.seen = mark.textContent ?? '';
+    }).observe(document, { childList: true, subtree: true });
+  });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+  await page.getByRole('button', { name: /start run/i }).click();
+  await page.getByRole('button', { name: /debug/i }).click();
+  await page.getByRole('button', { name: /enter run/i }).click();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+  await expect(page.locator('.debug-panel')).toContainText('dodge      ready');
+
+  // Into the atrium, where a hunter holds distance and telegraphs every shot.
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
+  await expect.poll(
+    async () => Number((await page.locator('.debug-panel').innerText()).match(/position\s+\S+ \S+ (\S+)/)?.[1] ?? 0),
+    { timeout: 60_000 },
+  ).toBeLessThan(-42);
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
+
+  // Dash has no key of its own -- the simulation reads it off a double-tapped jump --
+  // so keep double-tapping through the incoming fire. The frames are rationed to about
+  // 29 per cent uptime, so this is several shots' worth of attempts, not one.
+  const seen = async (): Promise<string> => page.evaluate(() => (window as unknown as { __dodge: { seen: string } }).__dodge.seen);
+  for (let attempt = 0; attempt < 60 && !(await seen()); attempt += 1) {
+    // Dash sideways, alternating, so the player works the middle of the arena instead
+    // of piling into the gate at the far end.
+    await page.evaluate((strafe) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: strafe }));
+      const tap = () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space' }));
+        window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space' }));
+      };
+      tap();
+      setTimeout(tap, 70);
+      setTimeout(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: strafe })), 240);
+    }, attempt % 8 < 4 ? 'KeyD' : 'KeyA');
+    await page.waitForTimeout(220);
+  }
+  expect(await seen()).toContain('PERFECT');
+});
+
 test('builds a weapon in the armory and carries it into a run', async ({ page }) => {
   test.slow();
   await page.goto('/');

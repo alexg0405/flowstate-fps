@@ -81,7 +81,7 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
               <span><kbd>RMB</kbd> SIDEARM</span>
               <span><kbd>WASD</kbd> MOVE</span>
               <span><kbd>SPACE</kbd> JUMP</span>
-              <span><kbd>SPACE ×2</kbd> DASH</span>
+              <span><kbd>SPACE ×2</kbd> DASH / DODGE</span>
               <span><kbd>F</kbd> HOOK</span>
               <span><kbd>Q</kbd> PULL</span>
               <span><kbd>SPACE</kbd> WALL JUMP</span>

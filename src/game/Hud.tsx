@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { RunModifier, SimulationSnapshot } from '../contracts';
 import { movementProfile, runScoring } from '../content/config';
-import type { ChainOvation, DamageFeedback, GhostStanding, HitFeedback } from '../runtime/GameRuntime';
+import type { ChainOvation, DamageFeedback, DodgeMark, GhostStanding, HitFeedback } from '../runtime/GameRuntime';
 import { formatTime } from './format';
 
 /**
@@ -33,13 +33,15 @@ const DEATH_TIME_PENALTY_SECONDS = runScoring.deathTimePenaltySeconds;
  * speed as a value *and* a twelve-segment spectrum, and a five-chip chain rail
  * that reported availability the combo multiplier already implies.
  */
-export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = null, modifier = null }: {
+export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = null, dodge = null, modifier = null }: {
   snapshot: SimulationSnapshot;
   hits?: readonly HitFeedback[];
   damage?: readonly DamageFeedback[];
   ghost?: GhostStanding | null;
   /** Set only for the few hundred milliseconds after a chain crosses a threshold. */
   ovation?: ChainOvation | null;
+  /** Set only for the few hundred milliseconds after a telegraphed shot was dodged. */
+  dodge?: DodgeMark | null;
   modifier?: RunModifier | null;
 }) {
   const grapple = snapshot.player.grapple;
@@ -52,6 +54,9 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
   const grappleState = grapple.active ? 'TETHERED' : grapple.available ? 'ARMED' : 'RELINK';
   const grappleProgress = grapple.active || grapple.available ? 1 : Math.max(0, 1 - grapple.cooldown / GRAPPLE_COOLDOWN_SECONDS);
   const locked = snapshot.player.lockedTargetId !== null;
+  // A state on the reticle rather than a module beside it. It lasts 0.22 s and says
+  // the one thing worth knowing in that moment: nothing can touch you right now.
+  const invulnerable = snapshot.player.dodge.invulnerable;
   const magazineSize = Math.max(1, snapshot.player.magazineSize);
   const ammoFraction = snapshot.player.ammo / magazineSize;
   const ammoState = snapshot.player.ammo === 0 ? 'empty' : ammoFraction <= 0.25 ? 'low' : 'nominal';
@@ -114,6 +119,15 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
           <span className="ovation-mark"><b>{ovation.links}</b><em>CHAIN</em></span>
         </div>
       )}
+      {/* The perfect dodge. A corner mark rather than anything near the crosshair, and
+          on the opposite side from the chain flourish because a dodge pays a link and
+          the two can land on the same frame. Under reduced motion it still says what
+          happened; it just does not move. */}
+      {dodge && (
+        <div className="perfect-dodge" key={dodge.id} aria-hidden="true">
+          <b>PERFECT</b><em>DODGE</em><i>{dodge.refused}</i>
+        </div>
+      )}
       <div className="threat-compass" aria-hidden="true">
         {damage.map((wedge) => (
           <span
@@ -129,7 +143,7 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
           did almost nothing, which is the cue to go round rather than keep firing. */}
       {latestHit && <span key={latestHit.id} className={`hitmarker ${latestHit.kill ? 'is-kill' : latestHit.headshot ? 'is-headshot' : latestHit.deflected ? 'is-deflected' : ''}`} aria-hidden="true" />}
       <div
-        className={`crosshair ${grapple.active ? 'locked' : grapple.available ? 'hook-ready' : 'cooldown'} ${locked ? 'target-locked' : ''}`}
+        className={`crosshair ${grapple.active ? 'locked' : grapple.available ? 'hook-ready' : 'cooldown'} ${locked ? 'target-locked' : ''} ${invulnerable ? 'dodge-live' : ''}`}
         // Sustained fire widens the spread, so the crosshair widens with it. Firing
         // blind into a bloomed cone was previously invisible.
         style={{ '--bloom': snapshot.player.spreadBloom } as CSSProperties}

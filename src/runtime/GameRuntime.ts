@@ -25,6 +25,12 @@ const MAX_ACTIVE_DAMAGE = 8;
  * it fires while they are moving, which is the whole reason it is not persistent.
  */
 const OVATION_LIFETIME_MS = 900;
+/**
+ * How long the perfect-dodge confirmation stays mounted. Shorter than the chain
+ * flourish because it fires at the exact moment the player is being shot at, and
+ * anything that outlasts the threat is covering the frame they need to read.
+ */
+const DODGE_LIFETIME_MS = 620;
 
 /** A confirmed hit on an enemy, already projected to canvas pixels for the HUD. */
 export interface HitFeedback {
@@ -73,6 +79,16 @@ export interface ChainOvation {
   links: number;
 }
 
+/**
+ * A round that was going to land and did not. Transient by construction, like the
+ * chain flourish: one entry with its own short expiry and nothing persistent.
+ */
+export interface DodgeMark {
+  id: number;
+  /** Damage the dodge refused, so the confirmation can say what it was worth. */
+  refused: number;
+}
+
 /** How the run stands against the record path, for the HUD. */
 export interface GhostStanding {
   /** Negative means ahead of the record, positive means behind it. */
@@ -87,6 +103,8 @@ export interface RuntimeUpdate {
   damage: readonly DamageFeedback[];
   /** Null except in the brief window after the chain crosses a flourish threshold. */
   ovation: ChainOvation | null;
+  /** Null except in the brief window after a telegraphed shot was dodged. */
+  dodge: DodgeMark | null;
   /** Null when no record path exists for this route yet. */
   ghost: GhostStanding | null;
 }
@@ -105,6 +123,7 @@ export class GameRuntime {
   private activeHits: ActiveHit[] = [];
   private activeDamage: ActiveDamage[] = [];
   private activeOvation: (ChainOvation & { expiresAt: number }) | null = null;
+  private activeDodge: (DodgeMark & { expiresAt: number }) | null = null;
   private running = false;
   private disposed = false;
   private lastUiUpdate = 0;
@@ -206,6 +225,10 @@ export class GameRuntime {
         if (chainEarnsFlourish(links)) this.activeOvation = { id: event.id, links, expiresAt: now + OVATION_LIFETIME_MS };
         continue;
       }
+      if (event.kind === 'dodge') {
+        this.activeDodge = { id: event.id, refused: Math.round(event.value ?? 0), expiresAt: now + DODGE_LIFETIME_MS };
+        continue;
+      }
       if (event.kind === 'enemyAttack') {
         // A miss still reports, with zero damage; only landed shots get a wedge.
         if ((event.value ?? 0) <= 0) continue;
@@ -274,6 +297,11 @@ export class GameRuntime {
     return this.activeOvation && { id: this.activeOvation.id, links: this.activeOvation.links };
   }
 
+  private currentDodge(now: number): DodgeMark | null {
+    if (this.activeDodge && this.activeDodge.expiresAt <= now) this.activeDodge = null;
+    return this.activeDodge && { id: this.activeDodge.id, refused: this.activeDodge.refused };
+  }
+
   private activeDamageWedges(now: number): readonly DamageFeedback[] {
     this.activeDamage = this.activeDamage.filter((entry) => entry.expiresAt > now);
     return this.activeDamage.map(({ id, bearing, amount }) => ({ id, bearing, amount }));
@@ -339,6 +367,7 @@ export class GameRuntime {
         hits: this.projectHits(now),
         damage: this.activeDamageWedges(now),
         ovation: this.currentOvation(now),
+        dodge: this.currentDodge(now),
         ghost: this.ghostStanding(),
       });
       this.lastUiUpdate = now;

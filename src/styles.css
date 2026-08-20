@@ -1405,6 +1405,50 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 .reduced-motion .chain-ovation{ display: none !important; }
 @media (prefers-reduced-motion: reduce) { .chain-ovation{ display: none; } }
 
+/* The perfect dodge.
+
+   Right-hand corner, deliberately opposite the chain flourish: a dodge pays a chain
+   link, so a dodge that crosses a flourish threshold fires both on the same frame and
+   they must not land on top of each other. Nothing here goes near the crosshair -- the
+   only thing the reticle says about the dodge is the 0.22 s ring below, which is a
+   state on an element that was already there rather than a new one beside it.
+
+   The refused damage is struck through, because the number a player wants from a
+   dodge is the one that did not happen. */
+.perfect-dodge{
+  position: absolute; right: 8%; top: 34%; z-index: 1; pointer-events: none;
+  display: flex; gap: .5rem; align-items: baseline;
+  padding: .28rem .85rem .4rem 1rem; background: var(--cyber-ink);
+  box-shadow: -7px 7px 0 rgba(8,247,255,.7);
+  clip-path: polygon(14px 0,100% 0,100% 100%,0 100%);
+  transform: skewX(-9deg); white-space: nowrap;
+}
+.perfect-dodge b{ color: transparent; font: 900 2.1rem/.9 Impact,'Arial Narrow',sans-serif; -webkit-text-stroke: .03em var(--cyber-cyan); text-shadow: .06em .05em 0 rgba(8,247,255,.35); }
+.perfect-dodge em{ color: var(--cyber-paper); font: 900 .68rem ui-monospace,monospace; font-style: normal; letter-spacing: .26em; }
+.perfect-dodge i{ color: rgba(255,255,255,.5); font: 700 .78rem ui-monospace,monospace; font-style: normal; text-decoration: line-through; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .perfect-dodge{ animation: perfect-dodge .62s cubic-bezier(.12,1.2,.3,1) forwards; }
+  .crosshair.dodge-live::before{ animation: dodge-ring .22s ease-out forwards; }
+}
+/* Unlike the full-frame flourish this is a small corner plate, so reduced motion keeps
+   the statement and drops only the movement. */
+.reduced-motion .perfect-dodge{ animation: none !important; }
+.reduced-motion .crosshair.dodge-live::before{ animation: none !important; border-color: var(--cyber-cyan); }
+
+.crosshair.dodge-live::after{ background: var(--cyber-cyan); border-color: var(--cyber-cyan); }
+
+@keyframes perfect-dodge {
+  from{ opacity: 0; transform: skewX(-9deg) translateX(2.4rem) scale(1.3); }
+  28%{ opacity: 1; transform: skewX(-9deg) translateX(-.3rem) scale(1); }
+  74%{ opacity: 1; transform: skewX(-9deg) scale(1); }
+  to{ opacity: 0; transform: skewX(-9deg) translateX(-1.2rem) scale(.97); }
+}
+@keyframes dodge-ring {
+  from{ opacity: 1; transform: scale(.55); border-color: var(--cyber-cyan); }
+  to{ opacity: 0; transform: scale(2.1); border-color: var(--cyber-cyan); }
+}
+
 @keyframes ovation-flare {
   from{ opacity: 0; transform: scale(.72) rotate(-7deg); }
   35%{ opacity: 1; }

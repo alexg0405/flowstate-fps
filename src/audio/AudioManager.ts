@@ -117,6 +117,14 @@ export class AudioManager {
           this.tone({ frequency: 520 * (1 + step * 0.055), duration: 0.06, gain: 0.045, type: 'triangle' }, 0, 0);
           break;
         }
+        case 'dodge':
+          // The loudest thing the player can earn that is not a kill, and it has to
+          // cut through a telegraph that is still ringing: a hard metallic snap and a
+          // steep rising sweep over it, so a perfect dodge is unmistakably not a hit.
+          this.crack(2400, 0.05, 0.075, 0);
+          this.tone({ frequency: 620, duration: 0.2, gain: 0.075, type: 'triangle', bend: 3.1 }, 0, 0);
+          this.tone({ frequency: 1560, duration: 0.14, gain: 0.045, type: 'sine', bend: 1.5 }, 0.03, 0);
+          break;
         case 'comboBreak':
           this.tone({ frequency: 420, duration: 0.2, gain: 0.05, type: 'triangle', bend: 0.42 }, 0, 0);
           break;

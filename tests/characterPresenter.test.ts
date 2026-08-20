@@ -203,6 +203,7 @@ function snapshot(tick: number, entities: EntitySnapshot[] = []): SimulationSnap
       airCharge: 1,
       grapple: { active: false, anchor: null, ropeLength: 0, cooldown: 0, available: true, aim: null },
       dashAvailable: true,
+      dodge: { invulnerable: false, ready: true, cooldown: 0 },
       jumpCancelAvailable: false,
       wallJumpAvailable: false,
       lockedTargetId: null,

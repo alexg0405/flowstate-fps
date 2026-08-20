@@ -85,6 +85,7 @@ function snapshotFixture(overrides: Partial<SimulationSnapshot['player']> = {}, 
       airCharge: 1,
       grapple: { active: false, anchor: null, ropeLength: 0, cooldown: 0, available: true, aim: null },
       dashAvailable: true,
+      dodge: { invulnerable: false, ready: true, cooldown: 0 },
       jumpCancelAvailable: false,
       wallJumpAvailable: false,
       lockedTargetId: null,
@@ -391,6 +392,41 @@ describe('hit feedback', () => {
     expect(container.querySelectorAll('.hud > *')).toHaveLength(plain);
   });
 
+  it('confirms a perfect dodge in a corner, clear of the crosshair and of the flourish', () => {
+    render(<Hud
+      snapshot={snapshotFixture()}
+      dodge={{ id: 9, refused: 15 }}
+      ovation={{ id: 3, links: 6 }}
+    />);
+    const mark = query('.perfect-dodge');
+    expect(mark.textContent).toContain('PERFECT');
+    // The number a player wants from a dodge is the one that did not happen.
+    expect(query('.perfect-dodge i').textContent).toBe('15');
+    // A dodge pays a chain link, so a dodge and a flourish can land on the same frame.
+    // They sit on opposite sides for exactly that reason.
+    expect(mark.parentElement?.className).toContain('hud');
+    expect(query('.chain-ovation')).not.toBeNull();
+    // And neither of them joins the set read off the crosshair.
+    expect(query('.flow-cluster').querySelector('.perfect-dodge')).toBeNull();
+  });
+
+  it('says nothing about a dodge that has not happened', () => {
+    render(<Hud snapshot={snapshotFixture()} />);
+    expect(container.querySelector('.perfect-dodge')).toBeNull();
+    expect(query('.crosshair').className).not.toContain('dodge-live');
+  });
+
+  it('marks the invulnerable window on the reticle rather than beside it', () => {
+    render(<Hud snapshot={snapshotFixture()} />);
+    const plain = container.querySelectorAll('.hud > *').length;
+
+    render(<Hud snapshot={snapshotFixture({ dodge: { invulnerable: true, ready: false, cooldown: 0.4 } })} />);
+    expect(query('.crosshair').className).toContain('dodge-live');
+    // A 0.22 s state on an element that was already there. It adds no node to the
+    // play frame, which is the rule the kill burst was built to.
+    expect(container.querySelectorAll('.hud > *')).toHaveLength(plain);
+  });
+
   it('renders one number per hit in a batch', () => {
     render(<Hud snapshot={snapshotFixture()} hits={[hit({ id: 1 }), hit({ id: 2, amount: 59 }), hit({ id: 3, amount: 12 })]} />);
     expect([...container.querySelectorAll('.damage-number')].map((node) => node.textContent)).toEqual(['34', '59', '12']);
@@ -450,7 +486,7 @@ describe('gameplay overlay states', () => {
     const guide = query('.control-guide').textContent ?? '';
     // The blade is the primary verb, so it is the first thing the guide names, and
     // the gun is the button next to it rather than the one under the index finger.
-    for (const binding of ['LMB SLASH', 'RMB SIDEARM', 'WASD MOVE', 'SPACE JUMP', 'SPACE ×2 DASH', 'F HOOK', 'Q PULL', 'C SLIDE', 'V AIM', 'R RELOAD']) {
+    for (const binding of ['LMB SLASH', 'RMB SIDEARM', 'WASD MOVE', 'SPACE JUMP', 'SPACE ×2 DASH / DODGE', 'F HOOK', 'Q PULL', 'C SLIDE', 'V AIM', 'R RELOAD']) {
       expect(guide).toContain(binding);
     }
     expect(guide.indexOf('LMB SLASH')).toBeLessThan(guide.indexOf('RMB SIDEARM'));

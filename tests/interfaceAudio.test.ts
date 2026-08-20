@@ -163,6 +163,43 @@ describe('interface cues on the synth bus', () => {
   });
 });
 
+describe('the mix distinguishes a dodge from a hit', () => {
+  it('rings louder and higher than the confirm blip, so a refused round is unmistakable', async () => {
+    const dodgeRecorder = recordingContext();
+    const dodgeBus = await busWith(dodgeRecorder);
+    dodgeBus.consume([{ id: 1, tick: 1, kind: 'dodge', value: 10, targetEntityId: 1, sourceEntityId: 2 }]);
+
+    const hitRecorder = recordingContext();
+    const hitBus = await busWith(hitRecorder);
+    hitBus.consume([{ id: 1, tick: 1, kind: 'hit', value: 34, targetEntityId: 7, sourceEntityId: 1 }]);
+
+    // A perfect dodge fires at the moment a telegraph is still ringing, so it has to
+    // cut through it: more voices, and a louder one than the body-shot confirm.
+    expect(dodgeRecorder.voices.length).toBeGreaterThan(hitRecorder.voices.length);
+    const loudestDodge = Math.max(...dodgeRecorder.voices.map((voice) => voice.gain));
+    const loudestHit = Math.max(...hitRecorder.voices.map((voice) => voice.gain));
+    expect(loudestDodge).toBeGreaterThan(loudestHit);
+    // And it rises, where taking damage falls -- the two must never read as the
+    // same event, which is the bug AUDIT.md section 5 records.
+    const pitches = dodgeRecorder.voices.map((voice) => voice.frequency);
+    expect(pitches.at(-1)!).toBeGreaterThan(pitches[0]);
+  });
+
+  it('is not the telegraph it answers', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([{ id: 1, tick: 1, kind: 'enemyTelegraph', value: 0.42, sourceEntityId: 2, targetEntityId: 1 }]);
+    const telegraph = Math.max(...recorder.voices.map((voice) => voice.frequency));
+
+    const dodgeRecorder = recordingContext();
+    const dodgeBus = await busWith(dodgeRecorder);
+    dodgeBus.consume([{ id: 1, tick: 1, kind: 'dodge', value: 10, targetEntityId: 1, sourceEntityId: 2 }]);
+    // Well clear of the wind-up's register, so the answer is not mistaken for another
+    // warning arriving on top of the first.
+    expect(Math.min(...dodgeRecorder.voices.map((voice) => voice.frequency))).toBeGreaterThan(telegraph);
+  });
+});
+
 describe('which control earns which acknowledgement', () => {
   const control = (className: string) => {
     const element = document.createElement('button');

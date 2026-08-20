@@ -283,6 +283,36 @@ export const runScoring = {
 } as const;
 
 /**
+ * The dodge, which is the defensive verb.
+ *
+ * Combat without one is a damage race, and this game already had every piece of the
+ * answer except the rule joining them: bots commit to a shot, announce it with a
+ * telegraph, and only resolve the trace when the wind-up ends. That telegraph is a
+ * window. Dashing through it is the play.
+ *
+ * Three numbers, and the second is the one that matters:
+ *
+ * - **`invulnerableSeconds`** is a little longer than the 0.16 s dash, so the window
+ *   the player is aiming for is the dash plus a few frames of grace rather than the
+ *   dash exactly. Judging a 0.16 s window off an audio cue is a coin flip; 0.22 s is
+ *   a read.
+ * - **`cooldownSeconds`** exists because a ground dash has no cooldown of its own --
+ *   it can be pressed again the instant the last one ends -- so frames tied to the
+ *   dash alone would be permanent invulnerability on a flat floor. Gating the frames
+ *   rather than the dash keeps the movement kit exactly as it was: the dash still
+ *   dashes whenever the air-charge economy allows, and only the defence is rationed.
+ *   At 0.55 s the ceiling is 29 per cent uptime against a spammed dash.
+ * - **A perfect dodge pays a chain link**, once per chain like every other tech, so
+ *   defending extends a combo instead of interrupting it -- and cannot be farmed.
+ */
+export const dodge = {
+  /** How long a dash's invulnerability frames last, from the moment the dash starts. */
+  invulnerableSeconds: 0.22,
+  /** Running time after the frames end before another dash may arm them. */
+  cooldownSeconds: 0.55,
+} as const;
+
+/**
  * Hitstop: how long the presentation clock stops on a landed blow.
  *
  * This is the genre's signature feedback and it is **presentation only**. The

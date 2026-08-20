@@ -22,7 +22,7 @@ import {
   type WeaponDefinition,
   type Vec3,
 } from '../contracts';
-import { aimAssist, botCapsule, botColliderBottom, botProfiles, comboScoring, melee, movementProfile, playerCapsule, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
+import { aimAssist, botCapsule, botColliderBottom, botProfiles, comboScoring, dodge, melee, movementProfile, playerCapsule, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
 import { chassisMultiplier } from '../content/modifiers';
 import { defaultArmory, resolveWeaponStats } from '../content/weapons';
 import { NavigationService } from '../navigation/NavigationService';
@@ -82,6 +82,10 @@ interface PlayerState extends SurfaceResetState {
   dashTimer: number;
   dashElapsed: number;
   dashWasGrounded: boolean;
+  /** Time left on the dash's invulnerability frames. Nothing incoming lands above 0. */
+  invulnerableTimer: number;
+  /** Time left before a dash may arm the frames again. */
+  dodgeCooldown: number;
   jumpTapTimer: number;
   slideTimer: number;
   vaultTimer: number;
@@ -273,6 +277,8 @@ export class FlowSimulation implements GameSimulation {
       fireCooldown: 0,
       reloadTimer: 0,
       meleeTimer: 0,
+      invulnerableTimer: 0,
+      dodgeCooldown: 0,
       score: 0,
       ads: false,
       grounded: false,
@@ -430,6 +436,8 @@ export class FlowSimulation implements GameSimulation {
     this.player.dashTimer = 0;
     this.player.dashElapsed = 0;
     this.player.dashWasGrounded = false;
+    this.player.invulnerableTimer = 0;
+    this.player.dodgeCooldown = 0;
     this.player.jumpTapTimer = 0;
     this.player.slideTimer = 0;
     this.player.vaultTimer = 0;
@@ -714,6 +722,10 @@ export class FlowSimulation implements GameSimulation {
     player.fireCooldown = Math.max(0, player.fireCooldown - dt);
     player.reloadTimer = Math.max(0, player.reloadTimer - dt);
     player.meleeTimer = Math.max(0, player.meleeTimer - dt);
+    // The cooldown is measured in *running* time: it only starts counting down once
+    // the frames have expired, so holding a dash cannot pay off its own gate.
+    player.invulnerableTimer = Math.max(0, player.invulnerableTimer - dt);
+    if (player.invulnerableTimer === 0) player.dodgeCooldown = Math.max(0, player.dodgeCooldown - dt);
     player.grappleCooldown = Math.max(0, player.grappleCooldown - dt);
     player.grapplePullTimer = Math.max(0, player.grapplePullTimer - dt);
     player.weaponReadyTimer = Math.max(0, player.weaponReadyTimer - dt);
@@ -813,6 +825,14 @@ export class FlowSimulation implements GameSimulation {
       player.dashElapsed = 0;
       player.dashWasGrounded = groundedBefore;
       player.locomotion = 'dashing';
+      // The frames are gated, the dash is not. A ground dash has no cooldown of its
+      // own, so tying invulnerability to the dash alone would be permanent
+      // invulnerability on a flat floor; rationing only the defence leaves every
+      // traversal property of the kit exactly where it was.
+      if (player.dodgeCooldown === 0) {
+        player.invulnerableTimer = dodge.invulnerableSeconds;
+        player.dodgeCooldown = dodge.cooldownSeconds;
+      }
     }
 
     const waitingForDashCancel = player.dashWasGrounded && player.dashTimer > 0 && player.dashElapsed < 2 / 60;
@@ -1440,6 +1460,21 @@ export class FlowSimulation implements GameSimulation {
       targetEntityId: this.player.id,
     }));
     if (!connected) return;
+    // A perfect dodge: the shot was committed, telegraphed, aimed and on target, and
+    // the player was inside their invulnerability frames when it resolved. That is why
+    // this check lives here rather than at the moment of the dash -- dodging has to
+    // mean a round that was going to land did not, which cannot be farmed by dashing
+    // at nothing. It pays a chain link, so defending extends a combo rather than
+    // interrupting one, and the no-repeat rule bounds it to once per chain.
+    if (this.player.invulnerableTimer > 0) {
+      events.push(this.event('dodge', this.cameraPosition(), this.player.id, damage, {
+        origin,
+        sourceEntityId: bot.id,
+        targetEntityId: this.player.id,
+      }));
+      this.addComboLink(events, 'dodge');
+      return;
+    }
     this.player.health -= damage;
     events.push(this.event('hit', this.cameraPosition(), this.player.id, damage, {
       origin,
@@ -1821,6 +1856,11 @@ export class FlowSimulation implements GameSimulation {
           aim: this.world ? this.grappleAim() : null,
         },
         dashAvailable: Boolean(this.player && (this.player.grounded || this.player.airCharge > 0) && this.player.dashTimer <= 0),
+        dodge: {
+          invulnerable: (this.player?.invulnerableTimer ?? 0) > 0,
+          ready: (this.player?.dodgeCooldown ?? 0) === 0,
+          cooldown: this.player?.dodgeCooldown ?? 0,
+        },
         jumpCancelAvailable: Boolean(this.player && this.player.dashWasGrounded && this.player.dashTimer > 0 && this.player.dashElapsed >= 2 / 60),
         wallJumpAvailable: this.player?.wallJumpReady ?? false,
         lockedTargetId: this.player?.lockedTargetId ?? null,

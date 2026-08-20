@@ -120,7 +120,7 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
         <div className="scanline-field" />
         <div className="visor-noise" />
       </div>
-      {snapshot && <Hud snapshot={snapshot} hits={update?.hits} damage={update?.damage} ghost={update?.ghost} ovation={update?.ovation} modifier={modifier} />}
+      {snapshot && <Hud snapshot={snapshot} hits={update?.hits} damage={update?.damage} ghost={update?.ghost} ovation={update?.ovation} dodge={update?.dodge} modifier={modifier} />}
       {debug && update && <DebugPanel update={update} />}
       <div className="top-actions" role="toolbar" aria-label="Run controls">
         <span className="run-link-status" aria-hidden="true"><i />SIM/LINK</span>
@@ -166,6 +166,7 @@ function DebugPanel({ update }: { update: RuntimeUpdate }) {
         `position   ${(snapshot.entities[0]?.position ?? [0, 0, 0]).map((axis) => axis.toFixed(1)).join(' ')}`,
         `speed      ${snapshot.player.speed.toFixed(2)} m/s`,
         `air charge ${snapshot.player.airCharge}`,
+        `dodge      ${snapshot.player.dodge.invulnerable ? 'INVULNERABLE' : snapshot.player.dodge.ready ? 'ready' : `${snapshot.player.dodge.cooldown.toFixed(2)} s`}`,
         `deaths     ${snapshot.player.deaths}${snapshot.player.awaitingRespawn ? ' (down)' : ''}`,
         `chain      ${snapshot.player.combo.links} x${snapshot.player.combo.multiplier.toFixed(1)} (peak ${snapshot.player.combo.peakLinks})`,
         `ghost      ${update.ghost?.deltaSeconds === undefined || update.ghost?.deltaSeconds === null ? 'none' : `${update.ghost.deltaSeconds >= 0 ? '+' : ''}${update.ghost.deltaSeconds.toFixed(2)}s`}`,
