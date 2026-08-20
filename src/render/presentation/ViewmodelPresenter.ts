@@ -40,6 +40,8 @@ export class ViewmodelPresenter {
   private externalGrappleSocket: THREE.Object3D | null = null;
   private externalMixer: THREE.AnimationMixer | null = null;
   private readonly externalActions = new Map<string, THREE.AnimationAction>();
+  /** Eased reload dip, so the pose is not applied as a step on the first tick. */
+  private reloadPose = 0;
   private externalClip: string | null = null;
   private externalTransientClip: string | null = null;
   private externalTransientSeconds = 0;
@@ -220,24 +222,37 @@ export class ViewmodelPresenter {
     this.grappleKick = THREE.MathUtils.damp(this.grappleKick, 0, 12, deltaSeconds);
     this.muzzleEnergy = THREE.MathUtils.damp(this.muzzleEnergy, 0, 28, deltaSeconds);
 
-    const targetX = THREE.MathUtils.lerp(0.1, -0.168, ads) + bobX + this.lateralRecoil;
-    const targetY = THREE.MathUtils.lerp(-0.17, -0.035, ads) - bobY - sprint * 0.08;
-    const targetZ = THREE.MathUtils.lerp(-0.3, -0.12, ads) + this.recoil * 0.055;
+    const reload = snapshot.player.action === 'reloading';
+    const reloadProgress = reload ? THREE.MathUtils.clamp(presentation.actionProgress ?? 0, 0, 1) : 0;
+    // A trapezoid, not a sine: the weapon drops out of the sightline quickly, stays
+    // down while the magazine is worked, and comes back up before the trigger is
+    // live again. A sine peaks halfway through and is back at rest before the
+    // reload finishes, which reads as a twitch rather than a reload.
+    const reloadDip = reload
+      ? THREE.MathUtils.clamp(Math.min(reloadProgress / 0.16, (1 - reloadProgress) / 0.2), 0, 1)
+      : 0;
+    this.reloadPose = THREE.MathUtils.damp(this.reloadPose, reloadDip, 26, deltaSeconds);
+
+    const targetX = THREE.MathUtils.lerp(0.1, -0.168, ads) + bobX + this.lateralRecoil + this.reloadPose * 0.045;
+    const targetY = THREE.MathUtils.lerp(-0.17, -0.035, ads) - bobY - sprint * 0.08 - this.reloadPose * 0.1;
+    const targetZ = THREE.MathUtils.lerp(-0.3, -0.12, ads) + this.recoil * 0.055 + this.reloadPose * 0.03;
     this.root.position.x = THREE.MathUtils.damp(this.root.position.x, targetX, 18, deltaSeconds);
     this.root.position.y = THREE.MathUtils.damp(this.root.position.y, targetY, 18, deltaSeconds);
     this.root.position.z = THREE.MathUtils.damp(this.root.position.z, targetZ, 22, deltaSeconds);
-    this.root.rotation.x = THREE.MathUtils.damp(this.root.rotation.x, -this.recoil * 0.085 + this.grappleKick * 0.028, 24, deltaSeconds);
-    this.root.rotation.y = THREE.MathUtils.damp(this.root.rotation.y, this.lateralRecoil * 1.8, 22, deltaSeconds);
-    this.root.rotation.z = THREE.MathUtils.damp(this.root.rotation.z, -sprint * 0.28 + (snapshot.player.locomotion === 'sliding' ? -0.08 : 0), 12, deltaSeconds);
+    this.root.rotation.x = THREE.MathUtils.damp(this.root.rotation.x, -this.recoil * 0.085 + this.grappleKick * 0.028 + this.reloadPose * 0.34, 24, deltaSeconds);
+    this.root.rotation.y = THREE.MathUtils.damp(this.root.rotation.y, this.lateralRecoil * 1.8 + this.reloadPose * 0.12, 22, deltaSeconds);
+    this.root.rotation.z = THREE.MathUtils.damp(this.root.rotation.z, -sprint * 0.28 + (snapshot.player.locomotion === 'sliding' ? -0.08 : 0) + this.reloadPose * 0.26, 12, deltaSeconds);
 
-    const reload = snapshot.player.action === 'reloading';
-    const reloadProgress = reload ? (presentation.actionProgress ?? ((time * 1.05) % 1)) : 0;
-    const reloadArc = reload ? Math.sin(reloadProgress * Math.PI) : 0;
-    this.magazine.position.y = -reloadArc * 0.55;
-    this.magazine.rotation.z = reloadArc * 0.42;
-    this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, reload ? -0.6 - reloadArc * 0.65 : 0, 14, deltaSeconds);
+    // Out early, back in late, rather than a symmetric swing through the middle.
+    const magazineOut = reload
+      ? THREE.MathUtils.smoothstep(reloadProgress, 0.04, 0.28) - THREE.MathUtils.smoothstep(reloadProgress, 0.52, 0.82)
+      : 0;
+    this.magazine.position.y = -magazineOut * 0.55;
+    this.magazine.rotation.z = magazineOut * 0.42;
+    this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, reload ? -0.6 - magazineOut * 0.65 : 0, 14, deltaSeconds);
     this.leftArm.rotation.z = THREE.MathUtils.damp(this.leftArm.rotation.z, reload ? 0.25 : 0, 14, deltaSeconds);
     this.bolt.position.z = -0.02 + this.recoil * 0.085;
+    this.scrubReload(reload, reloadProgress);
 
     const flashScale = 0.72 + this.muzzleEnergy * 0.8;
     this.muzzleFlash.visible = this.muzzleEnergy > 0.04 && !this.settings.reducedMotion;
@@ -253,6 +268,25 @@ export class ViewmodelPresenter {
     });
     this.generatedMaterials.forEach((material) => material.dispose());
     this.generatedTextures.forEach((texture) => texture.dispose());
+  }
+
+  /**
+   * Scrubs the authored reload clip against the reload the simulation is actually
+   * running. The clip is 0.67 s and a carbine reload is 1.55 s, so left to play at
+   * its own rate it finished a third of the way in and then held a frozen pose --
+   * which is what "there is no reload animation" looks like. Driving its time from
+   * `actionProgress` also means a quickfeed magazine and a drum both animate across
+   * their own duration without a second clip.
+   */
+  private scrubReload(reloading: boolean, progress: number): void {
+    const action = this.externalClip?.startsWith('vm_reload') ? this.externalActions.get(this.externalClip) : undefined;
+    if (!action) return;
+    if (!reloading) {
+      action.paused = false;
+      return;
+    }
+    action.paused = true;
+    action.time = progress * action.getClip().duration;
   }
 
   private playExternalClip(name: string, fadeSeconds: number, loop: boolean): void {

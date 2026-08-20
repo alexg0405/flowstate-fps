@@ -78,7 +78,7 @@ export const weaponParts: readonly WeaponPartDefinition[] = [
   { id: 'barrel.choke', slot: 'barrel', label: 'Choke', description: 'Tightens the pellet spread hard.', chassis: ['shotgun'], modifiers: { hipSpread: 0.55, adsSpread: 0.5, range: 1.25 } },
 
   { id: 'magazine.standard', slot: 'magazine', label: 'Standard magazine', description: 'Factory capacity.', modifiers: {} },
-  { id: 'magazine.extended', slot: 'magazine', label: 'Extended magazine', description: 'Half again the rounds, slower to swap.', modifiers: { magazineSize: 1.5, reloadSeconds: 1.22 } },
+  { id: 'magazine.extended', slot: 'magazine', label: 'Extended magazine', description: '50% more rounds, slower to swap.', modifiers: { magazineSize: 1.5, reloadSeconds: 1.22 } },
   { id: 'magazine.drum', slot: 'magazine', label: 'Drum', description: 'Double capacity and deep reserves, very slow to swap.', modifiers: { magazineSize: 2, reserveAmmo: 1.25, reloadSeconds: 1.5 } },
   { id: 'magazine.quickfeed', slot: 'magazine', label: 'Quickfeed', description: 'Fast swaps from a smaller magazine.', modifiers: { magazineSize: 0.82, reloadSeconds: 0.66 } },
 

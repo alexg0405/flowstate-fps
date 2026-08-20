@@ -13,7 +13,7 @@ export const runModifiers: readonly RunModifier[] = [
   {
     id: 'close-quarters',
     label: 'Close Quarters',
-    description: 'Hostiles push in close and hit harder. Kills with a shotgun or an SMG score double.',
+    description: 'Hostiles push in close and hit 20% harder. Kills with a shotgun or an SMG score double.',
     favouredChassis: ['shotgun', 'smg'],
     chassisBonus: 1,
     linkBonus: 0,
@@ -40,7 +40,7 @@ export const runModifiers: readonly RunModifier[] = [
   {
     id: 'glass',
     label: 'Glass Cannon',
-    description: 'Hostiles go down easier and hit half again as hard. Everything you score is worth half again.',
+    description: 'Hostiles have 20% less health and hit 50% harder. Everything you score is worth 50% more.',
     favouredChassis: [],
     chassisBonus: 0,
     linkBonus: 0.5,

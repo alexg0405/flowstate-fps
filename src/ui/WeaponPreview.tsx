@@ -119,20 +119,43 @@ export function WeaponPreview({ chassisId, parts, reducedMotion = false }: Weapo
     const bounds = new THREE.Box3();
     const centre = new THREE.Vector3();
     const size = new THREE.Vector3();
-    /** Re-frames after a build change, since parts move the silhouette. */
+    const restore = new THREE.Vector3();
+    const targetOffset = new THREE.Vector3();
+    const targetCamera = new THREE.Vector3();
+    let framed = false;
+
+    /**
+     * Re-measures after a build change, because a drum or a long barrel moves the
+     * silhouette. It only ever sets a *target*: the turntable keeps its angle and
+     * the loop eases into the new framing, so fitting a part swaps the part instead
+     * of restarting the presentation.
+     */
     const frame = () => {
+      const spin = pivot.rotation.y;
+      restore.copy(presenter.root.position);
+      // Measured square-on and centred, so the result does not depend on where the
+      // turntable happens to be pointing.
       pivot.rotation.y = 0;
       presenter.root.position.set(0, 0, 0);
+      pivot.updateMatrixWorld(true);
       visibleBounds(presenter.root, bounds);
+      pivot.rotation.y = spin;
+      presenter.root.position.copy(restore);
       if (bounds.isEmpty()) return;
       bounds.getCenter(centre);
       bounds.getSize(size);
-      presenter.root.position.set(-centre.x, -centre.y, -centre.z);
+      targetOffset.set(-centre.x, -centre.y, -centre.z);
       // Framed on the horizontal sweep, since the turntable presents the weapon's
       // length to the camera for most of a rotation.
       const radius = Math.max(Math.hypot(size.x, size.z) * 0.5, size.y * 0.75);
       const distance = (radius * FRAMING) / Math.tan((camera.fov * Math.PI) / 360);
-      camera.position.set(distance * 0.22, radius * 0.42, distance);
+      targetCamera.set(distance * 0.22, radius * 0.42, distance);
+      if (framed) return;
+      // The first measurement is the only one that lands instantly; there is
+      // nothing on screen yet to ease away from.
+      framed = true;
+      presenter.root.position.copy(targetOffset);
+      camera.position.copy(targetCamera);
       camera.lookAt(0, 0, 0);
     };
     frameRef.current = frame;
@@ -157,6 +180,10 @@ export function WeaponPreview({ chassisId, parts, reducedMotion = false }: Weapo
       // Reduced motion parks the turntable at a three-quarter angle instead of
       // spinning it, so the same information is there without the movement.
       pivot.rotation.y = motionRef.current ? PARKED_YAW : pivot.rotation.y + SPIN_RATE * delta;
+      const settle = motionRef.current ? 1 : 1 - Math.exp(-9 * delta);
+      presenter.root.position.lerp(targetOffset, settle);
+      camera.position.lerp(targetCamera, settle);
+      camera.lookAt(0, 0, 0);
       renderer.render(scene, camera);
       animation = requestAnimationFrame(tick);
     };

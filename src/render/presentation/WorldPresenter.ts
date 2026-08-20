@@ -27,6 +27,8 @@ interface GateArt {
 const POOLED_POINT_LIGHTS = 2;
 const POOLED_SPOT_LIGHTS = 1;
 
+/** Screens wash toward white, so they read as lit panels rather than flat neon. */
+const WHITE = new THREE.Color('#ffffff');
 const CYAN = palette.cyan;
 const MAGENTA = palette.red;
 const YELLOW = palette.yellow;
@@ -374,12 +376,18 @@ export class WorldPresenter {
   /**
    * The neon skyline.
    *
-   * Towers used to start 42 units out while the play corridor is only 17 wide, leaving
-   * a 25-unit dead band either side of the route, and each tower carried a single
-   * emissive strip. This fills that band with a near tier, layers a far tier behind it
-   * for depth, and hangs gantries overhead so the upper half of the frame is not empty
-   * sky. Everything is instanced -- four draw calls for the whole city -- because the
-   * route already costs 250 in its main pass.
+   * A tier of towers each side of the route, a far tier behind it for depth, and
+   * gantries overhead so the upper half of the frame is not empty sky.
+   *
+   * What makes a facade read as a *building* rather than a dark box is lit windows,
+   * and lots of them. They are instanced quads sized in world units rather than a
+   * texture on the tower material, because an instanced mesh shares one material:
+   * a mapped grid would stretch across a 150 m tower and squash on a 12 m one, while
+   * world-sized quads keep the same storey height on every building. The same
+   * reasoning puts the billboards and the roof masts in their own instanced meshes.
+   *
+   * Seven draw calls for the whole city -- towers, windows, bands, billboards,
+   * banners, masts, gantries -- against 138 for the route's main pass.
    */
   private buildCity(): void {
     const random = this.seededRandom(0xf10a5e7);
@@ -389,11 +397,12 @@ export class WorldPresenter {
     const scale = new THREE.Vector3();
 
     const tiers = [
-      // Near tier: fills the dead band beside the route. Kept low and slim so it reads
-      // as street frontage rather than looming over the player.
-      { count: 96, minX: 29, spreadX: 32, minHeight: 12, spreadHeight: 26, minWidth: 5, spreadWidth: 8 },
-      // Far tier: the original silhouette, pushed back to sit behind the near one.
-      { count: 84, minX: 62, spreadX: 128, minHeight: 30, spreadHeight: 120, minWidth: 10, spreadWidth: 20 },
+      // Near tier: fills the dead band beside the route, and tall enough to close the
+      // corridor in. Low frontage left the upper half of the frame as empty sky.
+      { count: 96, minX: 29, spreadX: 32, minHeight: 20, spreadHeight: 52, minWidth: 5, spreadWidth: 8, panes: 40, maxColumns: 5, maxRows: 8 },
+      // Far tier: the skyline behind it. More panes because the whole facade is in
+      // frame at that distance, and a grid of lights is what makes it read as a city.
+      { count: 84, minX: 62, spreadX: 128, minHeight: 34, spreadHeight: 130, minWidth: 10, spreadWidth: 20, panes: 80, maxColumns: 8, maxRows: 10 },
     ];
     const total = tiers.reduce((sum, tier) => sum + tier.count, 0);
 
@@ -409,14 +418,41 @@ export class WorldPresenter {
     const bandMaterial = this.emissiveMaterial(palette.cyan, 1.5);
     const bands = new THREE.InstancedMesh(bandGeometry, bandMaterial, total * bandsPerTower);
 
-    const signGeometry = new THREE.PlaneGeometry(1, 1);
-    const signMaterial = this.emissiveMaterial(palette.yellow, 1.7);
-    const signs = new THREE.InstancedMesh(signGeometry, signMaterial, total);
+    // Storeys of lit windows, budgeted per tier: the near frontage needs enough to
+    // read at a glance, the far skyline needs enough to read as a grid.
+    const paneBudget = tiers.reduce((sum, tier) => sum + tier.count * tier.panes, 0);
+    const windowGeometry = new THREE.PlaneGeometry(1, 1);
+    const windowMaterial = this.emissiveMaterial('#ffd9a3', 1.15);
+    const windows = new THREE.InstancedMesh(windowGeometry, windowMaterial, paneBudget);
+
+    const bannerGeometry = new THREE.PlaneGeometry(1, 1);
+    const bannerMaterial = this.emissiveMaterial(palette.yellow, 1.7);
+    bannerMaterial.map = this.signContentTexture();
+    bannerMaterial.emissiveMap = bannerMaterial.map;
+    const signs = new THREE.InstancedMesh(bannerGeometry, bannerMaterial, total);
+
+    // Wide screens, the thing every reference photograph of a neon city is full of.
+    // Only the near tier carries them; they are unreadable at far-tier distance.
+    const billboardGeometry = new THREE.PlaneGeometry(1, 1);
+    const billboardMaterial = this.emissiveMaterial('#f4f7ff', 1.25);
+    billboardMaterial.map = this.signContentTexture();
+    billboardMaterial.emissiveMap = billboardMaterial.map;
+    const billboards = new THREE.InstancedMesh(billboardGeometry, billboardMaterial, total);
+
+    // Roof masts. Cheap silhouette detail, and the reference skylines are full of them.
+    const mastGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const mastMaterial = this.materials.variant('armor', '#0d131a');
+    this.generatedMaterials.push(mastMaterial);
+    const masts = new THREE.InstancedMesh(mastGeometry, mastMaterial, total);
 
     const accents = [palette.cyan, palette.red, palette.yellow];
+    // Windows are lamplight, not neon: warm office white with the odd cool or amber
+    // floor. Uniform neon reads as a games-console skybox rather than a city.
+    const windowTints = ['#ffd9a3', '#ffe9c8', '#c9e8ff', '#ff9a5c', '#8ff3ff'];
     const bandColor = new THREE.Color();
     let tower = 0;
     let band = 0;
+    let pane = 0;
 
     for (const tier of tiers) {
       for (let index = 0; index < tier.count; index += 1, tower += 1) {
@@ -457,6 +493,49 @@ export class WorldPresenter {
           scale.clone().set(Math.max(0.4, width * 0.1), signHeight, 1),
         ));
         signs.setColorAt(tower, bandColor.set(accents[tower % accents.length]));
+
+        // Windows, spread over the whole facade rather than stacked at real storey
+        // height: filling a fixed 3 m grid leaves a 150 m tower lit only at its feet.
+        // Roughly a fifth are dark, because a facade where every pane is lit reads as
+        // a light box rather than a building.
+        const columns = Math.max(2, Math.min(tier.maxColumns, Math.round(depth / 2.4)));
+        const rows = Math.max(2, Math.min(tier.maxRows, Math.floor(tier.panes / columns), Math.floor(height / 3.2)));
+        const rowStep = (height * 0.86) / rows;
+        const paneHeight = Math.min(1.35, rowStep * 0.42);
+        const paneWidth = (depth / columns) * 0.46;
+        for (let slot = 0; slot < tier.panes; slot += 1, pane += 1) {
+          const row = slot % rows;
+          const column = Math.floor(slot / rows);
+          const lit = column < columns && random() > 0.2;
+          const paneY = position.y - height / 2 + height * 0.09 + row * rowStep;
+          const paneZ = z + (column - (columns - 1) / 2) * (depth / columns) * 0.86;
+          windows.setMatrixAt(pane, matrix.compose(
+            position.clone().set(faceX, paneY, paneZ),
+            inward,
+            // A dark pane is scaled away rather than hidden: an instanced mesh has no
+            // per-instance visibility, and zero scale costs nothing to rasterise.
+            scale.clone().set(lit ? paneWidth : 0, lit ? paneHeight : 0, 1),
+          ));
+          windows.setColorAt(pane, bandColor.set(windowTints[(tower * 7 + slot) % windowTints.length]));
+        }
+
+        // A screen on a third of the near-tier towers, wide and low on the facade.
+        const screened = tier.minX < 40 && random() > 0.66;
+        const screenWidth = screened ? Math.max(2.6, depth * (0.5 + random() * 0.3)) : 0;
+        billboards.setMatrixAt(tower, matrix.compose(
+          position.clone().set(faceX, position.y - height / 2 + height * (0.3 + random() * 0.34), z + (random() - 0.5) * depth * 0.3),
+          inward,
+          scale.clone().set(screenWidth, screened ? screenWidth * (0.5 + random() * 0.3) : 0, 1),
+        ));
+        billboards.setColorAt(tower, bandColor.set(accents[(tower + 1) % accents.length]).lerp(WHITE, 0.55));
+
+        // Masts on the taller half, so the skyline has a ragged top edge.
+        const masted = height > tier.minHeight + tier.spreadHeight * 0.35;
+        masts.setMatrixAt(tower, matrix.compose(
+          position.clone().set(x + (random() - 0.5) * width * 0.5, position.y + height / 2 + (masted ? height * 0.09 : 0), z + (random() - 0.5) * depth * 0.5),
+          quaternion,
+          scale.clone().set(masted ? 0.32 : 0, masted ? height * 0.18 : 0, masted ? 0.32 : 0),
+        ));
       }
     }
 
@@ -479,12 +558,49 @@ export class WorldPresenter {
       ));
     }
 
-    for (const mesh of [towers, bands, signs, gantries]) {
+    for (const mesh of [towers, windows, bands, billboards, signs, masts, gantries]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       this.environmentRoot.add(mesh);
     }
     this.cityGlow = bands;
+  }
+
+  /**
+   * A sign face: rows of glyph-sized blocks over a dark panel. It is deliberately
+   * illegible -- at skyline distance what registers is that a panel has *content*,
+   * and a flat rectangle of colour is exactly what does not.
+   *
+   * One texture shared by every screen and banner, tinted per instance, so the whole
+   * city still draws in seven calls.
+   */
+  private signContentTexture(): THREE.Texture {
+    const size = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    if (!context) return new THREE.Texture();
+    const random = this.seededRandom(0x51_9ace);
+    context.fillStyle = '#12161d';
+    context.fillRect(0, 0, size, size);
+    for (let row = 0; row < 9; row += 1) {
+      const y = 6 + row * 13;
+      let x = 5 + random() * 10;
+      while (x < size - 8) {
+        const width = 4 + random() * 16;
+        context.fillStyle = random() > 0.3 ? '#ffffff' : '#b9d8ff';
+        context.globalAlpha = 0.35 + random() * 0.65;
+        context.fillRect(x, y, Math.min(width, size - 8 - x), 7);
+        x += width + 3 + random() * 7;
+      }
+    }
+    context.globalAlpha = 1;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4;
+    this.generatedTextures.push(texture);
+    return texture;
   }
 
   /** Deterministic, so the skyline is identical for every player and every capture. */
