@@ -486,11 +486,12 @@ describe('gameplay overlay states', () => {
     const guide = query('.control-guide').textContent ?? '';
     // The blade is the primary verb, so it is the first thing the guide names, and
     // the gun is the button next to it rather than the one under the index finger.
-    for (const binding of ['LMB SLASH', 'RMB SIDEARM', 'WASD MOVE', 'SPACE JUMP', 'SPACE ×2 DASH / DODGE', 'F HOOK', 'Q PULL', 'C SLIDE', 'V AIM', 'R RELOAD']) {
+    for (const binding of ['LMB SLASH', 'E HEAVY', 'RMB SIDEARM', 'WASD MOVE', 'SPACE JUMP', 'SPACE ×2 DASH / DODGE', 'F HOOK', 'Q PULL', 'C SLIDE', 'V AIM', 'R RELOAD']) {
       expect(guide).toContain(binding);
     }
     expect(guide.indexOf('LMB SLASH')).toBeLessThan(guide.indexOf('RMB SIDEARM'));
-    // Melee is no longer a keyboard afterthought and aiming is no longer on the mouse.
+    // Both swings before the gun, and aiming is no longer on the mouse at all.
+    expect(guide.indexOf('E HEAVY')).toBeLessThan(guide.indexOf('RMB SIDEARM'));
     expect(guide).not.toContain('E MELEE');
     expect(guide).not.toContain('LMB FIRE');
     expect(query('.enter-action').textContent).toContain('Enter run');

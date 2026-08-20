@@ -290,7 +290,7 @@ test('resolves a double-tapped jump into a dash in the live runtime', async ({ p
   await expect(page.locator('.flow-cluster .combo-multiplier')).toBeVisible();
 });
 
-test('slashes on the left mouse button in the live runtime', async ({ page }) => {
+test('swings both blades and the sidearm in the live runtime', async ({ page }) => {
   test.slow();
   await page.addInitScript(() => {
     HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
@@ -307,6 +307,15 @@ test('slashes on the left mouse button in the live runtime', async ({ page }) =>
   await page.evaluate(() => window.dispatchEvent(new MouseEvent('mousedown', { button: 0 })));
   await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('/ melee'), { timeout: 20_000 }).toBe(true);
   await page.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 0 })));
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('/ neutral'), { timeout: 20_000 }).toBe(true);
+
+  // And the heavy is on E, with nearly twice the recovery -- so it holds the action in
+  // `melee` from a single press, where the light needs the button held down.
+  await page.evaluate(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyE' }));
+  });
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('/ melee'), { timeout: 20_000 }).toBe(true);
 
   // And the sidearm is on the right button, which is what still spends a round.
   const ammo = page.locator('.hud-ammo .ammo-value strong');

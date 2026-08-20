@@ -78,6 +78,7 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
             <div className="guide-heading"><span>Controls</span></div>
             <div className="control-guide">
               <span><kbd>LMB</kbd> SLASH</span>
+              <span><kbd>E</kbd> HEAVY</span>
               <span><kbd>RMB</kbd> SIDEARM</span>
               <span><kbd>WASD</kbd> MOVE</span>
               <span><kbd>SPACE</kbd> JUMP</span>

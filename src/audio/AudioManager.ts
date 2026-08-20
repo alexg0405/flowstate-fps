@@ -202,7 +202,18 @@ export class AudioManager {
           // cut is the heaviest sub in ordinary play. This is the primary verb, so it is
           // the cue the player hears most and the one that most has to have weight.
           if (event.targetEntityId === undefined) {
-            this.boom(700 * vary, 0.16, 0.035, 0, 'near');
+            // A heavy that cut air is a longer, lower rush of nothing than a light one:
+            // the whiff should tell the player how much they just committed.
+            this.boom(event.heavy ? 520 : 700 * vary, event.heavy ? 0.26 : 0.16, 0.04, 0, 'near');
+          } else if (event.heavy) {
+            // The heaviest thing in ordinary play, and the only impact with a second sub
+            // an octave down -- the same trick the kill uses, because a heavy that lands
+            // on three hostiles at once should sound like it moved the room.
+            this.tick(900, 0.006, 0.032, 0, 'dry');
+            this.boom(170, 0.3, 0.12, 0, 'near');
+            this.sub(56, 0.55, 0.17, 0.34, 0, 'near');
+            this.sub(112, 0.24, 0.1, 0.4, 0, 'far');
+            this.tone({ frequency: 84, duration: 0.26, gain: 0.06, type: 'sine', bend: 0.42, lowpass: 220 }, 0, 0, 'dry');
           } else {
             this.tick(1200 * vary, 0.005, 0.03, 0, 'dry');
             this.boom(220 * vary, 0.14, 0.1, 0, 'near');

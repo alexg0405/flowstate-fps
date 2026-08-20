@@ -388,6 +388,29 @@ describe('the mix has weight, space and punctuation', () => {
     expect(recorder.voices.filter((voice) => voice.filter === 'lowpass')).toHaveLength(0);
   });
 
+  it('gives the heavy more weight than the light, and the whiff more length', async () => {
+    const swing = async (extra: Record<string, unknown>) => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([{ id: 5, tick: 1, kind: 'melee', sourceEntityId: 1, ...extra } as never]);
+      return recorder;
+    };
+    const light = await swing({ targetEntityId: 7 });
+    const heavy = await swing({ targetEntityId: 7, heavy: true });
+
+    // Two subs an octave apart where the light has one, and a louder one -- the same
+    // trick the kill uses, because a heavy landing on three hostiles moved the room.
+    const subs = (recorder: { voices: { filter: string | null; type: string; gain: number }[] }) =>
+      recorder.voices.filter((voice) => voice.filter === 'lowpass' && voice.type === 'sine');
+    expect(subs(heavy).length).toBeGreaterThan(subs(light).length);
+    expect(Math.max(...subs(heavy).map((voice) => voice.gain))).toBeGreaterThan(Math.max(...subs(light).map((voice) => voice.gain)));
+
+    // And a heavy that cut air says how much was just committed.
+    const lightWhiff = await swing({});
+    const heavyWhiff = await swing({ heavy: true });
+    expect(heavyWhiff.noises[0].cutoff).toBeLessThan(lightWhiff.noises[0].cutoff);
+  });
+
   it('sends a distant event further into the room than a near one', async () => {
     const listener = { position: [0, 0, 0] as const, yaw: 0, playerId: 1 };
     const near = recordingContext();
@@ -448,6 +471,8 @@ describe('the register itself', () => {
     { id: 8, tick: 1, kind: 'kill', targetEntityId: 7 },
     { id: 9, tick: 1, kind: 'melee', sourceEntityId: 1 },
     { id: 10, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 },
+    { id: 28, tick: 1, kind: 'melee', sourceEntityId: 1, value: 0, heavy: true },
+    { id: 29, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, value: 3, heavy: true },
     { id: 11, tick: 1, kind: 'enemyTelegraph', sourceEntityId: 2, targetEntityId: 1, value: 0.42 },
     { id: 12, tick: 1, kind: 'enemyAttack', sourceEntityId: 2, targetEntityId: 1, value: 10 },
     { id: 13, tick: 1, kind: 'death', entityId: 1 },

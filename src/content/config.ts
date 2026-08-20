@@ -88,35 +88,60 @@ export const rifle: WeaponDefinition = {
 };
 
 /**
- * The blade, which is the primary verb.
+ * The blade, which is the primary verb, and it has two swings.
  *
- * Every number here is larger than the melee stub it replaces, and the reason is the
- * one risk this whole pivot turns on: judging reach in first person, with no visible
- * arm and no visible blade, is genuinely hard, and a swing that misses because the
- * player misread two metres as three teaches nothing. Ghostrunner's answer is a
- * generous envelope plus assist, so:
+ * Every number in the light swing is larger than the melee stub it replaced, and the
+ * reason is the one risk this whole pivot turns on: judging reach in first person, with
+ * no visible arm and no visible blade, is genuinely hard, and a swing that misses
+ * because the player misread two metres as three teaches nothing. Ghostrunner's answer
+ * is a generous envelope plus assist, so the light reaches 3.6 m through a 130-degree
+ * cone, recovers in 0.24 s, and kills a ranged hunter or a brawler in two.
  *
- * - **Reach** is 3.6 m rather than 2.25. Measured from the eye to the target capsule's
- *   centre, so a hunter standing three metres away is comfortably inside it.
- * - **The arc** is a 65-degree half-angle rather than the 56.6 the old stub used, which
- *   means a target anywhere in the middle third of the screen is a legal hit.
- * - **Recovery** is 0.24 s rather than 0.35, which is what makes the blade a rhythm
- *   instead of a punctuation mark: about four swings a second held down.
- * - **Damage** kills a ranged hunter or a brawler in two. Chipping a hundred-health
- *   bot at seventy per swing was the old stub's real problem.
+ * The heavy exists so the chain has something to reach for. `ComboLinkKind` refuses a
+ * repeat of the same kind inside one chain, so a light and a heavy being *different
+ * kinds* is what stops mashing one attack from paying twice -- and for that to be a
+ * choice rather than a tax, the two have to be good at different things:
  *
- * A bulwark is deliberately not on that list: 65 into the plate is 11.7, so the blade
- * cannot brute-force it and the answer stays the movement kit.
+ * - The light is the rhythm. Four a second, single target, and the answer to almost
+ *   everything.
+ * - The heavy is the **crowd** and the **guard**. It sweeps every hostile in a
+ *   160-degree arc rather than the nearest one, and a plate scales it to 0.5 instead of
+ *   the 0.18 everything else gets, so it is the answer when there is no room to flank.
+ *   It costs 0.46 s of recovery, which is longer than a brawler's whole wind-up: throw
+ *   it into a telegraph and the shot lands on you.
+ *
+ * A bulwark is still not a damage problem. 130 into the plate at 0.5 is 65, so four
+ * committed heavies -- nearly two seconds rooted in front of a shield -- do what six
+ * flanking rounds do. The movement kit stays the better answer; the heavy is the one
+ * available when the movement kit is not.
  */
 export const melee = {
-  /** Recovery after a swing. The blade can be held down, so this is also its rate. */
-  slashSeconds: 0.24,
-  /** Reach, from the camera to the target capsule's centre. */
-  slashRange: 3.6,
-  /** Cosine of the half-angle the swing sweeps. */
-  slashArcCosine: Math.cos(1.13),
-  /** Damage per swing, before a shield arc scales it. */
-  slashDamage: 65,
+  light: {
+    /** Recovery after a swing. The blade can be held down, so this is also its rate. */
+    seconds: 0.24,
+    /** Reach, from the camera to the target capsule's centre. */
+    range: 3.6,
+    /** Cosine of the half-angle the swing sweeps. */
+    arcCosine: Math.cos(1.13),
+    /** Damage per swing, before a shield arc scales it. */
+    damage: 65,
+  },
+  heavy: {
+    /**
+     * Recovery. Nearly twice the light's, and longer than the 0.28 s a brawler takes
+     * to commit a shot -- which is the entire cost of the swing.
+     */
+    seconds: 0.46,
+    range: 4.2,
+    /** About 80 degrees either side, so a heavy catches what is beside the target too. */
+    arcCosine: Math.cos(1.4),
+    damage: 130,
+    /**
+     * Floor a shield arc may scale this to. A plate still halves the heavy, so flanking
+     * remains the efficient answer and this is the inefficient one that always works.
+     */
+    shieldFloor: 0.5,
+  },
 } as const;
 
 /**

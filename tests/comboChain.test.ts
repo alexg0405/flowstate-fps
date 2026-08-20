@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Action, type GameEvent, type InputFrame, type LegacyLevelDocumentV1 } from '../src/contracts';
-import { comboScoring } from '../src/content/config';
+import { comboScoring, melee } from '../src/content/config';
 import { cookLevel } from '../src/content/defaultLevel';
 import { FlowSimulation } from '../src/simulation/FlowSimulation';
 
@@ -36,6 +36,35 @@ function course(): LegacyLevelDocumentV1 {
       },
     ],
     spawns: [{ id: 'player', kind: 'player', position: [0, 1, 0], rotationY: 0 }],
+    encounters: [],
+    offMeshLinks: [],
+    exit: [0, 1, -200],
+  };
+}
+
+/**
+ * Two brawlers a few metres out on an open floor.
+ *
+ * Brawlers rather than marksmen, and no wall: a brawler's preferred range is inside the
+ * blade's reach, so it walks itself into the swing and stays there. Pinning marksmen
+ * against a backstop instead put them 4.5 m out -- past the light's 3.6 -- and the case
+ * ended up measuring the retreat rather than the chain.
+ */
+function brawl(): LegacyLevelDocumentV1 {
+  return {
+    schemaVersion: 1,
+    id: 'brawl',
+    name: 'Brawl',
+    units: 'meters',
+    primitives: [{
+      id: 'floor', kind: 'box', color: '#fff', collision: true, surface: 'default',
+      transform: { position: [0, -0.5, -10], rotation: [0, 0, 0], scale: [30, 1, 40] },
+    }],
+    spawns: [
+      { id: 'player', kind: 'player', position: [0, 1, 0], rotationY: 0 },
+      { id: 'left', kind: 'bot-aggressive', position: [-1.2, 1, -3], rotationY: 0 },
+      { id: 'right', kind: 'bot-aggressive', position: [1.2, 1, -3], rotationY: 0 },
+    ],
     encounters: [],
     offMeshLinks: [],
     exit: [0, 1, -200],
@@ -136,6 +165,60 @@ describe('the flow chain', () => {
       }), TICK);
     }
     expect(output.snapshot.player.combo.links).toBe(1);
+    simulation.dispose();
+  });
+
+  it('pays one link for a mashed light swing, however many land', async () => {
+    // The anti-mashing rule, which was already in the simulation and had nothing melee
+    // to spend. Two hostiles pinned in reach so the swings keep connecting.
+    const simulation = new FlowSimulation();
+    await simulation.loadLevel(cookLevel(brawl()));
+    for (let tick = 1; tick <= 4; tick += 1) simulation.step(frame(tick), TICK);
+
+    let landed = 0;
+    let links = 0;
+    for (let tick = 5; tick <= 5 + Math.ceil(melee.light.seconds * 60) * 4; tick += 1) {
+      const output = simulation.step(frame(tick, { held: Action.Slash, pressed: tick === 5 ? Action.Slash : 0 }), TICK);
+      for (const event of output.events) {
+        if (event.kind === 'melee' && event.targetEntityId !== undefined) landed += 1;
+        if (event.kind === 'comboLink' && !output.events.some((other) => other.kind === 'kill' && other.tick === event.tick)) links += 1;
+      }
+    }
+    // Several swings connected; exactly one of them was worth a link.
+    expect(landed).toBeGreaterThan(2);
+    expect(links).toBe(1);
+    simulation.dispose();
+  });
+
+  it('pays again for the other swing, because a heavy is a different kind', async () => {
+    const simulation = new FlowSimulation();
+    await simulation.loadLevel(cookLevel(brawl()));
+    for (let tick = 1; tick <= 4; tick += 1) simulation.step(frame(tick), TICK);
+
+    // One light, then the heavy inside the same chain window.
+    const light = simulation.step(frame(5, { held: Action.Slash, pressed: Action.Slash }), TICK);
+    expect(light.events.some((event) => event.kind === 'comboLink')).toBe(true);
+    let output = light;
+    for (let tick = 6; tick <= 5 + Math.ceil(melee.light.seconds * 60); tick += 1) {
+      output = simulation.step(frame(tick), TICK);
+    }
+    const heavy = simulation.step(frame(6 + Math.ceil(melee.light.seconds * 60), { pressed: Action.Melee }), TICK);
+    expect(heavy.events.some((event) => event.kind === 'melee' && event.heavy === true)).toBe(true);
+    // Two links from two swings, where two lights would have been one.
+    expect(heavy.snapshot.player.combo.links).toBeGreaterThanOrEqual(2);
+    expect(heavy.snapshot.player.combo.multiplier).toBeGreaterThan(1 + comboScoring.linkStep);
+    simulation.dispose();
+  });
+
+  it('pays nothing for a swing that cut air', async () => {
+    const simulation = new FlowSimulation();
+    await simulation.loadLevel(cookLevel(course()));
+    for (let tick = 1; tick <= 20; tick += 1) simulation.step(frame(tick), TICK);
+    // Nothing to hit anywhere on the combo course.
+    const output = simulation.step(frame(21, { held: Action.Slash, pressed: Action.Slash }), TICK);
+    expect(output.events.some((event) => event.kind === 'melee')).toBe(true);
+    expect(output.events.some((event) => event.kind === 'comboLink')).toBe(false);
+    expect(output.snapshot.player.combo.links).toBe(0);
     simulation.dispose();
   });
 

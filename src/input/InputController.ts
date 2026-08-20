@@ -13,8 +13,10 @@ const keyActions: Record<string, number> = {
   // Dash has no dedicated key: the simulation derives it from a double-tapped jump.
   KeyQ: Action.GrapplePull,
   KeyR: Action.Reload,
-  // `Action.Melee` is deliberately unbound: the blade moved to the left mouse button
-  // and the bit is being held for the heavy that follows it.
+  // The heavy swing. Kept off the mouse on purpose: it is a deliberate, committed
+  // action with nearly half a second of recovery, and a key says that better than a
+  // button the player's index finger is already resting on.
+  KeyE: Action.Melee,
   KeyV: Action.Ads,
   KeyF: Action.Grapple,
   Digit1: Action.WeaponPrimary,

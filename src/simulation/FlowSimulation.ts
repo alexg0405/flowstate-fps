@@ -94,6 +94,8 @@ interface PlayerState extends SurfaceResetState {
   fireCooldown: number;
   reloadTimer: number;
   meleeTimer: number;
+  /** Recovery the live swing was given, so progress can be reported against it. */
+  meleeDuration: number;
   score: number;
   ads: boolean;
   grounded: boolean;
@@ -277,6 +279,7 @@ export class FlowSimulation implements GameSimulation {
       fireCooldown: 0,
       reloadTimer: 0,
       meleeTimer: 0,
+      meleeDuration: melee.light.seconds,
       invulnerableTimer: 0,
       dodgeCooldown: 0,
       score: 0,
@@ -1164,8 +1167,13 @@ export class FlowSimulation implements GameSimulation {
     }
     // Held rather than pressed. The blade is the primary verb now, so holding the
     // button has to produce a rhythm at the recovery rate instead of one swing per
-    // click -- clicking four times a second is not a control scheme.
-    if ((input.held & Action.Slash) && player.meleeTimer === 0) this.slash(events);
+    // click -- clicking four times a second is not a control scheme. The heavy is
+    // pressed rather than held, and it is checked first: it is the deliberate one, and
+    // a player holding both should get the swing they went out of their way to ask for.
+    if (player.meleeTimer === 0) {
+      if (input.pressed & Action.Melee) this.swing(events, 'heavy');
+      else if (input.held & Action.Slash) this.swing(events, 'light');
+    }
 
     const canFire = player.fireCooldown === 0 && player.weaponReadyTimer === 0
       && player.action !== 'reloading' && player.action !== 'melee';
@@ -1205,33 +1213,46 @@ export class FlowSimulation implements GameSimulation {
   }
 
   /**
-   * One swing of the blade.
+   * One swing of the blade, light or heavy.
    *
-   * The whole of the reach, the arc and the damage are in `melee` in the content
-   * config, and every one of them is bigger than the stub this replaces -- see the
-   * comment there for why a generous envelope is the answer to first-person depth
-   * perception rather than a concession.
+   * The whole of the reach, the arc, the damage and the recovery are in `melee` in the
+   * content config, and the comment there explains why the light's envelope is as
+   * generous as it is and what the heavy is for.
    *
-   * The swing resolves against the nearest target inside the arc rather than along
-   * the look vector, which is the melee equivalent of the aim assist: the player
-   * points the blade at an enemy and the simulation decides where the edge landed.
+   * Both swings resolve against whatever is inside the arc rather than along the look
+   * vector, which is the melee equivalent of the aim assist: the player points the blade
+   * at a fight and the simulation decides where the edge landed. The difference is how
+   * many things it landed on -- the light takes the nearest, the heavy takes all of
+   * them, which is what makes it the crowd answer rather than a bigger number.
    */
-  private slash(events: GameEvent[]): void {
+  private swing(events: GameEvent[], kind: 'light' | 'heavy'): void {
     const player = this.player;
+    const profile = kind === 'heavy' ? melee.heavy : melee.light;
     player.action = 'melee';
-    player.meleeTimer = melee.slashSeconds;
+    player.meleeTimer = profile.seconds;
+    player.meleeDuration = profile.seconds;
     const origin = this.cameraPosition();
     const direction = directionFromLook(player.yaw, player.pitch);
-    const target = this.closestBotInArc(origin, direction, melee.slashRange, melee.slashArcCosine);
-    events.push(this.event('melee', origin, undefined, undefined, {
+    const struck = kind === 'heavy'
+      ? this.botsInArc(origin, direction, profile.range, profile.arcCosine)
+      : [this.closestBotInArc(origin, direction, profile.range, profile.arcCosine)].filter((bot): bot is BotState => bot !== null);
+    events.push(this.event('melee', origin, undefined, struck.length, {
       sourceEntityId: player.id,
-      targetEntityId: target?.id,
+      // Names the nearest of them, which is the one presentation anchors to.
+      targetEntityId: struck[0]?.id,
+      heavy: kind === 'heavy',
     }));
-    if (!target) return;
-    this.damageBot(target, melee.slashDamage, events, this.positionOf(target.body), {
-      sourceEntityId: player.id,
-      headshot: false,
-    });
+    if (struck.length === 0) return;
+    for (const target of struck) {
+      this.damageBot(target, profile.damage, events, this.positionOf(target.body), {
+        sourceEntityId: player.id,
+        headshot: false,
+      }, kind === 'heavy' ? melee.heavy.shieldFloor : undefined);
+    }
+    // A swing that connected extends the chain, and the two swings are different link
+    // kinds -- so the no-repeat rule means mashing one of them pays exactly once and
+    // growing a chain means reaching for the other, or for the kit.
+    this.addComboLink(events, kind === 'heavy' ? 'heavy' : 'slash');
   }
 
   /**
@@ -1620,8 +1641,14 @@ export class FlowSimulation implements GameSimulation {
     events: GameEvent[],
     position: Vec3,
     details: Pick<GameEvent, 'sourceEntityId' | 'headshot' | 'normal' | 'surface'>,
+    /**
+     * Least a shield arc may scale this hit to. Only the heavy passes one: it is the
+     * blade's answer to a guard there is no room to get around, and it is deliberately
+     * the inefficient answer rather than a bypass.
+     */
+    shieldFloor?: number,
   ): void {
-    const scale = this.shieldScale(bot);
+    const scale = Math.max(this.shieldScale(bot), shieldFloor ?? 0);
     const dealt = damage * scale;
     bot.health -= dealt;
     events.push(this.event('hit', position, bot.id, dealt, {
@@ -1705,10 +1732,26 @@ export class FlowSimulation implements GameSimulation {
     return !hit || hit.collider.handle === this.player.collider.handle;
   }
 
+  /** Every live bot inside a cone from `origin`, nearest first. What a heavy sweeps. */
+  private botsInArc(origin: RAPIER.Vector, direction: RAPIER.Vector, range: number, arcCosine: number): BotState[] {
+    const found: { bot: BotState; distance: number }[] = [];
+    for (const bot of this.bots) {
+      if (!bot.alive) continue;
+      const position = bot.body.translation();
+      const dx = position.x - origin.x;
+      const dy = position.y - origin.y;
+      const dz = position.z - origin.z;
+      const distance = Math.hypot(dx, dy, dz);
+      const dot = (dx * direction.x + dy * direction.y + dz * direction.z) / Math.max(distance, 0.001);
+      if (distance < range && dot > arcCosine) found.push({ bot, distance });
+    }
+    return found.sort((a, b) => a.distance - b.distance).map((entry) => entry.bot);
+  }
+
   /**
    * Nearest live bot inside a cone from `origin`. The cone is a parameter rather than
    * the constant `0.55` it used to be, because the blade's arc is authored tuning now
-   * and the two callers want different widths.
+   * and the callers want different widths.
    */
   private closestBotInArc(origin: RAPIER.Vector, direction: RAPIER.Vector, range: number, arcCosine: number): BotState | null {
     let nearest: BotState | null = null;
@@ -1904,7 +1947,7 @@ export class FlowSimulation implements GameSimulation {
     if (!this.player) return 0;
     const weapon = this.player.weapons[this.player.activeSlot].stats;
     if (this.player.action === 'reloading') return clamp(1 - this.player.reloadTimer / weapon.reloadSeconds, 0, 1);
-    if (this.player.action === 'melee') return clamp(1 - this.player.meleeTimer / melee.slashSeconds, 0, 1);
+    if (this.player.action === 'melee') return clamp(1 - this.player.meleeTimer / this.player.meleeDuration, 0, 1);
     if (this.player.action === 'firing') return clamp(1 - this.player.fireCooldown / (60 / weapon.roundsPerMinute), 0, 1);
     return 0;
   }

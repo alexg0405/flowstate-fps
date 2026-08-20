@@ -20,7 +20,8 @@ export const Action = {
   GrapplePull: 1 << 16,
   /**
    * The blade. This is the primary verb: `Fire` is the sidearm now, and it moved to
-   * the right mouse button to make room for it.
+   * the right mouse button to make room for it. `Melee` is the heavy on the same
+   * blade -- slower, wider, and the only swing that sweeps more than one target.
    */
   Slash: 1 << 17,
 } as const;
@@ -187,6 +188,12 @@ export interface GameEvent {
   headshot?: boolean;
   /** Set on a hit a shield arc absorbed, so the confirmation can say so. */
   deflected?: boolean;
+  /**
+   * Set on a `melee` event a heavy swing produced. The two swings are one event kind
+   * with one animation state, so this is what lets the mix give the heavy its own
+   * weight without the presentation layer having to infer it from the damage.
+   */
+  heavy?: boolean;
   gateId?: string;
 }
 
@@ -529,10 +536,19 @@ export interface BotProfile {
 }
 
 /**
- * Tech that can extend a flow chain. Every movement kind links at most once per
- * chain; only `kill` repeats, and that is bounded by the number of hostiles.
+ * Tech that can extend a flow chain. Every kind links at most once per chain; only
+ * `kill` repeats, and that is bounded by the number of hostiles.
+ *
+ * The two blade kinds are the point of the list being this long. A light and a heavy
+ * are different link kinds, so the no-repeat rule does the work for free: mashing one
+ * attack pays exactly one link however many times it lands, and a chain grows by
+ * reaching for the *other* swing, the dash, the dodge or the movement kit. That is the
+ * anti-mashing rule this genre is built on, and it was already in the simulation --
+ * melee simply had nothing in the list to spend.
  */
-export type ComboLinkKind = 'dash' | 'wall-run' | 'wall-jump' | 'vault' | 'hook' | 'pull' | 'kill' | 'dodge';
+export type ComboLinkKind =
+  | 'dash' | 'wall-run' | 'wall-jump' | 'vault' | 'hook' | 'pull'
+  | 'slash' | 'heavy' | 'dodge' | 'kill';
 
 /** Bounded, multiplicative tweaks a modifier may apply to every bot profile. */
 export type BotProfileScaling = Partial<Record<

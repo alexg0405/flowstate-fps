@@ -10,7 +10,7 @@ const TICK = 1 / 60;
  * the timer is decremented before the swing is offered, so a recovery that is not a
  * whole number of ticks costs the tick it lands inside.
  */
-const SLASH_TICKS = Math.ceil(melee.slashSeconds * 60);
+const SLASH_TICKS = Math.ceil(melee.light.seconds * 60);
 
 function frame(tick: number, overrides: Partial<InputFrame> = {}): InputFrame {
   return { tick, held: 0, pressed: 0, released: 0, look: [0, 0], ...overrides };
@@ -99,7 +99,7 @@ describe('the blade is the primary verb', () => {
     expect(swing).toBeDefined();
     expect(swing?.targetEntityId).toBe(2);
     const hit = events.find((event) => event.kind === 'hit' && event.targetEntityId === 2);
-    expect(hit?.value).toBeCloseTo(melee.slashDamage, 5);
+    expect(hit?.value).toBeCloseTo(melee.light.damage, 5);
     simulation.dispose();
   });
 
@@ -153,8 +153,8 @@ describe('the blade is the primary verb', () => {
       else furthestHit = Math.max(furthestHit, distance);
     }
     expect(furthestHit).toBeGreaterThan(2.25);
-    expect(furthestHit).toBeLessThanOrEqual(melee.slashRange);
-    expect(nearestMiss).toBeGreaterThan(melee.slashRange - 0.4);
+    expect(furthestHit).toBeLessThanOrEqual(melee.light.range);
+    expect(nearestMiss).toBeGreaterThan(melee.light.range - 0.4);
     simulation.dispose();
   });
 
@@ -167,7 +167,7 @@ describe('the blade is the primary verb', () => {
     const output = simulation.step(frame(5, { held: Action.Slash, pressed: Action.Slash }), TICK);
     const { angle } = bearing(output);
     expect(angle).toBeGreaterThan(Math.acos(0.55));
-    expect(angle).toBeLessThan(Math.acos(melee.slashArcCosine));
+    expect(angle).toBeLessThan(Math.acos(melee.light.arcCosine));
     expect(output.events.find((event) => event.kind === 'melee')?.targetEntityId).toBe(2);
     simulation.dispose();
   });
@@ -187,7 +187,7 @@ describe('the blade is the primary verb', () => {
     expect(deflected.length).toBeGreaterThan(2);
     // The plate answers the blade as well as the gun: six swings into it is a fraction
     // of its health, so the counter stays the movement kit.
-    expect(deflected[0].value).toBeLessThan(melee.slashDamage * 0.25);
+    expect(deflected[0].value).toBeLessThan(melee.light.damage * 0.25);
     expect(events.some((event) => event.kind === 'kill')).toBe(false);
     simulation.dispose();
   });
@@ -226,7 +226,7 @@ describe('the blade is the primary verb', () => {
     // the reach of the verb built to answer it. Measured before this was true, a
     // brawler standing off at five metres took zero of twenty-two swings and killed
     // the player, because a blade cannot reach what a rifle used to.
-    expect(botProfiles.aggressive.preferredRange).toBeLessThan(melee.slashRange - 1);
+    expect(botProfiles.aggressive.preferredRange).toBeLessThan(melee.light.range - 1);
 
     // And in play: hold the blade, stand still, let it walk in.
     const simulation = await start(arena({ kind: 'bot-aggressive', position: [0, 1, -14] }));
@@ -249,7 +249,7 @@ describe('the blade is the primary verb', () => {
     // The other half of the same invariant. A hunter that stands off at eighteen
     // metres must stay a shooting problem; if the blade could reach it there would be
     // no reason to carry a gun at all.
-    expect(botProfiles.ranged.preferredRange).toBeGreaterThan(melee.slashRange * 3);
+    expect(botProfiles.ranged.preferredRange).toBeGreaterThan(melee.light.range * 3);
   });
 
   it('reaches across a gap wider than the two bodies standing in it', () => {
@@ -257,7 +257,82 @@ describe('the blade is the primary verb', () => {
     // radii -- so the number that matters to a player is what is left. Stated here
     // because shrinking either capsule would quietly shorten the blade.
     const bodies = playerCapsule.radius + botCapsule.radius;
-    expect(melee.slashRange - bodies).toBeGreaterThan(2.5);
+    expect(melee.light.range - bodies).toBeGreaterThan(2.5);
+  });
+
+  it('sweeps every hostile in the arc, where the light takes only the nearest', async () => {
+    // Three brawlers spread across the front, all inside the heavy's 160-degree arc.
+    const level = arena(null);
+    level.spawns.push(
+      { id: 'a', kind: 'bot-aggressive', position: [-2.4, 1, -2.4], rotationY: 0 },
+      { id: 'b', kind: 'bot-aggressive', position: [0, 1, -3], rotationY: 0 },
+      { id: 'c', kind: 'bot-aggressive', position: [2.4, 1, -2.4], rotationY: 0 },
+    );
+    const simulation = await start(level);
+
+    const light = simulation.step(frame(5, { held: Action.Slash, pressed: Action.Slash }), TICK);
+    expect(light.events.filter((event) => event.kind === 'hit')).toHaveLength(1);
+    // Let the light recover, then the heavy.
+    for (let tick = 6; tick <= 5 + Math.ceil(melee.light.seconds * 60); tick += 1) simulation.step(frame(tick), TICK);
+    const heavy = simulation.step(frame(6 + Math.ceil(melee.light.seconds * 60), { pressed: Action.Melee }), TICK);
+
+    const struck = heavy.events.filter((event) => event.kind === 'hit');
+    expect(struck).toHaveLength(3);
+    // The swing itself reports how many it caught, and names the nearest for the HUD.
+    const swing = heavy.events.find((event) => event.kind === 'melee')!;
+    expect(swing.heavy).toBe(true);
+    expect(swing.value).toBe(3);
+    expect(swing.targetEntityId).toBeDefined();
+    simulation.dispose();
+  });
+
+  it('costs nearly twice the recovery of a light, which is the whole price of it', async () => {
+    const simulation = await start(arena(null));
+    const heavy = simulation.step(frame(5, { pressed: Action.Melee }), TICK);
+    expect(heavy.snapshot.player.action).toBe('melee');
+
+    let recovering = 1;
+    for (let tick = 6; tick <= 200; tick += 1) {
+      if (simulation.step(frame(tick), TICK).snapshot.player.action !== 'melee') break;
+      recovering += 1;
+    }
+    expect(Math.abs(recovering / 60 - melee.heavy.seconds)).toBeLessThanOrEqual(1 / 60);
+    // Longer than a brawler's whole wind-up: throw it into a telegraph and the shot
+    // lands on you, which is what makes it a commitment rather than a free upgrade.
+    expect(melee.heavy.seconds).toBeGreaterThan(botProfiles.aggressive.windupSeconds);
+    expect(melee.heavy.seconds).toBeGreaterThan(melee.light.seconds * 1.7);
+    simulation.dispose();
+  });
+
+  it('gets through a plate where the light cannot, without making the plate pointless', async () => {
+    const pinned = () => arena({ kind: 'bot-bulwark', position: [0, 1, -2.5] }, { pin: true });
+
+    const lightRun = await start(pinned());
+    const lightHit = hold(lightRun, 5, 1).find((event) => event.kind === 'hit')!;
+    lightRun.dispose();
+
+    const heavyRun = await start(pinned());
+    const heavyHit = heavyRun.step(frame(5, { pressed: Action.Melee }), TICK).events.find((event) => event.kind === 'hit')!;
+    heavyRun.dispose();
+
+    // Both are still deflected -- the plate is not bypassed, it is only halved.
+    expect(lightHit.deflected).toBe(true);
+    expect(heavyHit.deflected).toBe(true);
+    expect(heavyHit.value).toBeCloseTo(melee.heavy.damage * melee.heavy.shieldFloor, 5);
+    // Six times the light gets through, for less than twice the recovery.
+    expect(heavyHit.value! / lightHit.value!).toBeGreaterThan(5);
+    // And flanking is still better than either: six carbine rounds to the flank do what
+    // four rooted heavies do, so the movement kit stays the efficient answer.
+    const heaviesToKill = Math.ceil(botProfiles.bulwark.health / (melee.heavy.damage * melee.heavy.shieldFloor));
+    expect(heaviesToKill * melee.heavy.seconds).toBeGreaterThan(1.5);
+  });
+
+  it('reaches further and wider than the light', () => {
+    // Stated as an invariant rather than measured, because it is the reason to press a
+    // different button: the heavy is the swing for a crowd and for a guard.
+    expect(melee.heavy.range).toBeGreaterThan(melee.light.range);
+    expect(melee.heavy.arcCosine).toBeLessThan(melee.light.arcCosine);
+    expect(melee.heavy.damage).toBeGreaterThan(melee.light.damage);
   });
 
   it('reproduces the same swings for the same input tape', async () => {
