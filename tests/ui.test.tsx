@@ -97,6 +97,7 @@ function snapshotFixture(overrides: Partial<SimulationSnapshot['player']> = {}, 
     },
     splits: [],
     objective: 'Clear: Atrium',
+    wave: { current: 0, total: 0 },
     completed: false,
     openGateIds: [],
     ...snapshot,
@@ -204,6 +205,21 @@ describe('HUD grapple presentation', () => {
     expect(query('.objective-count').textContent).toBe('01');
     expect(query('.objective-count').getAttribute('aria-label')).toBe('1 hostile remaining');
     expect(query('.objective-clock').textContent).toBe('1:13.50');
+  });
+
+  it('names the live wave on the top bar, and only in a room that has more than one', () => {
+    render(<Hud snapshot={snapshotFixture({}, { wave: { current: 2, total: 3 } })} />);
+    const chip = query('.objective-wave');
+    expect(chip.textContent).toBe('W2/3');
+    expect(chip.getAttribute('aria-label')).toBe('Wave 2 of 3');
+    // It belongs to the objective it qualifies, not to the reticle cluster.
+    expect(chip.closest('.hud-objective')).not.toBeNull();
+
+    // A room without waves, and between rooms, says nothing at all.
+    render(<Hud snapshot={snapshotFixture({}, { wave: { current: 1, total: 1 } })} />);
+    expect(container.querySelector('.objective-wave')).toBeNull();
+    render(<Hud snapshot={snapshotFixture({}, { wave: { current: 0, total: 0 } })} />);
+    expect(container.querySelector('.objective-wave')).toBeNull();
   });
 
   it('names the contract for the day on the top bar', () => {

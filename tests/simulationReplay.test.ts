@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Action, type InputFrame, type LevelDocumentV1 } from '../src/contracts';
+import { playerHealth } from '../src/content/config';
 import { cookLevel } from '../src/content/defaultLevel';
 import { FlowSimulation } from '../src/simulation/FlowSimulation';
 
@@ -257,8 +258,8 @@ describe('fixed input replay', () => {
     const first = new FlowSimulation();
     const second = new FlowSimulation();
     await Promise.all([first.loadLevel(cookLevel(replayLevel)), second.loadLevel(cookLevel(replayLevel))]);
-    expect(first.step({ tick: 1, held: 0, pressed: 0, released: 0, look: [0, 0] }, 1 / 60).snapshot.player.health).toBe(100);
-    expect(second.step({ tick: 1, held: 0, pressed: 0, released: 0, look: [0, 0] }, 1 / 60).snapshot.player.health).toBe(100);
+    expect(first.step({ tick: 1, held: 0, pressed: 0, released: 0, look: [0, 0] }, 1 / 60).snapshot.player.health).toBe(playerHealth);
+    expect(second.step({ tick: 1, held: 0, pressed: 0, released: 0, look: [0, 0] }, 1 / 60).snapshot.player.health).toBe(playerHealth);
     expect(() => { first.dispose(); first.dispose(); second.dispose(); second.dispose(); }).not.toThrow();
   });
 

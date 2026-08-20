@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Action, type InputFrame, type LegacyLevelDocumentV1, type SimulationOutput } from '../src/contracts';
-import { runScoring } from '../src/content/config';
+import { playerHealth, runScoring } from '../src/content/config';
 import { cookLevel } from '../src/content/defaultLevel';
 import { FlowSimulation } from '../src/simulation/FlowSimulation';
 
@@ -139,7 +139,7 @@ describe('death is a state the player leaves', () => {
     const respawn = simulation.step(frame(2, { pressed: Action.Jump }), TICK);
     expect(respawn.events.some((event) => event.kind === 'respawn')).toBe(true);
     expect(respawn.snapshot.player.awaitingRespawn).toBe(false);
-    expect(respawn.snapshot.player.health).toBe(100);
+    expect(respawn.snapshot.player.health).toBe(playerHealth);
     simulation.dispose();
   });
 

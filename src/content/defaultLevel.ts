@@ -166,33 +166,70 @@ export const defaultLevel: LevelDocumentV2 = {
   assetCatalogVersion: DEFAULT_ASSET_CATALOG_VERSION,
   primitives: defaultCollision,
   /**
-   * Three arenas that ask different questions, rather than two bots each.
+   * Three rooms, each of which asks a different question, and each of which has more
+   * than one answer to give before it opens.
    *
-   * - Atrium teaches the pair: one hunter holding distance, one closing.
-   * - Gallery introduces the bulwark head-on, with a marksman on each flank so
-   *   standing still to grind the plate down is the losing line.
-   * - Roofline stacks a bulwark and a brawler in front and a marksman behind, so the
-   *   flank that solves the plate is also the one that walks into the rest of them.
+   * - **Atrium** teaches the pair -- one hostile closing, one holding distance -- and
+   *   then teaches that a room going quiet is not a room being over.
+   * - **Gallery** introduces the plate head-on with a marksman on each flank, so
+   *   standing still to grind the shield down is the losing line. Its second wave puts a
+   *   second plate and a crowd behind it, so the flank that solves the shield is the one
+   *   under fire.
+   * - **Roofline** is the finale and the only room that puts **eight** on the deck at
+   *   once: a bulwark, five brawlers and two marksmen, which is what the heavy swing's
+   *   160-degree sweep was built for.
    *
-   * `rotationY` on a bulwark is load bearing: it decides which way the plate starts,
-   * and the profile's turn rate decides how long it takes to bring it round.
+   * Twenty-eight hostiles across seven waves, where this route used to hold nine in
+   * three static groups. `wave` on a spawn is what makes that affordable -- the peak
+   * concurrent count is eight, not twenty-eight, so the volume is in the room's length
+   * rather than in the frame budget.
+   *
+   * `rotationY` on a bulwark is load bearing: it decides which way the plate starts, and
+   * the profile's turn rate decides how long it takes to bring it round. The Gallery's
+   * second plate starts turned away on purpose.
    */
   spawns: [
     { id: 'player-start', kind: 'player', position: [0, 1.1, 8], rotationY: 0 },
-    { id: 'bot-a', kind: 'bot-ranged', position: [-8, 3, -45], rotationY: 0, encounterId: 'arena-1' },
-    { id: 'bot-b', kind: 'bot-aggressive', position: [8, 3, -47], rotationY: 0, encounterId: 'arena-1' },
-    { id: 'bot-c', kind: 'bot-ranged', position: [-13, 7, -97], rotationY: 0, encounterId: 'arena-2' },
-    { id: 'bot-d', kind: 'bot-bulwark', position: [1, 7, -95], rotationY: 0, encounterId: 'arena-2' },
-    { id: 'bot-g', kind: 'bot-ranged', position: [13, 7, -92], rotationY: 0, encounterId: 'arena-2' },
-    { id: 'bot-e', kind: 'bot-ranged', position: [-7, 11.5, -154], rotationY: 0, encounterId: 'arena-3' },
-    { id: 'bot-f', kind: 'bot-aggressive', position: [8, 11.5, -146], rotationY: 0, encounterId: 'arena-3' },
-    { id: 'bot-h', kind: 'bot-bulwark', position: [-3, 11.5, -145], rotationY: 0, encounterId: 'arena-3' },
-    { id: 'bot-i', kind: 'bot-aggressive', position: [10, 11.5, -153], rotationY: 0, encounterId: 'arena-3' },
+
+    // Atrium: teaches the pair, then teaches that a room is not over when it goes quiet.
+    { id: 'atrium-brawler-a', kind: 'bot-aggressive', position: [-6, 3, -44], rotationY: 0, encounterId: 'arena-1' },
+    { id: 'atrium-brawler-b', kind: 'bot-aggressive', position: [6, 3, -46], rotationY: 0, encounterId: 'arena-1' },
+    { id: 'atrium-marksman-a', kind: 'bot-ranged', position: [-11, 3, -51], rotationY: 0, encounterId: 'arena-1' },
+    { id: 'atrium-brawler-c', kind: 'bot-aggressive', position: [-9, 3, -40], rotationY: 0, encounterId: 'arena-1', wave: 1 },
+    { id: 'atrium-brawler-d', kind: 'bot-aggressive', position: [0, 3, -52], rotationY: 0, encounterId: 'arena-1', wave: 1 },
+    { id: 'atrium-brawler-e', kind: 'bot-aggressive', position: [10, 3, -40], rotationY: 0, encounterId: 'arena-1', wave: 1 },
+    { id: 'atrium-marksman-b', kind: 'bot-ranged', position: [12, 3, -52], rotationY: 0, encounterId: 'arena-1', wave: 1 },
+
+    // Gallery: the plate head-on with a marksman on each flank, then the same puzzle
+    // with a crowd in it, so the flank that solves the shield is the one under fire.
+    { id: 'gallery-bulwark-a', kind: 'bot-bulwark', position: [1, 7, -95], rotationY: 0, encounterId: 'arena-2' },
+    { id: 'gallery-marksman-a', kind: 'bot-ranged', position: [-13, 7, -97], rotationY: 0, encounterId: 'arena-2' },
+    { id: 'gallery-marksman-b', kind: 'bot-ranged', position: [13, 7, -92], rotationY: 0, encounterId: 'arena-2' },
+    { id: 'gallery-bulwark-b', kind: 'bot-bulwark', position: [-4, 7, -88], rotationY: 2.4, encounterId: 'arena-2', wave: 1 },
+    { id: 'gallery-brawler-a', kind: 'bot-aggressive', position: [-14, 7, -90], rotationY: 0, encounterId: 'arena-2', wave: 1 },
+    { id: 'gallery-brawler-b', kind: 'bot-aggressive', position: [14, 7, -100], rotationY: 0, encounterId: 'arena-2', wave: 1 },
+    { id: 'gallery-brawler-c', kind: 'bot-aggressive', position: [3, 7, -103], rotationY: 0, encounterId: 'arena-2', wave: 1 },
+    { id: 'gallery-marksman-c', kind: 'bot-ranged', position: [11, 7, -103], rotationY: 0, encounterId: 'arena-2', wave: 1 },
+
+    // Roofline: the finale, and the only room that puts eight on the deck at once.
+    { id: 'roof-brawler-a', kind: 'bot-aggressive', position: [-8, 11.5, -146], rotationY: 0, encounterId: 'arena-3' },
+    { id: 'roof-brawler-b', kind: 'bot-aggressive', position: [8, 11.5, -146], rotationY: 0, encounterId: 'arena-3' },
+    { id: 'roof-brawler-c', kind: 'bot-aggressive', position: [0, 11.5, -155], rotationY: 0, encounterId: 'arena-3' },
+    { id: 'roof-marksman-a', kind: 'bot-ranged', position: [-11, 11.5, -156], rotationY: 0, encounterId: 'arena-3' },
+    { id: 'roof-marksman-b', kind: 'bot-ranged', position: [11, 11.5, -156], rotationY: 0, encounterId: 'arena-3' },
+    { id: 'roof-bulwark', kind: 'bot-bulwark', position: [0, 11.5, -142], rotationY: 0, encounterId: 'arena-3', wave: 1 },
+    { id: 'roof-brawler-d', kind: 'bot-aggressive', position: [-12, 11.5, -142], rotationY: 0, encounterId: 'arena-3', wave: 1 },
+    { id: 'roof-brawler-e', kind: 'bot-aggressive', position: [12, 11.5, -142], rotationY: 0, encounterId: 'arena-3', wave: 1 },
+    { id: 'roof-brawler-f', kind: 'bot-aggressive', position: [-4, 11.5, -158], rotationY: 0, encounterId: 'arena-3', wave: 1 },
+    { id: 'roof-brawler-g', kind: 'bot-aggressive', position: [4, 11.5, -158], rotationY: 0, encounterId: 'arena-3', wave: 1 },
+    { id: 'roof-brawler-h', kind: 'bot-aggressive', position: [-12, 11.5, -152], rotationY: 0, encounterId: 'arena-3', wave: 1 },
+    { id: 'roof-marksman-c', kind: 'bot-ranged', position: [12, 11.5, -152], rotationY: 0, encounterId: 'arena-3', wave: 1 },
+    { id: 'roof-marksman-d', kind: 'bot-ranged', position: [0, 11.5, -159], rotationY: 0, encounterId: 'arena-3', wave: 1 },
   ],
   encounters: [
-    { id: 'arena-1', label: 'Atrium', checkpoint: [0, 3.1, -34], requiredBotIds: ['bot-a', 'bot-b'] },
-    { id: 'arena-2', label: 'Gallery', checkpoint: [0, 6.1, -84], requiredBotIds: ['bot-c', 'bot-d', 'bot-g'] },
-    { id: 'arena-3', label: 'Roofline', checkpoint: [0, 11.1, -137], requiredBotIds: ['bot-e', 'bot-f', 'bot-h', 'bot-i'] },
+    { id: 'arena-1', label: 'Atrium', checkpoint: [0, 3.1, -34], requiredBotIds: ['atrium-brawler-a', 'atrium-brawler-b', 'atrium-marksman-a', 'atrium-brawler-c', 'atrium-brawler-d', 'atrium-brawler-e', 'atrium-marksman-b'] },
+    { id: 'arena-2', label: 'Gallery', checkpoint: [0, 6.1, -84], requiredBotIds: ['gallery-bulwark-a', 'gallery-marksman-a', 'gallery-marksman-b', 'gallery-bulwark-b', 'gallery-brawler-a', 'gallery-brawler-b', 'gallery-brawler-c', 'gallery-marksman-c'] },
+    { id: 'arena-3', label: 'Roofline', checkpoint: [0, 11.1, -137], requiredBotIds: ['roof-brawler-a', 'roof-brawler-b', 'roof-brawler-c', 'roof-marksman-a', 'roof-marksman-b', 'roof-bulwark', 'roof-brawler-d', 'roof-brawler-e', 'roof-brawler-f', 'roof-brawler-g', 'roof-brawler-h', 'roof-marksman-c', 'roof-marksman-d'] },
   ],
   offMeshLinks: [
     { id: 'link-arena-one-rise', start: [0, 3, -55], end: [0, 4, -61], bidirectional: true, action: 'jump' },

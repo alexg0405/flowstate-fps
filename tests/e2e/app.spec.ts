@@ -1,4 +1,5 @@
 import { type Page } from '@playwright/test';
+import { playerHealth } from '../../src/content/config';
 import { expect, test } from './test';
 
 test('opens the menu and gameplay editor', async ({ page }) => {
@@ -167,7 +168,10 @@ test('drives the active HUD while input is captured', async ({ page }) => {
   await expect(page.getByLabel(/^grapple (armed|tethered|relink)$/i)).toBeVisible();
   await expect(page.locator('.flow-cluster .combo-multiplier')).toBeVisible();
   await expect(page.locator('.hud-ammo .ammo-value')).toContainText('30', { timeout: 20_000 });
-  await expect(page.locator('.hud-health .health-value')).toContainText('100');
+  // Read from the tuning rather than hardcoded: the crowd pass moved the pool from 100
+  // to 140, and a HUD test that names the number is a HUD test that breaks every time
+  // the balance does.
+  await expect(page.locator('.hud-health .health-value')).toContainText(String(playerHealth));
 
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
   await expect.poll(async () => {

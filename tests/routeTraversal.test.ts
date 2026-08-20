@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Action, type CollisionPrimitiveV2, type InputFrame } from '../src/contracts';
+import { playerHealth } from '../src/content/config';
 import { cookLevel, defaultLevel } from '../src/content/defaultLevel';
 import { FlowSimulation } from '../src/simulation/FlowSimulation';
 
@@ -127,8 +128,12 @@ describe('the route can be walked', () => {
     // brawler closes to inside the blade. This is the case that makes combat reachable
     // at all -- for two commits it was not, because the route was not walkable.
     const { output } = await walk(Action.Forward, 500);
+    // The first wave of the Atrium, and only the first: a wave that has not been
+    // brought on contributes nothing to the snapshot, which is the whole reason the
+    // route can hold twenty-eight hostiles.
     const hostiles = output.snapshot.entities.filter((entity) => entity.kind === 'bot');
-    expect(hostiles.length).toBe(2);
-    expect(output.snapshot.player.health).toBeLessThan(100);
+    expect(hostiles.length).toBe(3);
+    expect(output.snapshot.wave).toEqual({ current: 1, total: 2 });
+    expect(output.snapshot.player.health).toBeLessThan(playerHealth);
   });
 });

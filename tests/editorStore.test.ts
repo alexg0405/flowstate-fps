@@ -15,16 +15,20 @@ describe('editor encounter commands', () => {
   });
 
   it('moves a bot between encounters atomically and supports undo', () => {
-    useEditorStore.getState().assignSpawnEncounter('bot-a', 'arena-2');
+    // The first hostile the shipped route authors. Read from the document rather than
+    // named, so re-authoring the arenas -- which the crowd pass did -- does not break a
+    // case about the editor's undo stack.
+    const botId = useEditorStore.getState().document.spawns.find((item) => item.encounterId === 'arena-1')!.id;
+    useEditorStore.getState().assignSpawnEncounter(botId, 'arena-2');
     let document = useEditorStore.getState().document;
-    expect(document.encounters.find((item) => item.id === 'arena-1')?.requiredBotIds).not.toContain('bot-a');
-    expect(document.encounters.find((item) => item.id === 'arena-2')?.requiredBotIds).toContain('bot-a');
-    expect(document.spawns.find((item) => item.id === 'bot-a')?.encounterId).toBe('arena-2');
+    expect(document.encounters.find((item) => item.id === 'arena-1')?.requiredBotIds).not.toContain(botId);
+    expect(document.encounters.find((item) => item.id === 'arena-2')?.requiredBotIds).toContain(botId);
+    expect(document.spawns.find((item) => item.id === botId)?.encounterId).toBe('arena-2');
 
     useEditorStore.getState().undo();
     document = useEditorStore.getState().document;
-    expect(document.encounters.find((item) => item.id === 'arena-1')?.requiredBotIds).toContain('bot-a');
-    expect(document.spawns.find((item) => item.id === 'bot-a')?.encounterId).toBe('arena-1');
+    expect(document.encounters.find((item) => item.id === 'arena-1')?.requiredBotIds).toContain(botId);
+    expect(document.spawns.find((item) => item.id === botId)?.encounterId).toBe('arena-1');
   });
 
   it('creates encounter and off-mesh link records with stable IDs', () => {

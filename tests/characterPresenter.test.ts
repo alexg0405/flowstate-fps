@@ -214,6 +214,7 @@ function snapshot(tick: number, entities: EntitySnapshot[] = []): SimulationSnap
     },
     splits: [],
     objective: '',
+    wave: { current: 0, total: 0 },
     completed: false,
     openGateIds: [],
   };

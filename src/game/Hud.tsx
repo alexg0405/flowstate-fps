@@ -91,6 +91,14 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
         <div className="objective-line">
           {hostiles > 0 && <span className="objective-count" aria-label={`${hostiles} hostile${hostiles === 1 ? '' : 's'} remaining`}>{hostiles.toString().padStart(2, '0')}</span>}
           <strong>{snapshot.objective}</strong>
+          {/* A room with waves has to say so, or clearing one and having the next arrive
+              reads as a bug rather than as the room. It goes on the top bar with the
+              objective it belongs to, not near the crosshair. */}
+          {snapshot.wave.total > 1 && (
+            <span className="objective-wave" aria-label={`Wave ${snapshot.wave.current} of ${snapshot.wave.total}`}>
+              W{snapshot.wave.current}<i>/{snapshot.wave.total}</i>
+            </span>
+          )}
           <span className="objective-clock" aria-label="Run time">{formatTime(snapshot.elapsedSeconds)}</span>
         </div>
         {modifier && <div className="objective-modifier"><i aria-hidden="true" />{modifier.label.toUpperCase()}</div>}

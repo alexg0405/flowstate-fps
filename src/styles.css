@@ -965,6 +965,14 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 .objective-line strong{ color: var(--cyber-paper); font: 900 .82rem Impact,'Arial Narrow',sans-serif; letter-spacing: .1em; text-transform: uppercase; }
 .objective-count{ min-width: 1.5rem; padding: .06rem .28rem; color: var(--cyber-ink); background: var(--cyber-red); font: 900 .6rem ui-monospace,monospace; letter-spacing: .04em; }
 .objective-clock{ color: var(--cyber-cyan); font: 800 .7rem ui-monospace,monospace; letter-spacing: .06em; font-variant-numeric: tabular-nums; }
+/* Sits with the objective it belongs to, in the same stamped register as the hostile
+   count on the other side of it, and disappears entirely in a room without waves. */
+.objective-wave{
+  padding: .04rem .3rem .08rem; background: var(--cyber-yellow); color: var(--cyber-ink);
+  font: 900 .62rem ui-monospace,monospace; letter-spacing: .1em;
+  clip-path: polygon(0 0,100% 0,calc(100% - 4px) 100%,0 100%);
+}
+.objective-wave i{ font-style: normal; opacity: .6; }
 .hud.is-grappling .hud-objective{ border-bottom-color: var(--cyber-cyan); }
 
 /* Reticle cluster: everything here is read without looking away from the crosshair.

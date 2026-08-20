@@ -22,7 +22,7 @@ import {
   type WeaponDefinition,
   type Vec3,
 } from '../contracts';
-import { aimAssist, botCapsule, botColliderBottom, botProfiles, comboScoring, dodge, melee, movementProfile, playerCapsule, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
+import { aimAssist, botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, melee, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
 import { chassisMultiplier } from '../content/modifiers';
 import { defaultArmory, resolveWeaponStats } from '../content/weapons';
 import { NavigationService } from '../navigation/NavigationService';
@@ -43,6 +43,8 @@ interface BotState {
   spawnPosition: Vec3;
   waypoint: Vec3 | null;
   encounterId?: string;
+  /** Which wave of its encounter it belongs to. Waves activate one at a time. */
+  wave: number;
   active: boolean;
   velocityY: number;
   velocity: { x: number; y: number; z: number };
@@ -139,7 +141,7 @@ const BOT_LEDGE_LOOKAHEAD = 0.7;
 /** Anything below this has left the level and is returned or killed. */
 const VOID_Y = -20;
 /** The player's full health, and what the snapshot reports their bar against. */
-const PLAYER_MAX_HEALTH = 100;
+const PLAYER_MAX_HEALTH = playerHealth;
 const WEAPON_SWAP_SECONDS = 0.34;
 /** Closing distance per tick below which the pull counts as stalled. */
 const GRAPPLE_PROGRESS_EPSILON = 0.004;
@@ -178,6 +180,8 @@ export class FlowSimulation implements GameSimulation {
   private checkpoint!: CheckpointState;
   private completedEncounters = new Set<string>();
   private activeEncounters = new Set<string>();
+  /** Wave currently live in each active encounter. Absent means the room has not begun. */
+  private liveWaves = new Map<string, number>();
   private completed = false;
   /** Run-level, so it deliberately survives checkpoint restores. */
   private deaths = 0;
@@ -233,6 +237,7 @@ export class FlowSimulation implements GameSimulation {
     this.bots = [];
     this.completedEncounters.clear();
     this.activeEncounters.clear();
+    this.liveWaves.clear();
     this.completed = false;
     this.deaths = 0;
     this.comboPeak = 0;
@@ -331,6 +336,9 @@ export class FlowSimulation implements GameSimulation {
         spawnPosition: botSpawn.position,
         waypoint: null,
         encounterId: botSpawn.encounterId,
+        wave: botSpawn.wave ?? 0,
+        // Only the first wave of a room is ever eligible; the rest wait for the wave
+        // before them to be cleared.
         active: !botSpawn.encounterId,
         velocityY: 0,
         velocity: { x: 0, y: 0, z: 0 },
@@ -372,6 +380,7 @@ export class FlowSimulation implements GameSimulation {
     this.updateTimers(dt, events);
     this.updateMovement(input, dt, events);
     this.updateEncounterActivation();
+    this.updateWaves(events);
     this.updateBots(dt, events);
     this.world.step();
     this.updateCombat(input, dt, events);
@@ -472,6 +481,10 @@ export class FlowSimulation implements GameSimulation {
     const defeated = new Set(this.checkpoint.defeatedBotIds);
     this.completedEncounters = new Set(this.checkpoint.completedEncounterIds);
     this.activeEncounters = new Set(this.checkpoint.completedEncounterIds);
+    // Rooms roll back to unstarted, so the proximity check re-opens them at wave one.
+    // Hostiles already killed stay dead, so a room whose first wave was cleared simply
+    // advances again on the next tick rather than resurrecting it.
+    this.liveWaves.clear();
     // A restore can only ever roll encounters back, so splits follow it rather than
     // reporting a checkpoint the player no longer holds.
     this.splits = this.splits.filter((split) => this.completedEncounters.has(split.encounterId));
@@ -1345,21 +1358,27 @@ export class FlowSimulation implements GameSimulation {
       bot.fireCooldown -= dt;
       bot.decisionCooldown -= dt;
       const position = bot.body.translation();
+      // Leashed to its own room. Beyond the leash the hostile walks home instead of
+      // chasing, which is what keeps an arena an arena -- see `botLeashMetres`.
+      const [homeX, homeY, homeZ] = bot.spawnPosition;
+      const reachable = Math.hypot(playerPosition.x - homeX, playerPosition.y - homeY, playerPosition.z - homeZ) <= botLeashMetres;
+      const pursuit: Vec3 = reachable
+        ? [playerPosition.x, playerPosition.y, playerPosition.z]
+        : [homeX, homeY, homeZ];
       if (bot.decisionCooldown <= 0) {
         bot.decisionCooldown = 0.1;
         if (this.random.next() < 0.08) bot.strafe *= -1;
-        bot.waypoint = this.navigation.nextWaypoint(
-          [position.x, position.y, position.z],
-          [playerPosition.x, playerPosition.y, playerPosition.z],
-        );
+        bot.waypoint = this.navigation.nextWaypoint([position.x, position.y, position.z], pursuit);
       }
-      const target = bot.waypoint ?? [playerPosition.x, playerPosition.y, playerPosition.z];
+      const target = bot.waypoint ?? pursuit;
       const dx = target[0] - position.x;
       const dz = target[2] - position.z;
       const distance = Math.hypot(dx, dz) || 1;
       const playerDistance = Math.hypot(playerPosition.x - position.x, playerPosition.z - position.z) || 1;
       const toward = { x: dx / distance, z: dz / distance };
-      const rangeError = bot.waypoint ? distance - 0.35 : distance - bot.profile.preferredRange;
+      const rangeError = bot.waypoint
+        ? distance - 0.35
+        : distance - (reachable ? bot.profile.preferredRange : 0.5);
       const forwardAmount = clamp(rangeError, -1, 1);
       const strafeAmount = bot.profile.kind === 'ranged' ? bot.strafe * 0.65 : bot.strafe * 0.2;
       const vx = (toward.x * forwardAmount - toward.z * strafeAmount) * bot.profile.moveSpeed;
@@ -1574,8 +1593,14 @@ export class FlowSimulation implements GameSimulation {
     const distance = Math.hypot(player.x - current.checkpoint[0], player.y - current.checkpoint[1], player.z - current.checkpoint[2]);
     if (distance > 28) return;
     this.activeEncounters.add(current.id);
+    this.liveWaves.set(current.id, 0);
+    this.activateWave(current.id, 0);
+  }
+
+  /** Seats every hostile of one wave at its authored spawn and lets it act. */
+  private activateWave(encounterId: string, wave: number): void {
     for (const bot of this.bots) {
-      if (bot.encounterId !== current.id || !bot.alive) continue;
+      if (bot.encounterId !== encounterId || bot.wave !== wave || !bot.alive) continue;
       bot.active = true;
       bot.body.setEnabled(true);
       const [x, y, z] = bot.spawnPosition;
@@ -1587,6 +1612,36 @@ export class FlowSimulation implements GameSimulation {
       bot.windupTimer = 0;
       bot.windupSpread = 0;
     }
+  }
+
+  /**
+   * Brings on the next wave of a room the moment the last of the current one dies.
+   *
+   * Run before `updateObjectives`, so the wave that replaces a cleared one is live on
+   * the same tick and the room is never briefly empty. It cannot complete an encounter
+   * early either way: a wave that has not been activated is still `alive`, so the
+   * completion check sees it.
+   */
+  private updateWaves(events: GameEvent[]): void {
+    for (const encounter of this.level.encounters) {
+      if (this.completedEncounters.has(encounter.id) || !this.activeEncounters.has(encounter.id)) continue;
+      const wave = this.liveWaves.get(encounter.id) ?? 0;
+      if (this.bots.some((bot) => bot.encounterId === encounter.id && bot.wave === wave && bot.alive)) continue;
+      const next = wave + 1;
+      if (!this.bots.some((bot) => bot.encounterId === encounter.id && bot.wave === next)) continue;
+      this.liveWaves.set(encounter.id, next);
+      this.activateWave(encounter.id, next);
+      events.push(this.event('wave', encounter.checkpoint, undefined, next + 1));
+    }
+  }
+
+  /** How many waves a room was authored with. One for a room without any. */
+  private waveCount(encounterId: string): number {
+    let highest = 0;
+    for (const bot of this.bots) {
+      if (bot.encounterId === encounterId) highest = Math.max(highest, bot.wave);
+    }
+    return highest + 1;
   }
 
   private updateObjectives(events: GameEvent[]): void {
@@ -1919,6 +1974,9 @@ export class FlowSimulation implements GameSimulation {
       },
       splits: this.splits,
       objective: this.completed ? 'Run complete' : nextEncounter ? `Clear: ${nextEncounter.label}` : 'Reach the finish gate',
+      wave: nextEncounter && this.activeEncounters.has(nextEncounter.id)
+        ? { current: (this.liveWaves.get(nextEncounter.id) ?? 0) + 1, total: this.waveCount(nextEncounter.id) }
+        : { current: 0, total: 0 },
       completed: this.completed,
       // Includes both collider IDs and encounter IDs. Presentation bindings may
       // target either, including an encounter that has no physical gate proxy.

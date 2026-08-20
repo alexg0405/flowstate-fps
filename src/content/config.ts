@@ -165,14 +165,54 @@ export const playerCapsule = {
   stanceRate: 3.2,
 } as const;
 
+/**
+ * What the player has to spend, and why it went up.
+ *
+ * A hundred was the right number for three hostiles a room. It is the wrong number for
+ * eight: five brawlers standing on the player deal about ninety damage in the second it
+ * takes two heavy swings to clear them, and a hundred-point pool turns the finale into a
+ * room you can only clear by never being touched. At a hundred and forty the same
+ * exchange costs two thirds of the bar -- expensive, survivable, and still a reason to
+ * dodge rather than trade.
+ *
+ * It lives here rather than as a constant in the simulation because it is tuning, and
+ * because the crowd pass moved it: a number that moves belongs with the numbers it is
+ * balanced against.
+ */
+export const playerHealth = 140;
+
 export const botCapsule = { halfHeight: 0.68, radius: 0.35 } as const;
 export const botColliderBottom = botCapsule.halfHeight + botCapsule.radius;
+
+/**
+ * How far a hostile will travel from its own spawn to reach the player.
+ *
+ * Without this the arenas were not rooms. A room activates when the player comes within
+ * 28 m of its checkpoint, and a brawler's preferred range is 2.4 m -- so measured, the
+ * Atrium's first wave walked the full forty metres back down the bridge and fought the
+ * player on the *start floor*, with the arena empty behind them. The room-lock this
+ * genre is built on means the fight happens in the room; hostiles that leave it to meet
+ * you in the corridor turn every arena into a corridor.
+ *
+ * Twenty-two metres is most of the way across the widest deck on the route and nowhere
+ * near off it. Only pursuit is leashed: a marksman inside its room still shoots at
+ * whatever its own firing gate can see, so a player standing at the threshold is under
+ * fire without the room emptying itself at them.
+ */
+export const botLeashMetres = 22;
 
 export const botProfiles: Record<BotProfile['kind'], BotProfile> = {
   // The ranged hunter telegraphs longer because it shoots from further out, where
   // the player has room to break the line; the brawler is faster to commit.
+  /**
+   * Per-hostile damage came down when the counts went up: 10 -> 8 here and 14 -> 11 on
+   * the brawler. Five brawlers on top of the player is 92 damage a second where it would
+   * have been 117, which is the difference between a crowd that is expensive and a crowd
+   * that is a coin flip. The threat of a crowd should be that it surrounds you, not that
+   * each of it hits as hard as a duel opponent.
+   */
   ranged: {
-    kind: 'ranged', health: 100, moveSpeed: 4.2, preferredRange: 18, fireInterval: 0.85, damage: 10,
+    kind: 'ranged', health: 100, moveSpeed: 4.2, preferredRange: 18, fireInterval: 0.85, damage: 8,
     windupSeconds: 0.42, baseSpread: 0.012, spreadPerSpeed: 0.0055,
   },
   /**
@@ -193,7 +233,7 @@ export const botProfiles: Record<BotProfile['kind'], BotProfile> = {
    * now -- its threat is proximity, and the ranged hunter is the one that shoots.
    */
   aggressive: {
-    kind: 'aggressive', health: 120, moveSpeed: 6.2, preferredRange: 2.4, fireInterval: 0.6, damage: 14,
+    kind: 'aggressive', health: 120, moveSpeed: 6.2, preferredRange: 2.4, fireInterval: 0.6, damage: 11,
     windupSeconds: 0.28, baseSpread: 0.02, spreadPerSpeed: 0.0075,
   },
   /**
@@ -282,9 +322,13 @@ export const ghostTrack = {
  * levels stay on schema 2.
  */
 export const runScoring = {
-  // Nine hostiles across three arenas, one of which has to be worked around rather
-  // than shot down. Par moved with the route; it is the pace an S demands.
-  parSeconds: 185,
+  /**
+   * Twenty-eight hostiles across seven waves in three rooms, where this was nine in
+   * three static groups. Par moved with them -- 185 s was the pace an S demanded of a
+   * route with a third of the fighting in it, and holding it there would have made the
+   * top grade a function of how fast the waves happen to spawn rather than of play.
+   */
+  parSeconds: 260,
   /**
    * Clock added at the moment of death. The run timer is frozen while the player is
    * down, so the cost of dying is this fixed amount rather than however long they

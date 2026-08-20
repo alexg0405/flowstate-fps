@@ -486,6 +486,7 @@ describe('the register itself', () => {
     { id: 21, tick: 1, kind: 'checkpoint' },
     { id: 22, tick: 1, kind: 'complete' },
     { id: 23, tick: 1, kind: 'gateOpen', gateId: 'gate-one' },
+    { id: 30, tick: 1, kind: 'wave', value: 2 },
     { id: 24, tick: 1, kind: 'grappleAttach' },
     { id: 25, tick: 1, kind: 'grapplePull' },
     { id: 26, tick: 1, kind: 'grappleRelease' },

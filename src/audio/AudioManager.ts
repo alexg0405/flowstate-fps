@@ -299,6 +299,14 @@ export class AudioManager {
           this.tone({ frequency: 104, duration: 0.6, gain: 0.06, type: 'sine', lowpass: 300 }, 0, 0, 'far');
           this.tone({ frequency: 156, duration: 0.5, gain: 0.04, type: 'sine', lowpass: 380 }, 0.18, 0, 'far');
           break;
+        case 'wave':
+          // A room that is not finished with you. Long, low and rising, deliberately
+          // close to the gate's swell -- both mean the geometry of the fight just
+          // changed -- but shorter, and with a tick so it lands rather than looms.
+          this.tick(1000, 0.006, 0.026, 0, 'near');
+          this.sub(36, 0.85, 0.12, 2.4, 0, 'far');
+          this.boom(140, 0.5, 0.08, 0, 'far');
+          break;
         case 'gateOpen':
           // A thirty-metre door. The sub is the entire point of it.
           this.sub(30, 1.1, 0.13 * place.gain, 2.2, place.pan, 'far');

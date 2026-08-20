@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import type { RuntimeLevelV1, SaveDataV4 } from './contracts';
+import type { RuntimeLevelV1, SaveDataV4, SpawnDefinition } from './contracts';
 import { installInterfaceAudio } from './audio/interfaceAudio';
 import { cookLevel, defaultLevel } from './content/defaultLevel';
 import { modifierForDate } from './content/modifiers';
@@ -124,13 +124,45 @@ function initialRuntimeLevel(): RuntimeLevelV1 {
       .map((spawn) => ({ ...spawn, position: [level.exit[0], level.exit[1], level.exit[2]] as const }));
     return level;
   }
-  if (scene !== 'hunters') return level;
-  level.spawns = level.spawns.map((spawn) => {
-    if (spawn.kind === 'player') return { ...spawn, position: [0, 3.1, -35.5] };
-    if (spawn.id === 'bot-a') return { ...spawn, position: [-2.6, 3, -42] };
-    if (spawn.id === 'bot-b') return { ...spawn, position: [2.6, 3, -42] };
-    return spawn;
-  });
+  // `hunters` stages one pair in front of the camera for the character baseline. It
+  // rebuilds the roster rather than repositioning named spawns, which is what it used to
+  // do: the ids it reached for stopped existing when the arenas were re-authored, and a
+  // scene that silently stages nothing is a pixel baseline that silently stops testing
+  // the thing it is named after.
+  if (scene === 'hunters') {
+    const player = level.spawns.find((spawn) => spawn.kind === 'player')!;
+    level.encounters = [];
+    level.spawns = [
+      { ...player, position: [0, 3.1, -35.5] },
+      { id: 'hunter-ranged', kind: 'bot-ranged', position: [-2.6, 3, -42], rotationY: 0 },
+      { id: 'hunter-brawler', kind: 'bot-aggressive', position: [2.6, 3, -42], rotationY: 0 },
+    ];
+    return level;
+  }
+  // `crowd` stages the biggest wave the route authors, in an arc, all at once and with
+  // no encounter gating -- so the worst frame the shipped content can produce is
+  // reachable in one browser step instead of two cleared arenas away.
+  if (scene === 'crowd') {
+    const player = level.spawns.find((spawn) => spawn.kind === 'player')!;
+    const roster: SpawnDefinition['kind'][] = [
+      'bot-bulwark', 'bot-aggressive', 'bot-aggressive', 'bot-aggressive',
+      'bot-aggressive', 'bot-aggressive', 'bot-ranged', 'bot-ranged',
+    ];
+    level.encounters = [];
+    level.spawns = [
+      { ...player, position: [0, 11.1, -137] },
+      ...roster.map((kind, index) => {
+        const angle = -0.7 + (index / (roster.length - 1)) * 1.4;
+        return {
+          id: `crowd-${index}`,
+          kind,
+          position: [Math.sin(angle) * 9, 11.5, -145 - Math.cos(angle) * 4] as const,
+          rotationY: 0,
+        };
+      }),
+    ];
+    return level;
+  }
   return level;
 }
 

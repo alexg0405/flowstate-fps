@@ -275,6 +275,17 @@ export function EditorScreen({ onPlay, onExit }: EditorScreenProps) {
           <h3>{selectedSpawn.id}</h3>
           <VectorFields label="Position" value={selectedSpawn.position} onChange={(position) => store.updateSpawn(selectedSpawn.id, { position })} />
           <NumberField label="Yaw" value={selectedSpawn.rotationY} step={0.1} onChange={(rotationY) => store.updateSpawn(selectedSpawn.id, { rotationY })} />
+          {/* Which wave of its room the hostile belongs to. Authorable here because a
+              wave is level data, and a room's difficulty curve is the thing an author
+              most wants to move without editing the file by hand. */}
+          {selectedSpawn.kind !== 'player' && (
+            <NumberField
+              label="Wave"
+              value={selectedSpawn.wave ?? 0}
+              step={1}
+              onChange={(wave) => store.updateSpawn(selectedSpawn.id, { wave: Math.max(0, Math.round(wave)) || undefined })}
+            />
+          )}
           {selectedSpawn.kind !== 'player' && <label>Encounter<select value={selectedSpawn.encounterId ?? ''} onChange={(event) => store.assignSpawnEncounter(selectedSpawn.id, event.target.value || undefined)}>
             <option value="">Unassigned</option>{document.encounters.map((encounter) => <option value={encounter.id} key={encounter.id}>{encounter.label}</option>)}
           </select></label>}

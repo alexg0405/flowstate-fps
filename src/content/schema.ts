@@ -70,6 +70,7 @@ const spawnSchema = z.object({
   position: vec3,
   rotationY: z.number(),
   encounterId: z.string().min(1).optional(),
+  wave: z.number().int().min(0).optional(),
 });
 
 const encounterSchema = z.object({

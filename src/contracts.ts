@@ -165,6 +165,11 @@ export interface SimulationSnapshot {
   /** Checkpoint times reached this run, in the order they were cleared. */
   splits: readonly RunSplit[];
   objective: string;
+  /**
+   * Which wave of the current encounter is live, and how many it has. Both 0 when the
+   * player is between rooms, so presentation can tell "no fight" from "first of three".
+   */
+  wave: { current: number; total: number };
   completed: boolean;
   openGateIds: readonly string[];
 }
@@ -172,7 +177,7 @@ export interface SimulationSnapshot {
 export interface GameEvent {
   id: number;
   tick: number;
-  kind: 'shot' | 'impact' | 'hit' | 'kill' | 'melee' | 'checkpoint' | 'death' | 'complete' | 'grappleAttach' | 'grapplePull' | 'grappleRelease' | 'grappleFail' | 'reloadStart' | 'reloadComplete' | 'enemyTelegraph' | 'enemyAttack' | 'gateOpen' | 'dryFire' | 'respawn' | 'split' | 'comboLink' | 'comboBreak' | 'dodge';
+  kind: 'shot' | 'impact' | 'hit' | 'kill' | 'melee' | 'checkpoint' | 'death' | 'complete' | 'grappleAttach' | 'grapplePull' | 'grappleRelease' | 'grappleFail' | 'reloadStart' | 'reloadComplete' | 'enemyTelegraph' | 'enemyAttack' | 'gateOpen' | 'dryFire' | 'respawn' | 'split' | 'comboLink' | 'comboBreak' | 'dodge' | 'wave';
   position?: Vec3;
   /**
    * Start of the segment an event describes, when `position` is its end. Set on
@@ -291,6 +296,15 @@ export interface SpawnDefinition {
   position: Vec3;
   rotationY: number;
   encounterId?: string;
+  /**
+   * Which wave of its encounter this hostile belongs to. Omitted means the first.
+   *
+   * A room with waves is how the genre gets volume without putting twelve bodies on
+   * screen at once: wave `n + 1` activates on the tick the last of wave `n` dies, at its
+   * authored spawn, so an arena keeps producing pressure while the concurrent count
+   * stays inside the frame budget. The encounter is only cleared when every wave is.
+   */
+  wave?: number;
 }
 
 export interface EncounterDefinition {
