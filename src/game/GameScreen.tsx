@@ -111,7 +111,7 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
 
   return (
     <main className={`game-shell state-${screenState} ${save.settings.reducedMotion ? 'reduced-motion' : ''}`}>
-      <canvas ref={canvasRef} className="game-canvas" aria-label="Flowstate FPS game canvas" />
+      <canvas ref={canvasRef} className="game-canvas" aria-label="Flow State FPS game canvas" />
       <div className="game-chrome" aria-hidden="true">
         <span className="chrome-corner chrome-corner-nw" />
         <span className="chrome-corner chrome-corner-ne" />

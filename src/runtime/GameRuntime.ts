@@ -26,6 +26,8 @@ export interface HitFeedback {
   amount: number;
   headshot: boolean;
   kill: boolean;
+  /** The shot landed on a shield arc, so most of it was absorbed. */
+  deflected: boolean;
 }
 
 /** Incoming damage, as a bearing in radians relative to where the player looks. */
@@ -46,6 +48,7 @@ interface ActiveHit {
   amount: number;
   headshot: boolean;
   kill: boolean;
+  deflected: boolean;
   bornAt: number;
   expiresAt: number;
 }
@@ -200,6 +203,10 @@ export class GameRuntime {
         open.amount += amount;
         open.headshot ||= event.headshot === true;
         open.kill ||= kill;
+        // Latest round wins rather than sticking: the point of the marker is to say
+        // whether the line the player is shooting *now* is being absorbed, so getting
+        // round the plate mid-burst has to clear it.
+        open.deflected = event.deflected === true;
         open.world = event.position;
         open.expiresAt = now + HIT_LIFETIME_MS;
         continue;
@@ -211,6 +218,7 @@ export class GameRuntime {
         amount,
         headshot: event.headshot === true,
         kill,
+        deflected: event.deflected === true,
         bornAt: now,
         expiresAt: now + HIT_LIFETIME_MS,
       });
@@ -230,7 +238,7 @@ export class GameRuntime {
     for (const hit of this.activeHits) {
       const screen = this.renderer.projectToScreen(hit.world);
       if (!screen) continue;
-      projected.push({ id: hit.id, screen, amount: hit.amount, headshot: hit.headshot, kill: hit.kill });
+      projected.push({ id: hit.id, screen, amount: hit.amount, headshot: hit.headshot, kill: hit.kill, deflected: hit.deflected });
     }
     return projected;
   }

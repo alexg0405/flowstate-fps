@@ -13,7 +13,7 @@ export const runModifiers: readonly RunModifier[] = [
   {
     id: 'close-quarters',
     label: 'Close Quarters',
-    description: 'Shotguns and SMGs pay double. Hostiles press harder and hit harder.',
+    description: 'Hostiles push in close and hit harder. Kills with a shotgun or an SMG score double.',
     favouredChassis: ['shotgun', 'smg'],
     chassisBonus: 1,
     linkBonus: 0,
@@ -22,7 +22,7 @@ export const runModifiers: readonly RunModifier[] = [
   {
     id: 'long-lines',
     label: 'Long Lines',
-    description: 'DMRs and carbines pay double. Hostiles hold their distance and telegraph less.',
+    description: 'Hostiles hold their distance and give you less warning before they fire. Kills with a DMR or a carbine score double.',
     favouredChassis: ['dmr', 'carbine'],
     chassisBonus: 1,
     linkBonus: 0,
@@ -30,8 +30,8 @@ export const runModifiers: readonly RunModifier[] = [
   },
   {
     id: 'flow-state',
-    label: 'Flow State',
-    description: 'Every chain link pays triple. Hostiles are quicker on the trigger.',
+    label: 'Momentum',
+    description: 'Hostiles are quicker on the trigger. Every link in a movement chain scores triple.',
     favouredChassis: [],
     chassisBonus: 0,
     linkBonus: 2,
@@ -39,8 +39,8 @@ export const runModifiers: readonly RunModifier[] = [
   },
   {
     id: 'glass',
-    label: 'Glass',
-    description: 'Everything pays half again, and everything hits half again as hard.',
+    label: 'Glass Cannon',
+    description: 'Hostiles go down easier and hit half again as hard. Everything you score is worth half again.',
     favouredChassis: [],
     chassisBonus: 0,
     linkBonus: 0.5,

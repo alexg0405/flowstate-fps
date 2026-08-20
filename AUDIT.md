@@ -837,3 +837,173 @@ Verified: `npm test` **262 passed**, typecheck clean, build clean, `test:e2e`
 ### Still outstanding
 `BatchedMesh` batching of the catalog assets (section 10), the HUD reduction
 (section 9), and enemy/encounter variety (section 7). None were attempted here.
+**All three are done in section 12.**
+
+
+---
+
+## 12. The three remaining items
+
+Verified: `npm test` **285 passed / 26 files**, `npm run typecheck` clean,
+`npm run build` clean, `FLOWSTATE_STATIC_DIST=1 npm run test:e2e` **35 passed**
+(Chromium + Firefox), `npm run art:validate` clean at 1.93 MiB of 25.00 MiB, and the
+3 Chromium visual baselines pass -- with the hunters one **regenerated**, for a
+reason worth reading in the last subsection.
+
+### The HUD: 13 modules to 6, in four zones
+
+`.hud` had **12 unconditional children** (plus a hitmarker, a lock indicator and the
+down panel) and rendered roughly 13 readouts. It now has **8**, of which six are
+readouts a player acts on:
+
+- **Inside ~15 degrees of the crosshair** -- hit confirm, damage numbers, threat
+  bearing, ghost delta, hook state, chain multiplier and its window. At 1280x720 and
+  a 92-degree vertical FOV, fifteen degrees is 93 px; measured, the flow row sits
+  32-54 px below the reticle and no wider than 56 px either side (9.2 degrees), and
+  the ghost delta 82 px above it (13.3 degrees).
+- **Two corners** -- one health number, one ammo number with the live weapon named
+  above it and the reload track under it.
+- **One top bar** -- objective, hostiles left, run clock, the day's contract.
+- **The pause screen** -- elapsed, score, deaths, hostiles, peak chain, the vitals
+  meter, the carried-weapons strip and the splits so far, in a new `RunStatusPanel`.
+
+The redundancy the audit named is gone: health was a number *and* a twelve-segment
+meter, ammo a number *and* ten pips *and* a weapon strip, speed a number *and* a
+twelve-segment spectrum, and the five chain chips reported availability the combo
+multiplier already implies. Also gone: the `FLOW/STATE // KINETIC COMBAT OS` wordmark
+printed across the top left of the HUD, and the frame notches.
+
+Two deliberate deviations from the brief, both because the run is scored on the
+clock: the **run clock** stays, folded into the top bar rather than sent to the pause
+screen, and the **hostiles left** count stays, as a chip on the same bar instead of
+its own panel. Neither costs a module.
+
+`Hud.tsx` went 174 -> 154 lines and `styles.css` 1034 -> 972, with **141 dead rules
+removed** across the four layers that had accumulated overrides for modules that no
+longer exist. `StatusChip` went with them; the chain rail was its only caller.
+
+The 44 UI cases were updated rather than deleted, and `tests/ui.test.tsx` is now 53:
+the accessibility work survived intact (`aria-label` on the hook state, the ammo
+value announcing magazine capacity, the health value announcing its maximum), and
+four new cases assert what the reduction actually removed.
+
+Checked at 1280x720 in Chromium, not only through the DOM. That turned up something
+the DOM could not: the standby card is also the pause screen, and adding the run
+telemetry to it pushed `Enter run` under the fold. It was already 39 px under it
+before this pass; the short-viewport rules now leave 25 px of overflow with the
+button **visible without scrolling**.
+
+### Catalog geometry: 292 draw calls to 152
+
+Measured at the spawn view, 1280x720, high quality, with `renderer.info` and by
+toggling `shadowMap.enabled` and `assetRoot.visible` for a frame:
+
+| | draws | main | shadow | triangles |
+| --- | --- | --- | --- | --- |
+| before | 292 | 252 | 40 | 163,219 |
+| after | **152** | **138** | **14** | **163,219** |
+
+`assetRoot` alone went from **132 main-pass draws + 39 shadow** (from 132 meshes
+across 35 instances, essentially one draw per mesh) to **18 + 13**. Frame time here
+is ~1.2 ms and was not the point; the draw-call reduction is.
+
+`BatchedMesh`, and the deciding number was not the draw count -- merging, instancing
+and batching all win the same 18 groups -- but the geometry each submits:
+
+| spawn / finish view | draws | triangles |
+| --- | --- | --- |
+| unbatched | 292 / 64 | 163,219 / 81,339 |
+| merged or instanced | 152 / 55 | 175,991 / 120,067 |
+| `BatchedMesh` | 152 / 55 | 163,219 / 81,339 |
+
+The audit expected per-instance culling to buy almost nothing on a 172 m corridor.
+At the spawn view that is nearly true: every asset mesh is in front of the camera and
+drawn either way. Standing at the finish with the route behind you it is not --
+culling was skipping 38k triangles, and any batch culled as a single unit hands them
+all back. `BatchedMesh` keeps the per-instance test *and* collapses the calls, so it
+is the only option that costs nothing to take.
+
+Three things made the grouping tractable, and they are the blockers the audit listed:
+
+- Instances of an asset **share the template's buffers** -- `SkeletonUtils.clone`
+  copies the nodes, not the geometry -- so every group is one geometry repeated at
+  many transforms rather than a pile of different meshes.
+- Grouping on the **resolved accent** rather than the variant id means one shared
+  material per batch instead of `applyMaterialVariant`'s clone per instance, and
+  `vault` and `mantle`, which resolve to the same colour, share a batch. 18 batches,
+  not 21.
+- **Gate-bound visuals are simply left unbatched.** `setVisibleAt` has no meaning for
+  a group, and `defaultLevel` binds none, so the correct thing is to keep them whole
+  rather than to write a path nothing exercises.
+
+The grouping is pure and extracted to `src/render/presentation/visualBatching.ts`
+with 10 tests, the way `ResolutionController` was.
+
+Two caveats, stated because they are real:
+
+1. The collapse needs `WEBGL_multi_draw`. Chromium has it and the pinned Playwright
+   Firefox does not; there, three falls back to a draw per *visible* instance, which
+   is the count from before batching with the culling still applied. The win is
+   browser-dependent; the fallback is not a regression.
+2. It is not pixel-free. Against the committed baselines at a tightened
+   `maxDiffPixelRatio` of 0.00001: White Line high and low are **pixel-identical**,
+   and the hunters shot differs by **111 px of 921,600** (0.012%), scattered along two
+   silhouette edges -- a batched transform arrives through a texture instead of a
+   uniform, and sub-pixel coverage moves with it. The finish view, captured before and
+   after, differs by **0 pixels** at a threshold of 2 with a maximum channel delta of 1.
+
+### A third hostile that is not a third set of numbers
+
+The **bulwark** walks a plate at the player. Inside a 137-degree frontal arc it scales
+incoming damage to **0.18**; it brings that arc round at **1.5 rad/s**, about a second
+for a quarter turn; and it can only commit a shot inside a 57-degree firing cone, so
+flanking takes its damage away as well as its armour. Sized so the contrast is
+teachable rather than a slog: a full 30-round carbine magazine into the plate is 184
+damage against 200 health and does **not** kill it, while six rounds into its flank do.
+
+The counter is the movement kit, which is the point. `turnRate` is what keeps the
+shield a window rather than a wall.
+
+It is drawn with the brawler's GLB -- only two hunter models are authored, and
+regenerating the art pipeline for a third silhouette is the trap in section 11 -- and
+marked out by a dark plate with a glowing edge in the palette's hot yellow, carried on
+the model's forward axis so the arc the simulation protects is the arc the player can
+see. Turned side-on it is a bright sliver and the body is wide open, which is exactly
+the read the mechanic needs. The plate falls and fades with the body rather than
+hanging in the air, and the presenter now damps yaw along the **shortest** arc: the
+old linear damp spun a figure the long way round whenever the simulation's yaw crossed
+the wrap at +/-pi, which a bulwark turning slowly through a half circle reaches on
+purpose.
+
+A deflected hit says so. The hit event carries `deflected`, the damage number and the
+hitmarker go small and grey, and the mix plays a flat clank instead of the confirm
+blip -- the cue is to stop shooting the plate.
+
+The three arenas now ask different questions instead of holding two bots each:
+
+| arena | before | after |
+| --- | --- | --- |
+| Atrium | ranged + brawler | unchanged -- it teaches the pair |
+| Gallery | ranged + brawler | **bulwark head-on, a marksman on each flank** |
+| Roofline | ranged + brawler | **bulwark and brawler in front, marksman and brawler behind** |
+
+Nine hostiles instead of six, so `parSeconds` moved 150 -> 185.
+
+`SpawnDefinition['kind']`, the level schema, the V1 migration, the editor's spawn
+palette and its viewport marker, `CharacterPresenter`'s profile map and the palette's
+hostile accents all took the third value; 7 simulation tests cover the arc, the turn
+rate, the firing gate and the published maximum, and 2 schema tests cover the new
+spawn kind through validation and migration.
+
+### The health bar was reading against a number the simulation had already scaled
+
+`updateHealthDisplay` divided by a hardcoded `120` for a brawler and `100` for
+everything else. A daily contract scales bot health -- today's `Glass` multiplies it
+by 0.8 -- so on a Glass day an **undamaged** hostile showed a bar 80 per cent full,
+and a bulwark at 200 health would have shown one that never left the top of its range.
+`EntitySnapshot` now publishes `maxHealth` and the bar measures against that.
+
+That is the whole of the visual-baseline change: regenerating the hunters shot moved
+**18,330 px (2.0%)**, and the diff image is two health bars and nothing else. The
+baseline had been capturing a bug whose severity depended on the calendar. The
+regenerated one reproduces pixel-exactly on a fresh run.

@@ -66,7 +66,7 @@ const lightInstanceSchema = z.object({
 
 const spawnSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(['player', 'bot-ranged', 'bot-aggressive']),
+  kind: z.enum(['player', 'bot-ranged', 'bot-aggressive', 'bot-bulwark']),
   position: vec3,
   rotationY: z.number(),
   encounterId: z.string().min(1).optional(),

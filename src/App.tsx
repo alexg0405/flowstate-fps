@@ -69,6 +69,7 @@ function BuilderRoute({ onClose }: { onClose: () => void }) {
         writeSave(next);
       }}
       onClose={onClose}
+      reducedMotion={save.settings.reducedMotion}
     />
   );
 }
@@ -118,6 +119,20 @@ function LoadingScreen() {
   );
 }
 
+/**
+ * What a run is, in numbers, taken from the level rather than written down beside
+ * it: the arena count, how many hostiles are in them, and the length of the route
+ * from the player's spawn to the exit.
+ */
+function routeBrief(): { arenas: number; hostiles: number; metres: number } {
+  const spawn = defaultLevel.spawns.find((candidate) => candidate.kind === 'player');
+  return {
+    arenas: defaultLevel.encounters.length,
+    hostiles: defaultLevel.spawns.filter((candidate) => candidate.kind !== 'player').length,
+    metres: Math.round(Math.abs(defaultLevel.exit[2] - (spawn?.position[2] ?? 0))),
+  };
+}
+
 function MainMenu({ onPlay, onEdit, onBuild }: { onPlay: () => void; onEdit: () => void; onBuild: () => void }) {
   const save = loadSave();
   const best = save.bestRun;
@@ -126,6 +141,8 @@ function MainMenu({ onPlay, onEdit, onBuild }: { onPlay: () => void; onEdit: () 
   // it is called out separately instead of being folded into the record card.
   const fastest = save.bestTimeSeconds;
   const showsSeparateFastest = fastest !== null && best !== null && fastest < best.timeSeconds;
+  const route = routeBrief();
+  const routeName = defaultLevel.name;
 
   return (
     <main className="menu-shell" aria-labelledby="menu-title">
@@ -161,19 +178,24 @@ function MainMenu({ onPlay, onEdit, onBuild }: { onPlay: () => void; onEdit: () 
         </div>
 
         <p className="menu-deck">
-          Dash. Break gravity. Cast the line. A precision movement FPS drawn in speed, neon, and momentum.
+          A first-person movement shooter. Chain dashes, wall runs and grapple lines along a neon
+          rooftop route, clear the arenas in your way, and race the ghost of your best run.
         </p>
 
-        <ul className="protocol-strip" aria-label="Core movement systems">
-          <li><b>01</b><span>Dash chain</span><i aria-hidden="true" /></li>
-          <li><b>02</b><span>Grapple cast</span><i aria-hidden="true" /></li>
-          <li><b>03</b><span>Wall running</span><i aria-hidden="true" /></li>
+        {/* The route in numbers, read from the level itself so it cannot drift from
+            what a run actually is. A numbered list of mechanic names told a new
+            player nothing about what they were about to press play on. */}
+        <ul className="protocol-strip" aria-label="Route brief">
+          <li><b>{route.arenas.toString().padStart(2, '0')}</b><span>Arenas</span><i aria-hidden="true" /></li>
+          <li><b>{route.hostiles.toString().padStart(2, '0')}</b><span>Hostiles</span><i aria-hidden="true" /></li>
+          <li><b>{route.metres}</b><span>Metre route</span><i aria-hidden="true" /></li>
         </ul>
 
         <div className="menu-contract" aria-label="Today's contract">
           <div className="contract-heading">
             <span className="micro-label">TODAY&apos;S CONTRACT</span>
             <strong>{modifier.label}</strong>
+            <small>New rules daily</small>
           </div>
           <p>{modifier.description}</p>
           {modifier.favouredChassis.length > 0 && (
@@ -184,16 +206,16 @@ function MainMenu({ onPlay, onEdit, onBuild }: { onPlay: () => void; onEdit: () 
         </div>
 
         <div className="menu-actions">
-          <button className="primary jumbo action-primary" aria-label="Run White Line" onClick={onPlay}>
-            <span className="action-copy"><strong>Run White Line</strong></span>
+          <button className="primary jumbo action-primary" aria-label="Start run on the White Line route" onClick={onPlay}>
+            <span className="action-copy"><strong>Start run</strong><small>{routeName}</small></span>
             <span className="action-glyph" aria-hidden="true">↗</span>
           </button>
           <button className="jumbo ghost action-secondary" aria-label="Open gun builder" onClick={onBuild}>
-            <span className="action-copy"><strong>Gun builder</strong></span>
+            <span className="action-copy"><strong>Gun builder</strong><small>Fit the two guns you carry</small></span>
             <span className="action-glyph" aria-hidden="true">⚙</span>
           </button>
           <button className="jumbo ghost action-secondary" aria-label="Open gameplay editor" onClick={onEdit}>
-            <span className="action-copy"><strong>Gameplay editor</strong></span>
+            <span className="action-copy"><strong>Gameplay editor</strong><small>Build your own route</small></span>
             <span className="action-glyph" aria-hidden="true">＋</span>
           </button>
         </div>

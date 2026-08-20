@@ -172,6 +172,7 @@ function bot(overrides: Partial<EntitySnapshot> = {}): EntitySnapshot {
     grounded: true,
     aimPitch: 0,
     health: 100,
+    maxHealth: 100,
     profile: 'ranged',
     ...overrides,
   };

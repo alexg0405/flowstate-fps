@@ -57,7 +57,7 @@ Fitted parts are visible on the SMG, shotgun and DMR, which are built procedural
 - `src/render/assets/` owns the hash-verified GLB/KTX2 catalogs, abortable shared cache, fallbacks, and resident-memory estimates.
 - `src/content/weapons.ts` owns the weapon chassis and part catalog plus the pure stat resolution used by both the simulation and the builder UI.
 - `src/ui/WeaponBuilder.tsx` is the armory and loadout screen, shared by the main menu and the pause overlay.
-- `src/ui/Primitives.tsx` owns the shared interface vocabulary — panels, buttons, meters, collapsible sections, tabs, tooltips, dialogs, status chips, and icon buttons — used by both the game and the editor.
+- `src/ui/Primitives.tsx` owns the shared interface vocabulary — panels, buttons, meters, collapsible sections, tabs, tooltips, dialogs, and icon buttons — used by both the game and the editor.
 - `src/game/` splits runtime wiring (`GameScreen`) from presentation (`GameOverlay`, `Hud`) so the interface can be tested without WebGL or Rapier.
 - `src/editor/` owns versioned geometry, encounter/checkpoint, bot-assignment, and off-mesh-link editing plus validation, undo/redo, archive persistence, and worker-based Recast navmesh baking. Its palette, hierarchy, and inspector are collapsible, the hierarchy is filterable by type, and a live status bar reports counts, camera mode, navmesh freshness, validation state, and the current selection. Below 900 px the inspector becomes a toggleable drawer.
 - `src/runtime/` connects input to the 60 Hz simulation and renders snapshots on `requestAnimationFrame`.

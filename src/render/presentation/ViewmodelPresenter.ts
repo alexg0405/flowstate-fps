@@ -109,6 +109,16 @@ export class ViewmodelPresenter {
     this.stockGroup.scale.set(stock === 'stock.heavy' ? 1.25 : stock === 'stock.light' ? 0.8 : 1, stock === 'stock.heavy' ? 1.2 : 0.9, 1);
   }
 
+  /**
+   * Hides the arms so the weapon can be shown on its own. The gun builder renders
+   * the same presenter the run does, which is the point: what is on the bench is
+   * literally the model that ends up in the player's hands.
+   */
+  setHandsVisible(visible: boolean): void {
+    this.leftArm.visible = visible;
+    this.rightArm.visible = visible;
+  }
+
   setExternalModel(model: THREE.Object3D | null, animations: readonly THREE.AnimationClip[] = []): void {
     if (this.externalModel === model) return;
     this.externalMixer?.stopAllAction();

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import type { SaveDataV4, WeaponBuild, WeaponChassisId, WeaponDefinition, WeaponPartSlot } from '../contracts';
+import type { SaveDataV4, WeaponBuild, WeaponChassisId, WeaponDefinition, WeaponPartDefinition, WeaponPartSlot } from '../contracts';
 import { getWeaponChassis, partsForSlot, resolveWeaponStats, weaponChassis, weaponPartSlots } from '../content/weapons';
-import { Section, Tabs, Tooltip, UiButton } from './Primitives';
+import { Section, Tabs, UiButton } from './Primitives';
+import { WeaponPreview } from './WeaponPreview';
 
 interface WeaponBuilderProps {
   save: SaveDataV4;
@@ -9,18 +10,42 @@ interface WeaponBuilderProps {
   onClose: () => void;
   /** Shown when the builder is open mid-run, where changes wait for a respawn. */
   deferredNotice?: boolean;
+  /** Parks the weapon turntable instead of spinning it. */
+  reducedMotion?: boolean;
 }
 
-/** Readout rows, with the value range each bar is drawn against. */
+/** Every stat a part can move, with the direction that counts as an improvement. */
+const STAT_META = {
+  damage: { label: 'Damage', higherIsBetter: true },
+  roundsPerMinute: { label: 'Rate of fire', higherIsBetter: true },
+  magazineSize: { label: 'Magazine', higherIsBetter: true },
+  reserveAmmo: { label: 'Reserve', higherIsBetter: true },
+  range: { label: 'Range', higherIsBetter: true },
+  reloadSeconds: { label: 'Reload', higherIsBetter: false },
+  adsSpread: { label: 'Aimed spread', higherIsBetter: false },
+  hipSpread: { label: 'Hip spread', higherIsBetter: false },
+  adsZoom: { label: 'Zoom', higherIsBetter: true },
+  headshotMultiplier: { label: 'Headshot', higherIsBetter: true },
+  recoilPitch: { label: 'Vertical kick', higherIsBetter: false },
+  recoilYaw: { label: 'Horizontal kick', higherIsBetter: false },
+  recoilRecovery: { label: 'Recovery', higherIsBetter: true },
+  bloomPerShot: { label: 'Bloom', higherIsBetter: false },
+  bloomMax: { label: 'Bloom ceiling', higherIsBetter: false },
+  bloomRecovery: { label: 'Bloom recovery', higherIsBetter: true },
+} as const satisfies Partial<Record<keyof WeaponDefinition, { label: string; higherIsBetter: boolean }>>;
+
+type StatKey = keyof typeof STAT_META;
+
+/** The rows the bench draws, with the range each bar is scaled against. */
 const STAT_ROWS = [
-  { key: 'damage', label: 'Damage', max: 90, higherIsBetter: true },
-  { key: 'roundsPerMinute', label: 'Rate of fire', max: 1200, higherIsBetter: true },
-  { key: 'magazineSize', label: 'Magazine', max: 90, higherIsBetter: true },
-  { key: 'range', label: 'Range', max: 260, higherIsBetter: true },
-  { key: 'reloadSeconds', label: 'Reload', max: 3.2, higherIsBetter: false },
-  { key: 'adsSpread', label: 'Aimed spread', max: 0.05, higherIsBetter: false },
-  { key: 'hipSpread', label: 'Hip spread', max: 0.12, higherIsBetter: false },
-] as const satisfies readonly { key: keyof WeaponDefinition; label: string; max: number; higherIsBetter: boolean }[];
+  { key: 'damage', max: 90 },
+  { key: 'roundsPerMinute', max: 1200 },
+  { key: 'magazineSize', max: 90 },
+  { key: 'range', max: 260 },
+  { key: 'reloadSeconds', max: 3.2 },
+  { key: 'adsSpread', max: 0.05 },
+  { key: 'hipSpread', max: 0.12 },
+] as const satisfies readonly { key: StatKey; max: number }[];
 
 const slotLabels: Record<WeaponPartSlot, string> = {
   optic: 'Optic',
@@ -30,17 +55,44 @@ const slotLabels: Record<WeaponPartSlot, string> = {
   stock: 'Stock',
 };
 
-function formatStat(key: keyof WeaponDefinition, value: number): string {
+function formatStat(key: StatKey, value: number): string {
   if (key === 'adsSpread' || key === 'hipSpread') return value.toFixed(4);
   if (key === 'reloadSeconds') return `${value.toFixed(2)} s`;
   return String(Math.round(value));
 }
 
-export function WeaponBuilder({ save, onChange, onClose, deferredNotice = false }: WeaponBuilderProps) {
+/** What fitting a part would do to the build, as signed percentages. */
+function partEffects(build: WeaponBuild, slot: WeaponPartSlot, part: WeaponPartDefinition) {
+  const current = resolveWeaponStats(build);
+  const fitted = resolveWeaponStats({ ...build, parts: { ...build.parts, [slot]: part.id } });
+  const effects: { key: StatKey; label: string; percent: number; better: boolean }[] = [];
+  for (const key of Object.keys(STAT_META) as StatKey[]) {
+    const from = current[key];
+    const to = fitted[key];
+    if (!from || Math.abs(to - from) < Math.abs(from) * 0.005) continue;
+    const percent = ((to - from) / from) * 100;
+    effects.push({ key, label: STAT_META[key].label, percent, better: STAT_META[key].higherIsBetter === to > from });
+  }
+  // Loudest first: a part is chosen on what it changes most, not alphabetically.
+  return effects.sort((a, b) => Math.abs(b.percent) - Math.abs(a.percent));
+}
+
+function signedPercent(percent: number): string {
+  return `${percent > 0 ? '+' : '−'}${Math.abs(percent).toFixed(0)}%`;
+}
+
+export function WeaponBuilder({ save, onChange, onClose, deferredNotice = false, reducedMotion = false }: WeaponBuilderProps) {
   const [editingId, setEditingId] = useState(() => save.loadout[0] ?? save.armory[0]?.id ?? '');
+  const [activeSlot, setActiveSlot] = useState<WeaponPartSlot>('optic');
+  /** The part under the cursor, previewed on the stat bars before it is committed. */
+  const [previewPartId, setPreviewPartId] = useState<string | null>(null);
   const build = save.armory.find((entry) => entry.id === editingId) ?? save.armory[0];
   const stats = useMemo(() => (build ? resolveWeaponStats(build) : null), [build]);
   const baseStats = useMemo(() => (build ? getWeaponChassis(build.chassisId)?.base ?? null : null), [build]);
+  const previewStats = useMemo(
+    () => (build && previewPartId ? resolveWeaponStats({ ...build, parts: { ...build.parts, [activeSlot]: previewPartId } }) : null),
+    [build, previewPartId, activeSlot],
+  );
 
   if (!build || !stats || !baseStats) {
     return (
@@ -82,6 +134,9 @@ export function WeaponBuilder({ save, onChange, onClose, deferredNotice = false 
   };
 
   const loadoutIndex = save.loadout.indexOf(build.id);
+  const chassis = getWeaponChassis(build.chassisId);
+  const slotOptions = partsForSlot(build.chassisId, activeSlot);
+  const fittedInSlot = (slot: WeaponPartSlot) => build.parts[slot] ?? partsForSlot(build.chassisId, slot)[0]?.id ?? '';
 
   return (
     <section className="weapon-builder" aria-label="Weapon builder">
@@ -96,7 +151,7 @@ export function WeaponBuilder({ save, onChange, onClose, deferredNotice = false 
       {deferredNotice && <p className="builder-notice" role="status">Changes apply at your next checkpoint respawn.</p>}
 
       <div className="builder-body">
-        <div className="builder-column">
+        <div className="builder-column builder-armory">
           <Section title="Armory" meta={`${save.armory.length}`}>
             <div className="scene-list" aria-label="Saved builds">
               {save.armory.map((entry) => (
@@ -124,62 +179,108 @@ export function WeaponBuilder({ save, onChange, onClose, deferredNotice = false 
             </div>
             <p className="muted">Now carrying: {save.loadout.map((id) => save.armory.find((entry) => entry.id === id)?.name ?? '—').join(' · ')}</p>
           </Section>
-        </div>
 
-        <div className="builder-column">
-          <Section title="Chassis" meta={getWeaponChassis(build.chassisId)?.label}>
-            <label className="field-row">Name
-              <input
-                aria-label="Build name"
-                value={build.name}
-                onChange={(event) => commit({ ...build, name: event.target.value })}
-              />
-            </label>
-            <Tabs
-              label="Chassis"
-              value={build.chassisId}
-              options={weaponChassis.map((chassis) => ({ id: chassis.id, label: chassis.label }))}
-              onChange={(chassisId: WeaponChassisId) => commit({ ...build, chassisId, parts: {} })}
+          <label className="field-row bench-name">Name
+            <input
+              aria-label="Build name"
+              value={build.name}
+              onChange={(event) => commit({ ...build, name: event.target.value })}
             />
-            <p className="muted">{getWeaponChassis(build.chassisId)?.description}</p>
-          </Section>
-
-          <Section title="Parts">
-            {weaponPartSlots.map((slot) => (
-              <label className="field-row" key={slot}>{slotLabels[slot]}
-                <select
-                  aria-label={slotLabels[slot]}
-                  value={build.parts[slot] ?? partsForSlot(build.chassisId, slot)[0]?.id ?? ''}
-                  onChange={(event) => setSlot(slot, event.target.value)}
-                >
-                  {partsForSlot(build.chassisId, slot).map((part) => (
-                    <option value={part.id} key={part.id}>{part.label}</option>
-                  ))}
-                </select>
-              </label>
-            ))}
-            <p className="muted">
-              {partsForSlot(build.chassisId, 'optic').find((part) => part.id === build.parts.optic)?.description ?? 'Fit parts to trade handling against reach and capacity.'}
-            </p>
-          </Section>
+          </label>
         </div>
 
-        <div className="builder-column">
-          <Section title="Stats" meta={`${stats.pellets > 1 ? `${stats.pellets} pellets` : 'single shot'}`}>
+        {/* The bench: the weapon itself, the five slots on it, and what fits them. */}
+        <div className="builder-column builder-bench">
+          <Tabs
+            label="Chassis"
+            value={build.chassisId}
+            options={weaponChassis.map((entry) => ({ id: entry.id, label: entry.label }))}
+            onChange={(chassisId: WeaponChassisId) => commit({ ...build, chassisId, parts: {} })}
+          />
+          <WeaponPreview chassisId={build.chassisId} parts={build.parts} reducedMotion={reducedMotion} />
+          <p className="bench-chassis muted">{chassis?.description}</p>
+
+          <div className="slot-rail" role="group" aria-label="Attachment slots">
+            {weaponPartSlots.map((slot) => {
+              const fitted = partsForSlot(build.chassisId, slot).find((part) => part.id === fittedInSlot(slot));
+              const stock = !build.parts[slot] || build.parts[slot] === partsForSlot(build.chassisId, slot)[0]?.id;
+              return (
+                <button
+                  key={slot}
+                  className={`slot-tile ${slot === activeSlot ? 'is-active' : ''} ${stock ? '' : 'is-fitted'}`}
+                  aria-pressed={slot === activeSlot}
+                  onClick={() => { setActiveSlot(slot); setPreviewPartId(null); }}
+                >
+                  <span className="slot-name">{slotLabels[slot]}</span>
+                  <strong>{fitted?.label ?? '—'}</strong>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="part-options" role="group" aria-label={`${slotLabels[activeSlot]} options`}>
+            {slotOptions.map((part) => {
+              const isFitted = fittedInSlot(activeSlot) === part.id;
+              const effects = partEffects(build, activeSlot, part).slice(0, 3);
+              return (
+                <button
+                  key={part.id}
+                  className={`part-card ${isFitted ? 'is-fitted' : ''}`}
+                  aria-pressed={isFitted}
+                  onClick={() => setSlot(activeSlot, part.id)}
+                  onMouseEnter={() => setPreviewPartId(part.id)}
+                  onMouseLeave={() => setPreviewPartId(null)}
+                  onFocus={() => setPreviewPartId(part.id)}
+                  onBlur={() => setPreviewPartId(null)}
+                >
+                  <strong>{part.label}</strong>
+                  <span className="part-copy">{part.description}</span>
+                  <span className="part-effects">
+                    {effects.length === 0
+                      ? <em className="part-effect">No change</em>
+                      : effects.map((effect) => (
+                        <em key={effect.key} className={`part-effect ${effect.better ? 'is-better' : 'is-worse'}`}>
+                          {effect.label} {signedPercent(effect.percent)}
+                        </em>
+                      ))}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="builder-column builder-stats">
+          <Section title="Stats" meta={stats.pellets > 1 ? `${stats.pellets} pellets` : 'single shot'}>
             <dl className="stat-readout">
               {STAT_ROWS.map((row) => {
-                const value = stats[row.key] as number;
-                const base = baseStats[row.key] as number;
+                const value = stats[row.key];
+                const base = baseStats[row.key];
                 const delta = value - base;
-                const better = row.higherIsBetter ? delta > 0 : delta < 0;
+                const higherIsBetter = STAT_META[row.key].higherIsBetter;
+                const better = higherIsBetter ? delta > 0 : delta < 0;
                 const changed = Math.abs(delta) > base * 0.001;
+                const preview = previewStats ? previewStats[row.key] : null;
+                const fraction = (candidate: number) => Math.max(0, Math.min(1, candidate / row.max));
+                // The segment a hovered part would add or take away, drawn between the
+                // current value and the previewed one -- the whole point of a bench.
+                const previewBetter = preview !== null && (higherIsBetter ? preview > value : preview < value);
                 return (
                   <div key={row.key}>
-                    <dt>{row.label}</dt>
+                    <dt>{STAT_META[row.key].label}</dt>
                     <dd>
                       <span className="stat-value">{formatStat(row.key, value)}</span>
                       <span className={`stat-bar ${changed ? (better ? 'is-better' : 'is-worse') : ''}`}>
-                        <i style={{ transform: `scaleX(${Math.min(1, value / row.max)})` }} />
+                        <i style={{ transform: `scaleX(${fraction(value)})` }} />
+                        {preview !== null && Math.abs(preview - value) > base * 0.001 && (
+                          <b
+                            className={`stat-ghost ${previewBetter ? 'is-better' : 'is-worse'}`}
+                            style={{
+                              left: `${Math.min(fraction(value), fraction(preview)) * 100}%`,
+                              width: `${Math.abs(fraction(preview) - fraction(value)) * 100}%`,
+                            }}
+                          />
+                        )}
                       </span>
                       {changed && <span className={`stat-delta ${better ? 'is-better' : 'is-worse'}`}>{better ? '▲' : '▼'}</span>}
                     </dd>

@@ -10,6 +10,7 @@ import { GhostPresenter } from './presentation/GhostPresenter';
 import { GrapplePresenter } from './presentation/GrapplePresenter';
 import { MaterialLibrary } from './presentation/MaterialLibrary';
 import { PostPipeline } from './presentation/PostPipeline';
+import { accentMaterial, canBatch, groupVisualBatches, resolveVariantAccent, type VariantAccent } from './presentation/visualBatching';
 import { palette } from './palette';
 import { ResolutionController } from './ResolutionController';
 import { ViewmodelPresenter } from './presentation/ViewmodelPresenter';
@@ -20,6 +21,12 @@ const SPEED_CUE_START = 11;
 const SPEED_CUE_FULL = 30;
 /** Degrees of extra field of view at full speed. */
 const SPEED_FOV_KICK = 11;
+
+/** A visual held back from the scene graph until the batching pass runs. */
+interface BatchCandidate {
+  handle: AssetHandle;
+  visual: RuntimeLevelV1['visuals'][number];
+}
 
 export interface RenderStats {
   drawCalls: number;
@@ -65,6 +72,7 @@ export class GameRenderer {
   private assetHandles: AssetHandle[] = [];
   private readonly assetGateBindings = new Map<THREE.Object3D, string>();
   private readonly assetInstanceMaterials: THREE.Material[] = [];
+  private readonly batchedVisuals: THREE.BatchedMesh[] = [];
   private viewmodelHandle: AssetHandle | null = null;
   private assetCpuBytes = surfaceTextureMemoryEstimate.cpuBytes;
   private assetGpuBytes = surfaceTextureMemoryEstimate.gpuBytes;
@@ -155,15 +163,17 @@ export class GameRenderer {
         .filter((primitive) => primitive.gateForEncounterId)
         .map((primitive) => [primitive.gateForEncounterId!, primitive.id] as const),
     );
+    const batchable: BatchCandidate[] = [];
     for (const visual of level.visuals) {
       if (!isAssetId(visual.assetId)) continue;
       const gateId = visual.gateVisibilityBindingId
         ? gateIdByEncounter.get(visual.gateVisibilityBindingId) ?? visual.gateVisibilityBindingId
         : undefined;
-      assetLoads.push(this.loadVisualAsset(visual.assetId, visual, controller.signal, gateId));
+      assetLoads.push(this.loadVisualAsset(visual.assetId, visual, controller.signal, batchable, gateId));
     }
     await Promise.allSettled(assetLoads);
     if (this.disposed || controller.signal.aborted) return;
+    this.batchVisualAssets(batchable);
     this.refreshAssetMemoryEstimate();
     await Promise.all([
       this.renderer.compileAsync(this.scene, this.camera),
@@ -292,6 +302,8 @@ export class GameRenderer {
       }
       this.attachCatalogDiagnostics(handle);
       this.assetInstanceMaterials.push(...this.materials.decorateImported(handle.scene));
+      // Two hunter GLBs are authored; `CharacterPresenter` draws the bulwark with the
+      // brawler's and marks it out with its shield plate and accent.
       const profile = handle.id === 'character.hunter-aggressive' ? 'aggressive' : 'ranged';
       this.characters.setExternalTemplate(profile, handle.scene, handle.animations);
       this.assetHandles.push(handle);
@@ -302,6 +314,7 @@ export class GameRenderer {
     id: AssetId,
     visual: RuntimeLevelV1['visuals'][number],
     signal: AbortSignal,
+    batchable: BatchCandidate[],
     gateId?: string,
   ): Promise<void> {
     const handle = await this.assetManager.acquire(id, { signal });
@@ -319,11 +332,84 @@ export class GameRenderer {
       object.receiveShadow = visual.receiveShadow;
     });
     handle.scene.userData.visualInstanceId = visual.id;
+    this.assetHandles.push(handle);
+    // A gate binding toggles this instance's `visible` on its own, which a batch has
+    // no equivalent for, so gated visuals stay whole. Everything else that can be
+    // expressed as one geometry at many transforms goes to the batching pass instead
+    // of being decorated and added an instance at a time.
+    if (!gateId && canBatch(handle.scene)) {
+      batchable.push({ handle, visual });
+      return;
+    }
     if (handle.source === 'gltf') this.assetInstanceMaterials.push(...this.materials.decorateImported(handle.scene));
     this.applyMaterialVariant(handle.scene, handle.definition.variants, visual.materialVariantId);
     if (gateId) this.assetGateBindings.set(handle.scene, gateId);
     this.assetRoot.add(handle.scene);
-    this.assetHandles.push(handle);
+  }
+
+  /**
+   * Catalog visuals used to be one draw call each: 35 instances of three to five
+   * meshes came to 132 of the 252 main-pass draws, essentially one draw per mesh.
+   * Grouping them takes the whole frame from 292 draws to 152 at the spawn view.
+   *
+   * `BatchedMesh` rather than `mergeGeometries`, and the deciding number was not the
+   * draw count -- both win the same 18 batches -- but the geometry each submits:
+   *
+   * | spawn view / finish view | draws | triangles |
+   * | unbatched                | 292 / 64 | 163,219 / 81,339 |
+   * | merged or instanced      | 152 / 55 | 175,991 / 120,067 |
+   * | `BatchedMesh`            | 152 / 55 | 163,219 / 81,339 |
+   *
+   * The audit expected per-instance culling to buy almost nothing on a 172 m
+   * corridor. At the spawn view that is nearly true -- every asset mesh is in front
+   * of the camera and drawn regardless. Standing at the finish with the route behind
+   * you it is not: culling was skipping 38k triangles, and a batch culled as one unit
+   * gives them all back. `BatchedMesh` keeps the per-instance test and still collapses
+   * the calls, so it is the only option here that costs nothing to take.
+   *
+   * Each batch is one geometry drawn at many transforms, because instances of an
+   * asset share the template's buffers -- `SkeletonUtils.clone` copies the nodes, not
+   * the geometry. That also means one shared material per batch instead of the clone
+   * per instance `decorateImported` and `applyMaterialVariant` used to make.
+   *
+   * The collapse itself needs `WEBGL_multi_draw`. Chromium and Safari have it; the
+   * Firefox this repo tests against does not, and three falls back to a draw per
+   * visible instance there -- the same count as before batching, with the per-instance
+   * culling still applied. So the win is browser-dependent, but the fallback is not a
+   * regression, which is why this and not the merged geometry the audit floated.
+   */
+  private batchVisualAssets(candidates: readonly BatchCandidate[]): void {
+    const batches = groupVisualBatches(candidates.map(({ handle, visual }) => ({
+      root: handle.scene,
+      variant: resolveVariantAccent(handle.definition.variants, visual.materialVariantId),
+    })));
+    for (const batch of batches) {
+      const vertexCount = batch.geometry.attributes.position?.count ?? 0;
+      const indexCount = batch.geometry.index?.count ?? 0;
+      const mesh = new THREE.BatchedMesh(batch.matrices.length, vertexCount, indexCount, this.batchMaterial(batch.material, batch.variant));
+      mesh.castShadow = batch.castShadow;
+      mesh.receiveShadow = batch.receiveShadow;
+      const geometryId = mesh.addGeometry(batch.geometry);
+      for (const matrix of batch.matrices) mesh.setMatrixAt(mesh.addInstance(geometryId), matrix);
+      // Culling reads the batch's own bounds; three leaves them null until asked.
+      mesh.computeBoundingSphere();
+      this.batchedVisuals.push(mesh);
+      this.assetRoot.add(mesh);
+    }
+  }
+
+  /** One shared material per batch, carrying the surface sheet and the variant accent. */
+  private batchMaterial(source: THREE.Material, variant: VariantAccent): THREE.Material {
+    const decorated = this.materials.decorateMaterial(source);
+    const accented = accentMaterial(decorated, variant);
+    if (accented) {
+      // The decorated clone was only a stepping stone to the accented one.
+      if (decorated !== source) decorated.dispose();
+      this.assetInstanceMaterials.push(accented);
+      return accented;
+    }
+    if (decorated !== source) this.assetInstanceMaterials.push(decorated);
+    return decorated;
   }
 
   private releaseLevelAssets(): void {
@@ -333,6 +419,10 @@ export class GameRenderer {
     this.characters.clearExternalTemplates();
     this.viewmodelHandle = null;
     this.assetGateBindings.clear();
+    // Instanced batches own only their instance buffers; the geometry belongs to the
+    // cached template and the materials are released with the rest below.
+    this.batchedVisuals.forEach((mesh) => mesh.dispose());
+    this.batchedVisuals.length = 0;
     this.assetInstanceMaterials.forEach((material) => material.dispose());
     this.assetInstanceMaterials.length = 0;
     for (const handle of this.assetHandles) handle.release();
@@ -367,33 +457,14 @@ export class GameRenderer {
     variants: readonly { id: string; accent: string }[],
     variantId?: string,
   ): void {
-    if (!variantId || variantId === 'base' || variantId === 'default') return;
-    const semanticAccent: Record<string, string> = {
-      'wall-run': '#4defff',
-      vault: '#ff3569',
-      mantle: '#ff3569',
-      'no-traverse': '#ffb547',
-    };
-    const accent = variants.find((variant) => variant.id === variantId)?.accent ?? semanticAccent[variantId];
-    const weathered = variantId === 'weathered';
-    if (!accent && !weathered) return;
-    const accentColor = accent ? new THREE.Color(accent) : null;
+    const variant = resolveVariantAccent(variants, variantId);
+    if (!variant.accent && !variant.weathered) return;
     root.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
       const source = Array.isArray(object.material) ? object.material : [object.material];
       const next = source.map((material) => {
-        if (!(material instanceof THREE.MeshStandardMaterial)) return material;
-        const shouldAccent = material.emissive.getHex() !== 0 || /(signal|cyan|red|amber|light|route)/i.test(material.name);
-        if (!weathered && !shouldAccent) return material;
-        const clone = material.clone();
-        if (weathered) {
-          clone.color.multiplyScalar(0.62);
-          clone.roughness = Math.max(0.82, clone.roughness);
-          clone.metalness *= 0.55;
-        } else if (accentColor) {
-          clone.color.copy(accentColor);
-          clone.emissive.copy(accentColor);
-        }
+        const clone = accentMaterial(material, variant);
+        if (!clone) return material;
         this.assetInstanceMaterials.push(clone);
         return clone;
       });

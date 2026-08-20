@@ -105,18 +105,28 @@ export class MaterialLibrary {
       if (!(object instanceof THREE.Mesh)) return;
       const source = Array.isArray(object.material) ? object.material : [object.material];
       const decorated = source.map((material) => {
-        if (!(material instanceof THREE.MeshStandardMaterial)) return material;
-        const texture = this.surfaceForMaterial(material.name);
-        if (!texture) return material;
-        const clone = material.clone();
-        clone.map = texture;
-        clone.needsUpdate = true;
-        created.push(clone);
+        const clone = this.decorateMaterial(material);
+        if (clone !== material) created.push(clone);
         return clone;
       });
       object.material = Array.isArray(object.material) ? decorated : decorated[0]!;
     });
     return created;
+  }
+
+  /**
+   * One imported material with its authored surface sheet attached, or the material
+   * itself when no sheet matches its name. Split out of `decorateImported` so batched
+   * geometry can decorate once per batch rather than once per instance.
+   */
+  decorateMaterial(material: THREE.Material): THREE.Material {
+    if (!(material instanceof THREE.MeshStandardMaterial)) return material;
+    const texture = this.surfaceForMaterial(material.name);
+    if (!texture) return material;
+    const clone = material.clone();
+    clone.map = texture;
+    clone.needsUpdate = true;
+    return clone;
   }
 
   dispose(): void {

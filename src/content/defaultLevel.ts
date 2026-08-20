@@ -130,19 +130,34 @@ export const defaultLevel: LevelDocumentV2 = {
   environmentPresetId: DEFAULT_ENVIRONMENT_PRESET_ID,
   assetCatalogVersion: DEFAULT_ASSET_CATALOG_VERSION,
   primitives: defaultCollision,
+  /**
+   * Three arenas that ask different questions, rather than two bots each.
+   *
+   * - Atrium teaches the pair: one hunter holding distance, one closing.
+   * - Gallery introduces the bulwark head-on, with a marksman on each flank so
+   *   standing still to grind the plate down is the losing line.
+   * - Roofline stacks a bulwark and a brawler in front and a marksman behind, so the
+   *   flank that solves the plate is also the one that walks into the rest of them.
+   *
+   * `rotationY` on a bulwark is load bearing: it decides which way the plate starts,
+   * and the profile's turn rate decides how long it takes to bring it round.
+   */
   spawns: [
     { id: 'player-start', kind: 'player', position: [0, 1.1, 8], rotationY: 0 },
     { id: 'bot-a', kind: 'bot-ranged', position: [-8, 3, -45], rotationY: 0, encounterId: 'arena-1' },
     { id: 'bot-b', kind: 'bot-aggressive', position: [8, 3, -47], rotationY: 0, encounterId: 'arena-1' },
-    { id: 'bot-c', kind: 'bot-ranged', position: [-10, 7, -96], rotationY: 0, encounterId: 'arena-2' },
-    { id: 'bot-d', kind: 'bot-aggressive', position: [9, 7, -91], rotationY: 0, encounterId: 'arena-2' },
-    { id: 'bot-e', kind: 'bot-ranged', position: [-7, 11.5, -151], rotationY: 0, encounterId: 'arena-3' },
+    { id: 'bot-c', kind: 'bot-ranged', position: [-13, 7, -97], rotationY: 0, encounterId: 'arena-2' },
+    { id: 'bot-d', kind: 'bot-bulwark', position: [1, 7, -95], rotationY: 0, encounterId: 'arena-2' },
+    { id: 'bot-g', kind: 'bot-ranged', position: [13, 7, -92], rotationY: 0, encounterId: 'arena-2' },
+    { id: 'bot-e', kind: 'bot-ranged', position: [-7, 11.5, -154], rotationY: 0, encounterId: 'arena-3' },
     { id: 'bot-f', kind: 'bot-aggressive', position: [8, 11.5, -146], rotationY: 0, encounterId: 'arena-3' },
+    { id: 'bot-h', kind: 'bot-bulwark', position: [-3, 11.5, -145], rotationY: 0, encounterId: 'arena-3' },
+    { id: 'bot-i', kind: 'bot-aggressive', position: [10, 11.5, -153], rotationY: 0, encounterId: 'arena-3' },
   ],
   encounters: [
     { id: 'arena-1', label: 'Atrium', checkpoint: [0, 3.1, -34], requiredBotIds: ['bot-a', 'bot-b'] },
-    { id: 'arena-2', label: 'Gallery', checkpoint: [0, 6.1, -84], requiredBotIds: ['bot-c', 'bot-d'] },
-    { id: 'arena-3', label: 'Roofline', checkpoint: [0, 11.1, -137], requiredBotIds: ['bot-e', 'bot-f'] },
+    { id: 'arena-2', label: 'Gallery', checkpoint: [0, 6.1, -84], requiredBotIds: ['bot-c', 'bot-d', 'bot-g'] },
+    { id: 'arena-3', label: 'Roofline', checkpoint: [0, 11.1, -137], requiredBotIds: ['bot-e', 'bot-f', 'bot-h', 'bot-i'] },
   ],
   offMeshLinks: [
     { id: 'link-arena-one-rise', start: [0, 3, -55], end: [0, 4, -61], bidirectional: true, action: 'jump' },

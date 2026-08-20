@@ -166,6 +166,7 @@ export function EditorScreen({ onPlay, onExit }: EditorScreenProps) {
           <div className="button-grid">
             <UiButton onClick={() => create('ranged bot', () => store.addSpawn('bot-ranged'))}>Ranged bot</UiButton>
             <UiButton onClick={() => create('aggressive bot', () => store.addSpawn('bot-aggressive'))}>Aggressive bot</UiButton>
+            <UiButton onClick={() => create('bulwark bot', () => store.addSpawn('bot-bulwark'))}>Bulwark bot</UiButton>
             <UiButton onClick={() => create('encounter', store.addEncounter)}>Encounter</UiButton>
             <UiButton onClick={() => create('AI link', store.addOffMeshLink)}>AI link</UiButton>
           </div>
@@ -227,7 +228,7 @@ export function EditorScreen({ onPlay, onExit }: EditorScreenProps) {
           <label>Encounter gate<select value={selectedCollision.gateForEncounterId ?? ''} onChange={(event) => store.updateCollision(selectedCollision.id, { gateForEncounterId: event.target.value || undefined })}>
             <option value="">None</option>{document.encounters.map((encounter) => <option value={encounter.id} key={encounter.id}>{encounter.label}</option>)}
           </select></label>
-          <label>Proxy color<input type="color" value={selectedCollision.color} onChange={(event) => store.updateCollision(selectedCollision.id, { color: event.target.value })} /></label>
+          <label>Proxy colour<input type="color" value={selectedCollision.color} onChange={(event) => store.updateCollision(selectedCollision.id, { color: event.target.value })} /></label>
           <label className="checkbox-row"><input type="checkbox" checked={selectedCollision.collision} onChange={(event) => store.updateCollision(selectedCollision.id, { collision: event.target.checked })} />Collision enabled</label>
           <fieldset className="bot-assignment"><legend>Traversal</legend>{(['wallRun', 'vault', 'mantle', 'grapple'] as const).map((flag) => <label key={flag}><input type="checkbox" checked={selectedCollision.traversal[flag]} onChange={(event) => store.updateCollision(selectedCollision.id, { traversal: { ...selectedCollision.traversal, [flag]: event.target.checked } })} />{readable(flag)}</label>)}</fieldset>
           <fieldset className="bot-assignment"><legend>Navigation</legend><label><input type="checkbox" checked={selectedCollision.nav.includeInBake} onChange={(event) => store.updateCollision(selectedCollision.id, { nav: { ...selectedCollision.nav, includeInBake: event.target.checked } })} />Include in bake</label><label><input type="checkbox" checked={selectedCollision.nav.walkable} onChange={(event) => store.updateCollision(selectedCollision.id, { nav: { ...selectedCollision.nav, walkable: event.target.checked } })} />Walkable</label></fieldset>

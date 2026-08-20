@@ -10,10 +10,6 @@ export function Meter({ value, max, segments = 10, label, tone = 'cyan' }: { val
   return <div className={`ui-meter ${tone}`} aria-label={`${label}: ${Math.round(value)} of ${max}`}><span>{label}<b>{String(Math.round(value)).padStart(3, '0')}</b></span><div>{Array.from({ length: segments }, (_, index) => <i className={index < filled ? 'filled' : ''} key={index} />)}</div></div>;
 }
 
-export function StatusChip({ active, tone = 'cyan', children }: { active?: boolean; tone?: 'cyan' | 'red' | 'amber'; children: ReactNode }) {
-  return <span className={`status-chip tone-${tone} ${active ? 'active' : ''}`}><i aria-hidden="true" />{children}</span>;
-}
-
 export function IconButton({ icon, children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { icon: string }) {
   return <button className={`icon-button ${className}`} {...props}><span aria-hidden="true">{icon}</span>{children}</button>;
 }

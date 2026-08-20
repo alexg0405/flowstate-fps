@@ -325,8 +325,11 @@ class EditorViewportController {
   }
 
   private createSpawn(kind: LevelDocumentV2['spawns'][number]['kind']): THREE.Mesh {
-    const color = kind === 'player' ? '#08f7ff' : kind === 'bot-aggressive' ? '#ff2d55' : '#f4ec18';
-    return new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.4, 8), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25 }));
+    const color = kind === 'player' ? '#08f7ff' : kind === 'bot-aggressive' ? '#ff2d55' : kind === 'bot-bulwark' ? '#fff83d' : '#f4ec18';
+    // The bulwark reads as a wider marker as well as a hotter one: its accent sits
+    // next to the ranged yellow, and a scene list of cones all one shape is no help.
+    const radius = kind === 'bot-bulwark' ? 0.72 : 0.5;
+    return new THREE.Mesh(new THREE.ConeGeometry(radius, 1.4, 8), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25 }));
   }
 
   private createEncounter(): THREE.Mesh {

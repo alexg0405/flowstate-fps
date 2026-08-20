@@ -28,6 +28,22 @@ describe('level validation and migration', () => {
     expect(validateLevel(defaultLevel)).toEqual({ errors: [], warnings: [] });
   });
 
+  it('accepts the bulwark spawn kind and rejects one that names no bot', () => {
+    const level = structuredClone(defaultLevel);
+    expect(level.spawns.some((spawn) => spawn.kind === 'bot-bulwark')).toBe(true);
+    expect(validateLevel(level)).toEqual({ errors: [], warnings: [] });
+
+    const unknown = structuredClone(defaultLevel) as unknown as { spawns: { kind: string }[] };
+    unknown.spawns[1].kind = 'bot-sniper';
+    expect(validateLevel(unknown).errors.length).toBeGreaterThan(0);
+  });
+
+  it('carries a bulwark through the V1 migration untouched', () => {
+    const legacy = legacyLevel();
+    expect(legacy.spawns.some((spawn) => spawn.kind === 'bot-bulwark')).toBe(true);
+    expect(migrateLevelDocument(legacy).spawns).toEqual(legacy.spawns);
+  });
+
   it('losslessly migrates V1 gameplay content and adds explicit traversal metadata', () => {
     const legacy = legacyLevel();
     const source = structuredClone(legacy);

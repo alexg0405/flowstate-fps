@@ -9,3 +9,4 @@ test-results/
 *.fpsproj
 *.blend1
 *.tsbuildinfo
+.claude/

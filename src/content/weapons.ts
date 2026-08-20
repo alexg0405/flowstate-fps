@@ -55,7 +55,7 @@ export const weaponChassis: readonly WeaponChassisDefinition[] = [
   {
     id: 'dmr',
     label: 'DMR',
-    description: 'Slow, precise and hard hitting, with the longest reach.',
+    description: 'Slow, precise and hard-hitting, with the longest reach.',
     base: {
       ...MELEE,
       magazineSize: 12, reserveAmmo: 72, roundsPerMinute: 260, reloadSeconds: 1.9,
@@ -73,7 +73,7 @@ export const weaponParts: readonly WeaponPartDefinition[] = [
   { id: 'optic.scope', slot: 'optic', label: 'Scope', description: 'Much tighter and closer, at a slower rate of fire.', modifiers: { adsSpread: 0.45, adsZoom: 1.6, roundsPerMinute: 0.94 } },
 
   { id: 'barrel.standard', slot: 'barrel', label: 'Standard barrel', description: 'Factory length.', modifiers: {} },
-  { id: 'barrel.short', slot: 'barrel', label: 'Short barrel', description: 'Snappier and steadier from the hip, but short ranged.', modifiers: { range: 0.68, hipSpread: 0.78, roundsPerMinute: 1.06, recoilRecovery: 1.15 } },
+  { id: 'barrel.short', slot: 'barrel', label: 'Short barrel', description: 'Snappier and steadier from the hip, but short-ranged.', modifiers: { range: 0.68, hipSpread: 0.78, roundsPerMinute: 1.06, recoilRecovery: 1.15 } },
   { id: 'barrel.long', slot: 'barrel', label: 'Long barrel', description: 'Far more reach and damage, less steady unaimed and heavier in the hands.', modifiers: { range: 1.4, damage: 1.08, hipSpread: 1.18, roundsPerMinute: 0.94, recoilPitch: 1.18 } },
   { id: 'barrel.choke', slot: 'barrel', label: 'Choke', description: 'Tightens the pellet spread hard.', chassis: ['shotgun'], modifiers: { hipSpread: 0.55, adsSpread: 0.5, range: 1.25 } },
 

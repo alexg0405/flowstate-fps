@@ -124,6 +124,23 @@ export const botProfiles: Record<BotProfile['kind'], BotProfile> = {
     kind: 'aggressive', health: 120, moveSpeed: 6.2, preferredRange: 5, fireInterval: 0.6, damage: 14,
     windupSeconds: 0.28, baseSpread: 0.02, spreadPerSpeed: 0.0075,
   },
+  /**
+   * The bulwark is the one that is not a numbers change. It walks a plate at you,
+   * turns slowly enough that you can get around it, and can only shoot what it is
+   * facing -- so the answer is the movement kit, not more damage. A full carbine
+   * magazine into the plate does not kill it; six rounds into its flank do.
+   *
+   * `turnRate` is what makes the shield a puzzle rather than a wall: at 1.5 rad/s it
+   * needs about a second to bring the plate round ninety degrees, and a dash crosses
+   * that in a fraction of it.
+   */
+  bulwark: {
+    kind: 'bulwark', health: 200, moveSpeed: 3.4, preferredRange: 6, fireInterval: 1.5, damage: 18,
+    windupSeconds: 0.55, baseSpread: 0.014, spreadPerSpeed: 0.004,
+    turnRate: 1.5,
+    shield: { arcCosine: Math.cos(1.2), damageScale: 0.18 },
+    fireArcCosine: Math.cos(0.5),
+  },
 };
 
 /**
@@ -171,7 +188,9 @@ export const ghostTrack = {
  * levels stay on schema 2.
  */
 export const runScoring = {
-  parSeconds: 150,
+  // Nine hostiles across three arenas, one of which has to be worked around rather
+  // than shot down. Par moved with the route; it is the pace an S demands.
+  parSeconds: 185,
   /**
    * Clock added at the moment of death. The run timer is frozen while the player is
    * down, so the cost of dying is this fixed amount rather than however long they

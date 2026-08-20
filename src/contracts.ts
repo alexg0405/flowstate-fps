@@ -60,6 +60,12 @@ export interface EntitySnapshot {
   grounded: boolean;
   aimPitch: number;
   health: number;
+  /**
+   * What this entity's health is measured against. Published because a daily
+   * modifier scales bot health, so presentation cannot derive the bar's maximum
+   * from an authored profile without silently disagreeing with the simulation.
+   */
+  maxHealth: number;
   profile?: BotProfile['kind'];
 }
 
@@ -162,6 +168,8 @@ export interface GameEvent {
   value?: number;
   surface?: SurfaceTag;
   headshot?: boolean;
+  /** Set on a hit a shield arc absorbed, so the confirmation can say so. */
+  deflected?: boolean;
   gateId?: string;
 }
 
@@ -255,7 +263,7 @@ export interface AssetCatalog {
 
 export interface SpawnDefinition {
   id: string;
-  kind: 'player' | 'bot-ranged' | 'bot-aggressive';
+  kind: 'player' | 'bot-ranged' | 'bot-aggressive' | 'bot-bulwark';
   position: Vec3;
   rotationY: number;
   encounterId?: string;
@@ -455,7 +463,7 @@ export interface WeaponBuild {
 }
 
 export interface BotProfile {
-  kind: 'ranged' | 'aggressive';
+  kind: 'ranged' | 'aggressive' | 'bulwark';
   health: number;
   moveSpeed: number;
   preferredRange: number;
@@ -474,6 +482,28 @@ export interface BotProfile {
    * makes a bot miss, so the movement kit is also the defence.
    */
   spreadPerSpeed: number;
+  /**
+   * How fast the bot can bring its facing round, in radians a second. Omitted means
+   * it simply faces the player, which is what a bot with nothing to protect and
+   * nothing to aim does.
+   */
+  turnRate?: number;
+  /**
+   * A plate carried on the bot's front. Damage arriving inside the arc is scaled
+   * down, so the counter is to get around it rather than to out-shoot it -- which
+   * is a question the movement kit answers and a bigger health pool would not.
+   */
+  shield?: {
+    /** Cosine of the half-angle the plate covers, measured from the bot's facing. */
+    arcCosine: number;
+    /** What the plate scales incoming damage to. */
+    damageScale: number;
+  };
+  /**
+   * Cosine of the half-angle the player has to be inside for the bot to commit a
+   * shot. Omitted means it can fire whichever way it happens to be pointing.
+   */
+  fireArcCosine?: number;
 }
 
 /**

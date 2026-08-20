@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { RunModifier, RuntimeLevelV1, SaveDataV4, SaveSettingsV2, SimulationSnapshot } from '../contracts';
 import type { RecordedRun } from '../persistence/saveStore';
-import { UiPanel } from '../ui/Primitives';
+import { Meter, UiPanel } from '../ui/Primitives';
 import { WeaponBuilder } from '../ui/WeaponBuilder';
 import { formatTime } from './format';
 
@@ -32,7 +32,7 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
     return (
       <div className="game-overlay overlay-builder">
         <UiPanel className="start-card builder-card">
-          <WeaponBuilder save={save} onChange={onSaveChange} onClose={() => setBuilderOpen(false)} deferredNotice />
+          <WeaponBuilder save={save} onChange={onSaveChange} onClose={() => setBuilderOpen(false)} deferredNotice reducedMotion={settings.reducedMotion} />
         </UiPanel>
       </div>
     );
@@ -63,10 +63,14 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
         ) : !loading ? (
           <div className="overlay-state standby-state">
             <p className="state-deck">Input is released. Click back in to restore movement and combat.</p>
-            <div className="run-brief">
-              <div><span className="micro-label">ROUTE</span><strong>{level.name}</strong></div>
-              <div><span className="micro-label">ARENAS</span><strong>{Math.max(1, level.encounters.length).toString().padStart(2, '0')}</strong></div>
-            </div>
+            {snapshot
+              ? <RunStatusPanel snapshot={snapshot} />
+              : (
+                <div className="run-brief">
+                  <div><span className="micro-label">ROUTE</span><strong>{level.name}</strong></div>
+                  <div><span className="micro-label">ARENAS</span><strong>{Math.max(1, level.encounters.length).toString().padStart(2, '0')}</strong></div>
+                </div>
+              )}
             {modifier && <ModifierBrief modifier={modifier} />}
             <div className="guide-heading"><span>Controls</span></div>
             <div className="control-guide">
@@ -96,6 +100,72 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
           </div>
         )}
       </UiPanel>
+    </div>
+  );
+}
+
+/**
+ * The pause screen is where the reduced HUD sends everything it stopped drawing.
+ * Elapsed, score, deaths, hostiles left, peak chain, vitals, the carried weapons
+ * and the splits so far are all still one keystroke away — they just are not
+ * competing with the crosshair while the player is moving.
+ */
+function RunStatusPanel({ snapshot }: { snapshot: SimulationSnapshot }) {
+  const hostiles = snapshot.entities.filter((entity) => entity.kind === 'bot' && entity.health > 0).length;
+  const health = Math.max(0, Math.ceil(snapshot.player.health));
+  // The simulation publishes what full health is; nothing here keeps its own copy.
+  const maxHealth = Math.max(1, snapshot.entities.find((entity) => entity.kind === 'player')?.maxHealth ?? health);
+  return (
+    <div className="run-status">
+      {/* One row: the card header already names the route, and the pause screen has
+          to stay short enough that resuming is not a scroll away. */}
+      <div className="run-brief">
+        <div><span className="micro-label">ELAPSED</span><strong>{formatTime(snapshot.elapsedSeconds)}</strong></div>
+        <div><span className="micro-label">SCORE</span><strong>{snapshot.player.score.toLocaleString()}</strong></div>
+        <div><span className="micro-label">DEATHS</span><strong>{snapshot.player.deaths}</strong></div>
+        <div><span className="micro-label">HOSTILES</span><strong>{hostiles.toString().padStart(2, '0')}</strong></div>
+        <div><span className="micro-label">PEAK CHAIN</span><strong>{snapshot.player.combo.peakLinks}</strong></div>
+      </div>
+      <div className="run-status-detail">
+        <Meter label="HP" value={health} max={maxHealth} segments={12} tone={health <= maxHealth * 0.25 ? 'red' : 'cyan'} />
+        <div className="weapon-strip" role="group" aria-label="Carried weapons">
+          {snapshot.player.weapons.slots.map((slot, index) => (
+            <span key={slot.name + index} className={index === snapshot.player.weapons.activeSlot ? 'is-active' : ''}>
+              <b>{index + 1}</b>{slot.name}<i>{slot.ammo}</i>
+            </span>
+          ))}
+        </div>
+      </div>
+      {snapshot.splits.length > 0 && <SplitTable splits={snapshot.splits} />}
+    </div>
+  );
+}
+
+/**
+ * Shared by the pause screen and the completion screen. A reference run is
+ * optional because mid-run there may not be one, and inventing a delta against
+ * a split that was never set would be a lie.
+ */
+function SplitTable({ splits, reference = [] }: {
+  splits: SimulationSnapshot['splits'];
+  reference?: readonly { encounterId: string; seconds: number }[];
+}) {
+  return (
+    <div className="split-table" aria-label="Checkpoint splits">
+      <div className="guide-heading"><span>Splits</span></div>
+      {splits.map((split) => {
+        const matched = reference.find((candidate) => candidate.encounterId === split.encounterId);
+        const delta = matched ? split.seconds - matched.seconds : null;
+        return (
+          <div className="split-row" key={split.encounterId}>
+            <span className="split-label">{split.label}</span>
+            <b className="split-time">{formatTime(split.seconds)}</b>
+            <span className={`split-delta ${delta === null ? '' : delta <= 0 ? 'is-better' : 'is-worse'}`}>
+              {delta === null ? '—' : formatDelta(delta, (value) => `${value.toFixed(2)}s`)}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -159,24 +229,7 @@ function CompletionState({ snapshot, level, result, modifier, onExit }: {
         <div><dt>Peak chain</dt><dd>{snapshot.player.combo.peakLinks}</dd></div>
         {modifier && <div><dt>Contract</dt><dd>{modifier.label}</dd></div>}
       </dl>
-      {snapshot.splits.length > 0 && (
-        <div className="split-table" aria-label="Checkpoint splits">
-          <div className="guide-heading"><span>Splits</span></div>
-          {snapshot.splits.map((split) => {
-            const reference = previous?.splits.find((candidate) => candidate.encounterId === split.encounterId);
-            const delta = reference ? split.seconds - reference.seconds : null;
-            return (
-              <div className="split-row" key={split.encounterId}>
-                <span className="split-label">{split.label}</span>
-                <b className="split-time">{formatTime(split.seconds)}</b>
-                <span className={`split-delta ${delta === null ? '' : delta <= 0 ? 'is-better' : 'is-worse'}`}>
-                  {delta === null ? '—' : formatDelta(delta, (value) => `${value.toFixed(2)}s`)}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {snapshot.splits.length > 0 && <SplitTable splits={snapshot.splits} reference={previous?.splits ?? []} />}
       <div className="completion-stamp" aria-hidden="true"><span>VALIDATED</span><strong>/// CLEAR</strong></div>
       <div className="overlay-actions"><button className="primary" onClick={onExit}><span aria-hidden="true">←</span>Return to menu</button></div>
     </div>

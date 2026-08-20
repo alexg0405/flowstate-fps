@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import type { EntitySnapshot, GameEvent, SaveDataV1, SimulationSnapshot } from '../../contracts';
+import type { BotProfile, EntitySnapshot, GameEvent, SaveDataV1, SimulationSnapshot } from '../../contracts';
 import { botColliderBottom } from '../../content/config';
 import { hostileAccent } from '../palette';
 import { MaterialLibrary } from './MaterialLibrary';
@@ -26,7 +26,7 @@ interface HunterInstance {
   ownedGeometries: THREE.BufferGeometry[];
   ownedMaterials: THREE.Material[];
   deathMaterials: THREE.Material[];
-  profile: 'ranged' | 'aggressive';
+  profile: HostileProfile;
   dyingUntilTick: number;
   deathOrigin: THREE.Vector3;
   attackUntilTick: number;
@@ -54,6 +54,11 @@ interface HealthDisplay {
   materials: THREE.Material[];
 }
 
+/** Which hostile is being drawn. Named once so a new profile is one edit, not nine. */
+type HostileProfile = BotProfile['kind'];
+/** The builds there is art for. */
+type AuthoredBuild = 'ranged' | 'aggressive';
+
 const DEATH_TICKS = 48;
 const ATTACK_TICKS = 15;
 const HIT_TICKS = 10;
@@ -68,9 +73,28 @@ const HEALTH_REFERENCE_DISTANCE = 14;
 const HEALTH_MAX_SCALE = 2.6;
 const ACCENT_EMISSIVE_INTENSITY = 0.14;
 
-function profileAccent(profile: 'ranged' | 'aggressive'): string {
+function profileAccent(profile: HostileProfile): string {
   return hostileAccent[profile];
 }
+
+/**
+ * Which authored build a hostile is drawn with. Only two hunter GLBs exist, and a
+ * third silhouette means regenerating the whole art pipeline, so the bulwark reuses
+ * the brawler's -- what has to read at a glance is which way its plate is pointing,
+ * and that is the plate's job. The narrow return type is deliberate: a fourth
+ * profile falls back to a build that exists rather than to a missing template.
+ */
+function templateProfile(profile: HostileProfile): AuthoredBuild {
+  return profile === 'ranged' ? 'ranged' : 'aggressive';
+}
+
+/** The equivalent angle in (-pi, pi], so a turn always takes the short way round. */
+function shortestAngle(radians: number): number {
+  return Math.atan2(Math.sin(radians), Math.cos(radians));
+}
+
+/** Half-width, height and stand-off of the bulwark's plate, in metres. */
+const SHIELD_PLATE = { width: 0.52, height: 0.94, offset: 0.42 } as const;
 /** Only signal trim and optics carry the accent glow; armour stays dark. */
 const ACCENT_MATERIAL = /(signal|glass|visor|optic)/i;
 
@@ -81,8 +105,8 @@ export class CharacterPresenter {
   private readonly scratchPosition = new THREE.Vector3();
   private readonly cameraPosition = new THREE.Vector3();
   private readonly instances = new Map<number, HunterInstance>();
-  private readonly templates = new Map<'ranged' | 'aggressive', THREE.Group>();
-  private readonly externalTemplates = new Map<'ranged' | 'aggressive', ExternalHunterTemplate>();
+  private readonly templates = new Map<AuthoredBuild, THREE.Group>();
+  private readonly externalTemplates = new Map<AuthoredBuild, ExternalHunterTemplate>();
   private readonly ownedMaterials: THREE.Material[] = [];
 
   constructor(private readonly materials: MaterialLibrary) {
@@ -100,10 +124,10 @@ export class CharacterPresenter {
     for (const template of this.templates.values()) update(template);
   }
 
-  setExternalTemplate(profile: 'ranged' | 'aggressive', scene: THREE.Group, animations: readonly THREE.AnimationClip[]): void {
+  setExternalTemplate(profile: AuthoredBuild, scene: THREE.Group, animations: readonly THREE.AnimationClip[]): void {
     this.externalTemplates.set(profile, { scene, animations });
     for (const [id, instance] of this.instances) {
-      if (instance.profile !== profile) continue;
+      if (templateProfile(instance.profile) !== profile) continue;
       this.disposeInstance(instance);
       this.instances.delete(id);
     }
@@ -214,8 +238,9 @@ export class CharacterPresenter {
 
   private createInstance(entity: EntitySnapshot): HunterInstance {
     const profile = entity.profile ?? 'ranged';
-    const external = this.externalTemplates.get(profile);
-    const root = external ? cloneSkeleton(external.scene) as THREE.Group : this.templates.get(profile)!.clone(true);
+    const drawnAs = templateProfile(profile);
+    const external = this.externalTemplates.get(drawnAs);
+    const root = external ? cloneSkeleton(external.scene) as THREE.Group : this.templates.get(drawnAs)!.clone(true);
     root.position.fromArray(entity.position);
     root.position.y -= botColliderBottom;
     root.rotation.y = entity.rotationY;
@@ -231,6 +256,16 @@ export class CharacterPresenter {
     root.add(marker.mesh);
     health.geometries.push(marker.geometry);
     health.materials.push(marker.material);
+    if (profile === 'bulwark') {
+      // The plate is the affordance for the whole mechanic: the simulation only
+      // scales down damage arriving in front of the bot, so the player has to be
+      // able to see which way that is. It hangs off the model's forward axis, which
+      // the simulation turns at the profile's own rate.
+      const plate = this.createShieldPlate(profile);
+      root.add(plate.mesh);
+      health.geometries.push(...plate.geometries);
+      health.materials.push(...plate.materials);
+    }
     const target = new THREE.Vector3().fromArray(entity.position).setY(entity.position[1] - botColliderBottom);
     const instance: HunterInstance = {
       root,
@@ -288,7 +323,10 @@ export class CharacterPresenter {
       hunter.target.copy(next);
     }
     hunter.root.position.lerpVectors(hunter.previous, hunter.target, THREE.MathUtils.clamp(interpolationAlpha, 0, 1));
-    hunter.root.rotation.y = THREE.MathUtils.damp(hunter.root.rotation.y, entity.rotationY, 18, deltaSeconds);
+    // Damped along the shortest arc. Interpolating the raw values spins a figure all
+    // the way round whenever the simulation's yaw crosses the wrap at +/-pi, which a
+    // bulwark turning slowly through a half circle reaches on purpose.
+    hunter.root.rotation.y += shortestAngle(entity.rotationY - hunter.root.rotation.y) * (1 - Math.exp(-18 * deltaSeconds));
     hunter.root.rotation.z = THREE.MathUtils.damp(hunter.root.rotation.z, 0, 18, deltaSeconds);
     hunter.root.scale.setScalar(hunter.baseScale);
 
@@ -380,7 +418,7 @@ export class CharacterPresenter {
     }
   }
 
-  private createGroundMarker(profile: 'ranged' | 'aggressive'): { mesh: THREE.Mesh; geometry: THREE.BufferGeometry; material: THREE.Material } {
+  private createGroundMarker(profile: HostileProfile): { mesh: THREE.Mesh; geometry: THREE.BufferGeometry; material: THREE.Material } {
     const geometry = new THREE.RingGeometry(0.44, 0.6, 28);
     const material = new THREE.MeshBasicMaterial({
       color: profileAccent(profile), transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false,
@@ -390,6 +428,40 @@ export class CharacterPresenter {
     mesh.position.y = 0.02;
     mesh.userData.characterHealth = true;
     return { mesh, geometry, material };
+  }
+
+  /**
+   * A slab across the bot's front, carried on the model's forward axis so the arc the
+   * simulation protects is the arc the player can see.
+   *
+   * Dark plate, glowing edge and one bright band, rather than a slab of accent: a
+   * fully emissive plate reads as a yellow billboard with legs, which is the same
+   * mistake that once made a hunter a glowing blob instead of a silhouette.
+   */
+  private createShieldPlate(profile: HostileProfile): { mesh: THREE.Mesh; geometries: THREE.BufferGeometry[]; materials: THREE.Material[] } {
+    const accent = profileAccent(profile);
+    const geometry = new THREE.BoxGeometry(SHIELD_PLATE.width * 2, SHIELD_PLATE.height, 0.07);
+    // Named to match the accent pass, and deliberately *not* flagged as a readout:
+    // unlike the health bar the plate is part of the figure, so it falls and fades
+    // with the body instead of hanging in the air after a kill.
+    const face = new THREE.MeshStandardMaterial({
+      name: 'signal-shield-plate', color: '#141b22', emissive: accent, emissiveIntensity: 0.16, metalness: 0.78, roughness: 0.38,
+    });
+    const mesh = new THREE.Mesh(geometry, face);
+    mesh.position.set(0, 0.95, SHIELD_PLATE.offset);
+    mesh.castShadow = true;
+
+    const rimGeometry = new THREE.BoxGeometry(SHIELD_PLATE.width * 2 + 0.1, SHIELD_PLATE.height + 0.1, 0.035);
+    const rim = new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.9 });
+    const rimMesh = new THREE.Mesh(rimGeometry, rim);
+    rimMesh.position.z = -0.03;
+    mesh.add(rimMesh);
+
+    const bandGeometry = new THREE.BoxGeometry(SHIELD_PLATE.width * 1.7, 0.09, 0.02);
+    const bandMesh = new THREE.Mesh(bandGeometry, rim);
+    bandMesh.position.set(0, SHIELD_PLATE.height * 0.2, 0.046);
+    mesh.add(bandMesh);
+    return { mesh, geometries: [geometry, rimGeometry, bandGeometry], materials: [face, rim] };
   }
 
   private isolateDeathMaterials(hunter: HunterInstance): void {
@@ -426,7 +498,7 @@ export class CharacterPresenter {
     hunter.ownedGeometries.length = 0;
   }
 
-  private createTemplate(profile: 'ranged' | 'aggressive'): THREE.Group {
+  private createTemplate(profile: AuthoredBuild): THREE.Group {
     const root = new THREE.Group();
     root.name = `${profile}-hunter-template`;
     const armor = profile === 'aggressive' ? this.materials.get('armor-red') : this.materials.get('armor');
@@ -598,7 +670,7 @@ export class CharacterPresenter {
    * glance, and it is yaw-billboarded and distance-compensated in
    * `updateHealthDisplay` so it stays legible across an arena.
    */
-  private createHealthDisplay(profile: 'ranged' | 'aggressive'): HealthDisplay {
+  private createHealthDisplay(profile: HostileProfile): HealthDisplay {
     const group = new THREE.Group();
     group.position.set(0, 2.32, 0);
     const frameMaterial = new THREE.MeshBasicMaterial({ color: '#04070c', transparent: true, opacity: 0.92, depthTest: false });
@@ -645,8 +717,9 @@ export class CharacterPresenter {
   }
 
   private updateHealthDisplay(hunter: HunterInstance, entity: EntitySnapshot, tick: number, deltaSeconds: number): void {
-    const maximum = hunter.profile === 'aggressive' ? 120 : 100;
-    const fraction = THREE.MathUtils.clamp(entity.health / maximum, 0, 1);
+    // Published by the simulation rather than re-derived here: a daily modifier
+    // scales bot health, so an authored profile is not what the bar is measured on.
+    const fraction = THREE.MathUtils.clamp(entity.health / Math.max(1, entity.maxHealth), 0, 1);
     hunter.healthFraction = fraction;
     // The chip layer lags behind so the size of each bite of damage is visible.
     hunter.chipFraction = hunter.chipFraction < fraction

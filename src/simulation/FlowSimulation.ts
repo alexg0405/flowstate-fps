@@ -16,6 +16,7 @@ import {
   type SaveDataV1,
   type SimulationOutput,
   type SimulationSnapshot,
+  type SpawnDefinition,
   type TraversalFlags,
   type WeaponBuild,
   type WeaponDefinition,
@@ -50,6 +51,12 @@ interface BotState {
   windupTimer: number;
   /** Aim error picked when the shot was committed, so the telegraph cannot be re-rolled. */
   windupSpread: number;
+  /**
+   * Where the bot is pointed, as a yaw whose forward is `(sin, cos)`. Only matters
+   * for a profile that has a turn rate; the rest snap to the player, which is what
+   * the snapshot used to compute inline every frame.
+   */
+  facingYaw: number;
 }
 
 interface WeaponSlotState {
@@ -125,6 +132,8 @@ const BOT_MAX_DROP = 1.6;
 const BOT_LEDGE_LOOKAHEAD = 0.7;
 /** Anything below this has left the level and is returned or killed. */
 const VOID_Y = -20;
+/** The player's full health, and what the snapshot reports their bar against. */
+const PLAYER_MAX_HEALTH = 100;
 const WEAPON_SWAP_SECONDS = 0.34;
 /** Closing distance per tick below which the pull counts as stalled. */
 const GRAPPLE_PROGRESS_EPSILON = 0.004;
@@ -247,7 +256,7 @@ export class FlowSimulation implements GameSimulation {
       velocity: { x: 0, y: 0, z: 0 },
       yaw: spawn.rotationY,
       pitch: 0,
-      health: 100,
+      health: PLAYER_MAX_HEALTH,
       weapons: this.loadout.map(createWeaponSlot),
       activeSlot: 0,
       weaponReadyTimer: 0,
@@ -291,7 +300,7 @@ export class FlowSimulation implements GameSimulation {
     this.colliderEntity.set(playerCollider.handle, this.player.id);
 
     for (const botSpawn of level.spawns.filter((candidate) => candidate.kind !== 'player')) {
-      const profile = this.scaledProfile(botSpawn.kind === 'bot-ranged' ? botProfiles.ranged : botProfiles.aggressive);
+      const profile = this.scaledProfile(botProfiles[botProfileKind(botSpawn.kind)]);
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(...botSpawn.position),
       );
@@ -317,6 +326,7 @@ export class FlowSimulation implements GameSimulation {
         velocityY: 0,
         velocity: { x: 0, y: 0, z: 0 },
         grounded: false,
+        facingYaw: botSpawn.rotationY,
         windupTimer: 0,
         windupSpread: 0,
       };
@@ -380,7 +390,7 @@ export class FlowSimulation implements GameSimulation {
   /** Sends the player back to their checkpoint at full strength. */
   private respawn(events: GameEvent[]): void {
     this.restoreCheckpoint();
-    this.player.health = 100;
+    this.player.health = PLAYER_MAX_HEALTH;
     events.push(this.event('respawn', this.positionOf(this.player.body), this.player.id, this.deaths));
   }
 
@@ -494,6 +504,8 @@ export class FlowSimulation implements GameSimulation {
   private scaledProfile(profile: BotProfile): BotProfile {
     const enemy = this.modifier?.enemy;
     if (!enemy) return profile;
+    // Spread first, so a scaling can only bend what it names; the shield arc, turn
+    // rate and firing arc are behaviour, not numbers a daily is allowed to retune.
     return {
       ...profile,
       health: profile.health * (enemy.health ?? 1),
@@ -1323,8 +1335,38 @@ export class FlowSimulation implements GameSimulation {
       // than falling forever.
       if (position.y < VOID_Y) this.returnBotToSpawn(bot);
 
+      this.turnBot(bot, position, playerPosition, dt);
       this.updateBotFire(bot, position, playerDistance, dt, events);
     }
+  }
+
+  /**
+   * A bot with no turn rate simply looks at the player, which is what the snapshot
+   * used to derive inline. One with a turn rate has to swing round, and that lag is
+   * the whole mechanic: it is what makes a shield something to get around.
+   */
+  private turnBot(bot: BotState, position: RAPIER.Vector, playerPosition: RAPIER.Vector, dt: number): void {
+    const bearing = Math.atan2(playerPosition.x - position.x, playerPosition.z - position.z);
+    if (bot.profile.turnRate === undefined) {
+      bot.facingYaw = bearing;
+      return;
+    }
+    const step = bot.profile.turnRate * dt;
+    bot.facingYaw = wrapAngle(bot.facingYaw + clamp(wrapAngle(bearing - bot.facingYaw), -step, step));
+  }
+
+  /**
+   * Cosine of the angle between where the bot is pointed and where the player is,
+   * measured on the horizontal plane. Getting above a bulwark is not the same as
+   * getting behind it: the plate is carried in front of the body, not over it.
+   */
+  private facingCosine(bot: BotState, target: RAPIER.Vector): number {
+    const position = bot.body.translation();
+    const dx = target.x - position.x;
+    const dz = target.z - position.z;
+    const length = Math.hypot(dx, dz);
+    if (length < 1e-4) return 1;
+    return (dx * Math.sin(bot.facingYaw) + dz * Math.cos(bot.facingYaw)) / length;
   }
 
   /**
@@ -1341,6 +1383,9 @@ export class FlowSimulation implements GameSimulation {
       return;
     }
     if (bot.fireCooldown > 0 || playerDistance >= bot.profile.preferredRange * 1.5) return;
+    // A bot that has to aim its whole body cannot shoot what it has not turned to.
+    // Flanking a bulwark takes its damage away as well as its plate.
+    if (bot.profile.fireArcCosine !== undefined && this.facingCosine(bot, this.player.body.translation()) < bot.profile.fireArcCosine) return;
     if (!this.hasLineOfSight(position, this.player.body.translation(), bot.collider)) return;
     // The cooldown runs during the telegraph, so shot-to-shot still measures the
     // authored interval. The telegraph buys the player reaction time; it is not a
@@ -1484,7 +1529,7 @@ export class FlowSimulation implements GameSimulation {
         this.checkpoint = {
           ...this.captureCheckpoint(),
           position: encounter.checkpoint,
-          health: 100,
+          health: PLAYER_MAX_HEALTH,
         };
         events.push(this.event('checkpoint', encounter.checkpoint));
         events.push(this.event('split', encounter.checkpoint, undefined, this.elapsedSeconds));
@@ -1506,6 +1551,17 @@ export class FlowSimulation implements GameSimulation {
     }
   }
 
+  /**
+   * Every source of damage to a bot is the player, so the shield arc is measured
+   * against where the player is standing rather than where the round happened to
+   * land: what a plate stops is a shot from in front of it.
+   */
+  private shieldScale(bot: BotState): number {
+    const shield = bot.profile.shield;
+    if (!shield) return 1;
+    return this.facingCosine(bot, this.player.body.translation()) >= shield.arcCosine ? shield.damageScale : 1;
+  }
+
   private damageBot(
     bot: BotState,
     damage: number,
@@ -1513,10 +1569,13 @@ export class FlowSimulation implements GameSimulation {
     position: Vec3,
     details: Pick<GameEvent, 'sourceEntityId' | 'headshot' | 'normal' | 'surface'>,
   ): void {
-    bot.health -= damage;
-    events.push(this.event('hit', position, bot.id, damage, {
+    const scale = this.shieldScale(bot);
+    const dealt = damage * scale;
+    bot.health -= dealt;
+    events.push(this.event('hit', position, bot.id, dealt, {
       ...details,
       targetEntityId: bot.id,
+      deflected: scale < 1,
     }));
     if (bot.health <= 0) {
       bot.alive = false;
@@ -1680,6 +1739,7 @@ export class FlowSimulation implements GameSimulation {
           grounded: this.player?.grounded ?? false,
           aimPitch: this.player?.pitch ?? 0,
           health: this.player?.health ?? 0,
+          maxHealth: PLAYER_MAX_HEALTH,
         },
         ...this.bots.filter((bot) => bot.alive && bot.active).map((bot) => {
           const botPosition = bot.body.translation();
@@ -1689,10 +1749,11 @@ export class FlowSimulation implements GameSimulation {
             kind: 'bot' as const,
             position: this.positionOf(bot.body),
             velocity: this.vectorOf(bot.velocity),
-            rotationY: Math.atan2(this.player.body.translation().x - botPosition.x, this.player.body.translation().z - botPosition.z),
+            rotationY: bot.facingYaw,
             grounded: bot.grounded,
             aimPitch: Math.atan2(playerAim.y - (botPosition.y + 0.58), Math.hypot(playerAim.x - botPosition.x, playerAim.z - botPosition.z)),
             health: bot.health,
+            maxHealth: bot.profile.health,
             profile: bot.profile.kind,
           };
         }),
@@ -1872,6 +1933,13 @@ export class FlowSimulation implements GameSimulation {
 function createWeaponSlot(build: WeaponBuild): WeaponSlotState {
   const stats = resolveWeaponStats(build);
   return { build, stats, ammo: stats.magazineSize, reserveAmmo: stats.reserveAmmo };
+}
+
+/** Spawn kinds name the bot they place; the profile table is keyed by the bot. */
+function botProfileKind(kind: SpawnDefinition['kind']): BotProfile['kind'] {
+  if (kind === 'bot-aggressive') return 'aggressive';
+  if (kind === 'bot-bulwark') return 'bulwark';
+  return 'ranged';
 }
 
 function forwardFromYaw(yaw: number): { x: number; z: number } {

@@ -55,7 +55,7 @@ function snapshotFixture(overrides: Partial<SimulationSnapshot['player']> = {}, 
   return {
     tick: 120,
     elapsedSeconds: 73.5,
-    entities: [{ id: 1, kind: 'player', position: [0, 1, 0], velocity: [0, 0, 0], rotationY: 0, grounded: true, aimPitch: 0, health: 100 }],
+    entities: [{ id: 1, kind: 'player', position: [0, 1, 0], velocity: [0, 0, 0], rotationY: 0, grounded: true, aimPitch: 0, health: 100, maxHealth: 100 }],
     camera: { position: [0, 1.58, 0], yaw: 0, pitch: 0, fov: 92 },
     player: {
       health: 100,
@@ -125,7 +125,7 @@ describe('HUD grapple presentation', () => {
     expect(query('.grapple-readout').className).toContain('grapple-ready');
     expect(query('.crosshair').className).toContain('hook-ready');
     expect(query('.grapple-readout > i').style.transform).toBe('scaleX(1)');
-    expect(query('.chain-rail').textContent).toContain('AIR DASH READY');
+    expect(query('.grapple-readout strong').textContent).toBe('HOOK');
   });
 
   it('reports rope length and a tethered crosshair while attached', () => {
@@ -134,10 +134,9 @@ describe('HUD grapple presentation', () => {
       grapple: { active: true, anchor: [0, 14, -69], ropeLength: 18.42, cooldown: 0, available: false, aim: null },
     })} />);
     expect(query('.grapple-readout').getAttribute('aria-label')).toBe('Grapple tethered');
-    expect(query('.grapple-copy').textContent).toContain('Q · PULL 18M');
+    expect(query('.grapple-readout strong').textContent).toBe('PULL 18M');
     expect(query('.crosshair').className).toContain('locked');
     expect(query('.hud').className).toContain('is-grappling');
-    expect(query('.chain-rail').textContent).toContain('HOOKED');
   });
 
   it('drains the cooldown meter proportionally while relinking', () => {
@@ -146,27 +145,58 @@ describe('HUD grapple presentation', () => {
     })} />);
     expect(query('.grapple-readout').getAttribute('aria-label')).toBe('Grapple relink');
     expect(query('.grapple-readout > i').style.transform).toBe('scaleX(0.5)');
+    expect(query('.grapple-readout strong').textContent).toBe('0.2');
     expect(query('.crosshair').className).toContain('cooldown');
   });
 
-  it('marks each movement-chain step from the snapshot availability flags', () => {
-    render(<Hud snapshot={snapshotFixture({
-      dashAvailable: false,
-      jumpCancelAvailable: true,
-      airCharge: 0,
-      wallJumpAvailable: false,
-      grapple: { active: false, anchor: null, ropeLength: 0, cooldown: 0.2, available: false, aim: null },
-    })} />);
-    const steps = [...container.querySelectorAll('.chain-step')].map((step) => step.className.includes('is-ready'));
-    expect(steps).toEqual([false, true, false, false, false]);
-    expect(query('.chain-rail').textContent).toContain('TOUCH GROUND OR WALL TO RECHARGE');
+  it('keeps the reticle cluster to the readouts a player acts on mid-air', () => {
+    render(<Hud snapshot={snapshotFixture()} ghost={{ deltaSeconds: -0.5, finished: false }} />);
+    const cluster = query('.flow-cluster');
+    // Hook state, chain and the ghost delta — and specifically not the five-chip
+    // chain rail that reported availability the multiplier already implies.
+    expect(cluster.querySelector('.grapple-readout')).not.toBeNull();
+    expect(cluster.querySelector('.combo-readout')).not.toBeNull();
+    expect(cluster.querySelector('.ghost-delta')).not.toBeNull();
+    expect(container.querySelector('.chain-rail')).toBeNull();
+    expect(container.querySelectorAll('.chain-step')).toHaveLength(0);
   });
 
-  it('advertises the wall-jump window ahead of the air-charge prompt', () => {
-    render(<Hud snapshot={snapshotFixture({ airCharge: 0, wallJumpAvailable: true })} />);
-    const steps = [...container.querySelectorAll('.chain-step')].map((step) => step.className.includes('is-ready'));
-    expect(steps[3]).toBe(true);
-    expect(query('.chain-rail').textContent).toContain('WALL CONTACT');
+  it('drops the modules that said the same number twice', () => {
+    render(<Hud snapshot={snapshotFixture()} />);
+    // Health kept its value and lost the twelve-segment meter; ammo kept its value
+    // and lost the pip track and the weapon strip; speed lost both of its readouts.
+    expect(query('.health-value strong').textContent).toBe('100');
+    expect(container.querySelector('.ui-meter')).toBeNull();
+    expect(query('.ammo-value strong').textContent).toBe('24');
+    expect(container.querySelector('.ammo-track')).toBeNull();
+    expect(container.querySelector('.hud .weapon-strip')).toBeNull();
+    expect(container.querySelector('.speed-readout')).toBeNull();
+    expect(container.querySelector('.speed-spectrum')).toBeNull();
+    expect(container.querySelector('.hud-telemetry')).toBeNull();
+  });
+
+  it('carries the objective, the hostiles left and the run clock on one top bar', () => {
+    render(<Hud snapshot={snapshotFixture({}, {
+      objective: 'Clear: Gallery',
+      entities: [
+        { id: 1, kind: 'player', position: [0, 1, 0], velocity: [0, 0, 0], rotationY: 0, grounded: true, aimPitch: 0, health: 100, maxHealth: 100 },
+        { id: 2, kind: 'bot', position: [4, 1, -8], velocity: [0, 0, 0], rotationY: 0, grounded: true, aimPitch: 0, health: 40, maxHealth: 100 },
+        { id: 3, kind: 'bot', position: [6, 1, -9], velocity: [0, 0, 0], rotationY: 0, grounded: true, aimPitch: 0, health: 0, maxHealth: 100 },
+      ],
+    })} />);
+    const bar = query('.hud-objective');
+    expect(bar.textContent).toContain('Clear: Gallery');
+    expect(query('.objective-count').textContent).toBe('01');
+    expect(query('.objective-count').getAttribute('aria-label')).toBe('1 hostile remaining');
+    expect(query('.objective-clock').textContent).toBe('1:13.50');
+  });
+
+  it('names the contract for the day on the top bar', () => {
+    render(<Hud snapshot={snapshotFixture()} modifier={{
+      id: 'glass', label: 'Glass cannon', description: 'Everything hits harder.',
+      favouredChassis: [], chassisBonus: 0.2, linkBonus: 0.1, enemy: {},
+    }} />);
+    expect(query('.objective-modifier').textContent).toContain('GLASS CANNON');
   });
 
   it('shows the ADS lock indicator only while a target is tracked', () => {
@@ -180,17 +210,17 @@ describe('HUD grapple presentation', () => {
     expect(query('.crosshair').className).toContain('target-locked');
   });
 
-  it('escalates the vitals module when health drops into the critical band', () => {
+  it('escalates the vitals corner when health drops into the critical band', () => {
     render(<Hud snapshot={snapshotFixture({ health: 18 })} />);
     expect(query('.hud').className).toContain('health-critical');
-    expect(query('.ui-meter').className).toContain('red');
-    expect(query('.ui-meter').getAttribute('aria-label')).toBe('HP: 18 of 100');
+    expect(query('.health-value').getAttribute('aria-label')).toBe('Health 18 of 100');
+    expect(query('.hud-health .corner-flag').textContent).toBe('CRITICAL');
   });
 });
 
 describe('hit feedback', () => {
-  const hit = (overrides: Partial<{ id: number; screen: readonly [number, number]; amount: number; headshot: boolean; kill: boolean }> = {}) => ({
-    id: 1, screen: [400, 300] as const, amount: 34, headshot: false, kill: false, ...overrides,
+  const hit = (overrides: Partial<{ id: number; screen: readonly [number, number]; amount: number; headshot: boolean; kill: boolean; deflected: boolean }> = {}) => ({
+    id: 1, screen: [400, 300] as const, amount: 34, headshot: false, kill: false, deflected: false, ...overrides,
   });
 
   it('raises the down panel with the redeploy prompt while awaiting respawn', () => {
@@ -209,12 +239,13 @@ describe('hit feedback', () => {
     expect(query('.hud').className).not.toContain('is-down');
   });
 
-  it('reports the run death count and flags it once it is non-zero', () => {
-    render(<Hud snapshot={snapshotFixture()} />);
-    expect(query('.run-deaths').className).not.toContain('has-deaths');
+  it('states the death count where the player is stopped rather than mid-flight', () => {
+    // The live counter left the HUD in the reduction; the down panel still charges
+    // the death, and the pause screen keeps the running total.
     render(<Hud snapshot={snapshotFixture({ deaths: 3 })} />);
-    expect(query('.run-deaths').textContent).toContain('3');
-    expect(query('.run-deaths').className).toContain('has-deaths');
+    expect(container.querySelector('.run-deaths')).toBeNull();
+    render(<Hud snapshot={snapshotFixture({ awaitingRespawn: true, deaths: 3, health: 0 })} />);
+    expect(query('.down-cost').textContent).toContain('Death 3');
   });
 
   it('shows the most recent checkpoint split', () => {
@@ -253,17 +284,18 @@ describe('hit feedback', () => {
     render(<Hud snapshot={snapshotFixture({ combo: { links: 4, multiplier: 1.4, window: 0.8, peakLinks: 6 } })} />);
     expect(query('.combo-multiplier').textContent).toBe('×1.4');
     expect(query('.combo-links').textContent).toBe('4 LINKS');
-    expect(query('.chain-rail').className).toContain('combo-live');
-    expect(query('.chain-status').textContent).toContain('PEAK 6');
+    expect(query('.combo-readout').className).toContain('combo-live');
+    expect(query('.combo-window').style.transform).toBe('scaleX(0.8)');
 
     render(<Hud snapshot={snapshotFixture({ combo: { links: 4, multiplier: 1.4, window: 0.2, peakLinks: 6 } })} />);
-    expect(query('.chain-rail').className).toContain('combo-lapsing');
+    expect(query('.combo-readout').className).toContain('combo-lapsing');
   });
 
-  it('shows an idle chain rail with nothing chained', () => {
+  it('says nothing but the multiplier while no chain is running', () => {
     render(<Hud snapshot={snapshotFixture()} />);
-    expect(query('.chain-rail').className).toContain('combo-idle');
-    expect(query('.combo-links').textContent).toBe('0 LINKS');
+    expect(query('.combo-readout').className).toContain('combo-idle');
+    expect(query('.combo-multiplier').textContent).toBe('×1.0');
+    expect(container.querySelector('.combo-links')).toBeNull();
   });
 
   it('points a threat wedge back at whoever fired', () => {
@@ -312,6 +344,16 @@ describe('hit feedback', () => {
     expect(query('.damage-number').className).toContain('is-kill');
   });
 
+  it('marks a hit a shield arc absorbed', () => {
+    render(<Hud snapshot={snapshotFixture()} hits={[hit({ id: 9, amount: 6, deflected: true })]} />);
+    expect(query('.hitmarker').className).toContain('is-deflected');
+    expect(query('.damage-number').className).toContain('is-deflected');
+    // A kill still reads as a kill, whatever ate the rounds before it.
+    render(<Hud snapshot={snapshotFixture()} hits={[hit({ id: 10, deflected: true, kill: true })]} />);
+    expect(query('.hitmarker').className).toContain('is-kill');
+    expect(query('.damage-number').className).not.toContain('is-deflected');
+  });
+
   it('renders one number per hit in a batch', () => {
     render(<Hud snapshot={snapshotFixture()} hits={[hit({ id: 1 }), hit({ id: 2, amount: 59 }), hit({ id: 3, amount: 12 })]} />);
     expect([...container.querySelectorAll('.damage-number')].map((node) => node.textContent)).toEqual(['34', '59', '12']);
@@ -321,18 +363,19 @@ describe('hit feedback', () => {
 });
 
 describe('health and ammo emphasis', () => {
-  it('flags a low magazine and sizes the pip track from the real capacity', () => {
+  it('flags a low magazine and still announces the real capacity', () => {
     render(<Hud snapshot={snapshotFixture({ ammo: 4, magazineSize: 30 })} />);
     expect(query('.hud').className).toContain('ammo-low');
-    expect(query('.hud-ammo .module-heading').textContent).toContain('LOW');
-    expect(query('.ammo-track').getAttribute('aria-label')).toBe('4 of 30 rounds in magazine');
-    expect(container.querySelectorAll('.ammo-track i.is-loaded')).toHaveLength(2);
+    expect(query('.hud-ammo .corner-flag').textContent).toBe('LOW');
+    expect(query('.ammo-value').getAttribute('aria-label')).toBe('4 of 30 rounds in magazine');
+    expect(query('.ammo-value').textContent).toBe('4/ 119');
   });
 
-  it('flags an empty magazine', () => {
+  it('flags an empty magazine and names the live weapon', () => {
     render(<Hud snapshot={snapshotFixture({ ammo: 0 })} />);
     expect(query('.hud').className).toContain('ammo-empty');
-    expect(query('.hud-ammo .module-heading').textContent).toContain('EMPTY');
+    expect(query('.hud-ammo .corner-flag').textContent).toBe('EMPTY');
+    expect(query('.ammo-weapon span').textContent).toBe('Carbine');
   });
 
   it('shows reload progress only while reloading', () => {
@@ -372,6 +415,29 @@ describe('gameplay overlay states', () => {
       expect(guide).toContain(binding);
     }
     expect(query('.enter-action').textContent).toContain('Enter run');
+  });
+
+  it('keeps the telemetry the HUD stopped drawing on the pause screen', () => {
+    render(<GameOverlay {...baseProps} screenState="standby" snapshot={snapshotFixture({ score: 1830, deaths: 2, health: 44, combo: { links: 0, multiplier: 1, window: 0, peakLinks: 7 } }, {
+      elapsedSeconds: 126.25,
+      entities: [
+        { id: 1, kind: 'player', position: [0, 1, 0], velocity: [0, 0, 0], rotationY: 0, grounded: true, aimPitch: 0, health: 44, maxHealth: 100 },
+        { id: 2, kind: 'bot', position: [4, 1, -8], velocity: [0, 0, 0], rotationY: 0, grounded: true, aimPitch: 0, health: 40, maxHealth: 100 },
+      ],
+      splits: [{ encounterId: 'arena-1', label: 'Atrium', seconds: 30.5 }],
+    })} />);
+    const status = query('.run-status').textContent ?? '';
+    expect(status).toContain('2:06.25');
+    expect(status).toContain('1,830');
+    expect(status).toContain('DEATHS');
+    expect(status).toContain('01');
+    expect(status).toContain('PEAK CHAIN');
+    // The twelve-segment vitals meter and the weapon strip live here now.
+    expect(query('.run-status .ui-meter').getAttribute('aria-label')).toBe('HP: 44 of 100');
+    expect(query('.run-status .weapon-strip').getAttribute('aria-label')).toBe('Carried weapons');
+    // Splits so far, with nothing to compare them against mid-run.
+    expect(query('.run-status .split-row .split-time').textContent).toBe('0:30.50');
+    expect(query('.run-status .split-row .split-delta').textContent).toBe('—');
   });
 
   it('presents completion telemetry rather than the standby guidance', () => {
@@ -561,13 +627,66 @@ describe('weapon builder', () => {
     expect(query('.builder-header h2').textContent).toBe(save.armory[0].name);
   });
 
-  it('fits a part and reports the change through onChange', () => {
+  /** Opens a slot on the bench and returns the cards that fit it. */
+  function openSlot(slot: string): HTMLButtonElement[] {
+    const tile = [...container.querySelectorAll<HTMLButtonElement>('.slot-tile')]
+      .find((candidate) => candidate.querySelector('.slot-name')?.textContent === slot);
+    act(() => tile!.click());
+    return [...container.querySelectorAll<HTMLButtonElement>('.part-card')];
+  }
+
+  it('fits a part from the bench and reports the change through onChange', () => {
     const { onChange } = open();
-    setFieldValue(query('select[aria-label="Magazine"]') as HTMLSelectElement, 'magazine.drum');
+    const drum = openSlot('Magazine').find((card) => card.textContent?.includes('Drum'));
+    act(() => drum!.click());
     const next = onChange.mock.calls.at(-1)![0] as SaveDataV4;
     expect(next.armory[0].parts.magazine).toBe('magazine.drum');
     // The drum should genuinely raise capacity once resolved.
     expect(resolveWeaponStats(next.armory[0]).magazineSize).toBeGreaterThan(resolveWeaponStats(saveFixture().armory[0]).magazineSize);
+  });
+
+  it('marks the slot the fitted part sits in and the card that is in it', () => {
+    const armory = [{ id: 'a', name: 'Long', chassisId: 'carbine' as const, parts: { barrel: 'barrel.long' } }];
+    open({ armory, loadout: ['a', 'a'] });
+    const barrelTile = [...container.querySelectorAll('.slot-tile')]
+      .find((tile) => tile.querySelector('.slot-name')?.textContent === 'Barrel');
+    expect(barrelTile?.className).toContain('is-fitted');
+    expect(barrelTile?.textContent).toContain('Long barrel');
+
+    const fitted = openSlot('Barrel').find((card) => card.getAttribute('aria-pressed') === 'true');
+    expect(fitted?.textContent).toContain('Long barrel');
+  });
+
+  it('states what each part would cost before it is fitted', () => {
+    open();
+    const long = openSlot('Barrel').find((card) => card.textContent?.includes('Long barrel'))!;
+    const effects = [...long.querySelectorAll('.part-effect')].map((effect) => effect.textContent ?? '');
+    // Reach is the reason to fit it and steadiness is the price, and both are named.
+    expect(effects.join(' ')).toContain('Range +40%');
+    expect(long.querySelector('.part-effect.is-better')?.textContent).toContain('Range');
+    expect(effects.some((effect) => /Hip spread/.test(effect))).toBe(true);
+    expect([...long.querySelectorAll('.part-effect.is-worse')].length).toBeGreaterThan(0);
+  });
+
+  it('previews a hovered part on the stat bars without committing it', () => {
+    const { onChange } = open();
+    const long = openSlot('Barrel').find((card) => card.textContent?.includes('Long barrel'))!;
+    act(() => long.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    const rangeRow = [...container.querySelectorAll('.stat-readout > div')]
+      .find((row) => row.querySelector('dt')?.textContent === 'Range');
+    expect(rangeRow?.querySelector('.stat-ghost')?.className).toContain('is-better');
+    // Hovering is not fitting.
+    expect(onChange).not.toHaveBeenCalled();
+
+    act(() => long.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })));
+    expect(container.querySelector('.stat-ghost')).toBeNull();
+  });
+
+  it('falls back to a plate when there is no 3D context to preview in', () => {
+    open();
+    // jsdom has no WebGL, which is the same path a browser that refuses a context takes.
+    expect(query('.weapon-stage').className).toContain('is-unavailable');
+    expect(query('.weapon-stage').getAttribute('aria-label')).toContain('unavailable');
   });
 
   it('clears fitted parts when the chassis changes, since slots differ', () => {

@@ -10,7 +10,7 @@ test('opens the menu and gameplay editor', async ({ page }) => {
 
 test('loads the game runtime shell', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
   await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(/wasd move/i)).toBeVisible();
 });
@@ -23,7 +23,7 @@ test('bakes editor navigation data in a worker', async ({ page }) => {
 
 test('persists camera accessibility settings', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
   await page.getByText(/camera & accessibility/i).click();
   await page.getByLabel('Field of view').fill('104');
   await page.getByRole('button', { name: /reduced motion preset/i }).click();
@@ -42,8 +42,8 @@ test('creates gameplay records in the editor', async ({ page }) => {
 test('shows grapple guidance, reduced motion, and responsive editorial UI', async ({ page }) => {
   await page.setViewportSize({ width: 780, height: 720 });
   await page.goto('/');
-  await expect(page.getByText(/cast the line/i)).toBeVisible();
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await expect(page.getByText(/grapple lines/i)).toBeVisible();
+  await page.getByRole('button', { name: /start run/i }).click();
   await expect(page.getByText(/F\s*HOOK/i)).toBeVisible({ timeout: 15_000 });
   await page.getByText(/camera & accessibility/i).click();
   await page.getByLabel('Reduced motion').check();
@@ -57,7 +57,7 @@ test('falls back to embedded-preview controls when pointer lock is rejected', as
     HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
   });
   await page.goto('/');
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
   await expect(page.getByText(/runtime fault/i)).toHaveCount(0);
@@ -83,7 +83,7 @@ test('shows a recoverable fault instead of a blank page when WebGL is unavailabl
     } as typeof HTMLCanvasElement.prototype.getContext;
   });
   await page.goto('/');
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
   await expect(page.getByText(/runtime fault/i)).toBeVisible();
   await page.getByRole('button', { name: /return to menu/i }).click();
   await expect(page.getByRole('heading', { name: /flow state/i })).toBeVisible();
@@ -95,18 +95,25 @@ test('drives the active HUD while input is captured', async ({ page }) => {
     HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
   });
   await page.goto('/');
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
+  await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
   await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
 
   const hud = page.locator('.hud');
   await expect(hud).toBeVisible();
+  // The reduced HUD: a reticle cluster, two corners, one top bar. Speed left the
+  // HUD entirely, so the live telemetry is read from the debug channel.
   await expect(page.getByLabel(/^grapple (armed|tethered|relink)$/i)).toBeVisible();
-  await expect(page.getByRole('group', { name: /movement chain availability/i })).toBeVisible();
+  await expect(page.locator('.flow-cluster .combo-multiplier')).toBeVisible();
   await expect(page.locator('.hud-ammo .ammo-value')).toContainText('30', { timeout: 20_000 });
+  await expect(page.locator('.hud-health .health-value')).toContainText('100');
 
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' })));
-  await expect(page.locator('.speed-readout strong')).not.toHaveText('0.0', { timeout: 20_000 });
+  await expect.poll(async () => {
+    const debug = await page.locator('.debug-panel').innerText();
+    return Number(debug.match(/speed\s+([\d.]+)/)?.[1] ?? 0);
+  }, { timeout: 20_000 }).toBeGreaterThan(0);
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' })));
   await expect(page.locator('.hud-objective')).toContainText(/clear|finish/i);
 });
@@ -165,7 +172,7 @@ test('resolves a double-tapped jump into a dash in the live runtime', async ({ p
     HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
   });
   await page.goto('/');
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /debug/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
   await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
@@ -188,7 +195,7 @@ test('resolves a double-tapped jump into a dash in the live runtime', async ({ p
     const debug = await page.locator('.debug-panel').innerText();
     return Number(debug.match(/speed\s+([\d.]+)/)?.[1] ?? 0);
   }, { timeout: 20_000 }).toBeGreaterThan(15);
-  await expect(page.getByRole('group', { name: /movement chain availability/i })).toContainText('WALL');
+  await expect(page.locator('.flow-cluster .combo-multiplier')).toBeVisible();
 });
 
 test('builds a weapon in the armory and carries it into a run', async ({ page }) => {
@@ -199,7 +206,11 @@ test('builds a weapon in the armory and carries it into a run', async ({ page })
 
   await page.getByLabel('Build name').fill('Breacher');
   await page.getByRole('tab', { name: 'Shotgun' }).click();
-  await page.getByLabel('Magazine').selectOption('magazine.extended');
+  // The bench fits parts by opening the slot and choosing a card, not by picking an
+  // option out of a dropdown.
+  await page.locator('.slot-tile', { hasText: 'Magazine' }).first().click();
+  await page.locator('.part-card', { hasText: 'Extended magazine' }).click();
+  await expect(page.locator('.part-card.is-fitted')).toContainText('Extended magazine');
   await page.getByRole('button', { name: 'Carry as 1' }).click();
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('flowstate-fps-save-v1') ?? '{}'));
@@ -209,7 +220,7 @@ test('builds a weapon in the armory and carries it into a run', async ({ page })
   expect(carried.parts.magazine).toBe('magazine.extended');
 
   await page.getByRole('button', { name: 'Done' }).click();
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
   await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: 20_000 });
   // 6 base shells with an extended magazine resolves to 9.
   // Uppercasing is a CSS transform, so match the underlying text.
@@ -223,21 +234,21 @@ test('swaps between the two carried weapons in the live runtime', async ({ page 
     HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
   });
   await page.goto('/');
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /enter run/i }).click();
   await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
 
-  const strip = page.getByRole('group', { name: /carried weapons/i });
-  await expect(strip.locator('span').first()).toHaveClass(/is-active/, { timeout: 20_000 });
+  const weapon = page.locator('.hud-ammo .ammo-weapon');
+  await expect(weapon).toContainText(/carbine/i, { timeout: 20_000 });
 
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit2' })));
-  await expect(strip.locator('span').nth(1)).toHaveClass(/is-active/, { timeout: 20_000 });
+  await expect(weapon).toContainText(/smg/i, { timeout: 20_000 });
   await expect(page.locator('.hud-ammo .ammo-value')).toContainText('40');
 });
 
 test('opens the gun builder from the pause overlay', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: /run white line/i }).click();
+  await page.getByRole('button', { name: /start run/i }).click();
   await page.getByRole('button', { name: /gun builder/i }).click({ timeout: 20_000 });
   await expect(page.getByText(/next checkpoint respawn/i)).toBeVisible();
   await page.getByRole('button', { name: 'Done' }).click();

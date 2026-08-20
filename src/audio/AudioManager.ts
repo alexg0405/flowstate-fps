@@ -62,6 +62,9 @@ export class AudioManager {
           break;
         case 'hit':
           if (this.isPlayer(event.targetEntityId, listener)) this.playerDamaged(event.value ?? 0);
+          // A shot the shield ate is a flat clank, well below the confirm blip: the
+          // player should hear that they connected and that it did not count.
+          else if (event.deflected) this.crack(420, 0.045, 0.035, 0);
           // Headshots ring higher than body hits so the confirmation is audible.
           else this.tone({ frequency: event.headshot ? 1180 : 640, duration: 0.035, gain: 0.055, type: 'square' }, 0, 0);
           break;

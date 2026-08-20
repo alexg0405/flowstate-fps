@@ -32,8 +32,13 @@ export const surfaceAccent = {
   default: palette.yellow,
 } as const;
 
-/** Hostiles read cyan or red; the player's own signals own the yellow. */
+/**
+ * Hostiles read cyan or red; the player's own signals own the yellow. The bulwark
+ * takes the hot yellow because its plate is the one hostile marking the player has
+ * to read *positionally* rather than just spot, and it is only ever worn by a shield.
+ */
 export const hostileAccent = {
   ranged: palette.cyan,
   aggressive: palette.red,
+  bulwark: palette.yellowHot,
 } as const;
