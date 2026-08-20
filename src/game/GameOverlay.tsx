@@ -77,6 +77,8 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
             {modifier && <ModifierBrief modifier={modifier} />}
             <div className="guide-heading"><span>Controls</span></div>
             <div className="control-guide">
+              <span><kbd>LMB</kbd> SLASH</span>
+              <span><kbd>RMB</kbd> SIDEARM</span>
               <span><kbd>WASD</kbd> MOVE</span>
               <span><kbd>SPACE</kbd> JUMP</span>
               <span><kbd>SPACE ×2</kbd> DASH</span>
@@ -84,10 +86,8 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
               <span><kbd>Q</kbd> PULL</span>
               <span><kbd>SPACE</kbd> WALL JUMP</span>
               <span><kbd>C</kbd> SLIDE</span>
-              <span><kbd>E</kbd> MELEE</span>
+              <span><kbd>V</kbd> AIM</span>
               <span><kbd>R</kbd> RELOAD</span>
-              <span><kbd>LMB</kbd> FIRE</span>
-              <span><kbd>RMB</kbd> ADS LOCK</span>
             </div>
             <SettingsPanel settings={settings} onChange={onSettingsChange} />
             <div className="overlay-actions">

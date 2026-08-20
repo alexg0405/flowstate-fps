@@ -13,7 +13,9 @@ const keyActions: Record<string, number> = {
   // Dash has no dedicated key: the simulation derives it from a double-tapped jump.
   KeyQ: Action.GrapplePull,
   KeyR: Action.Reload,
-  KeyE: Action.Melee,
+  // `Action.Melee` is deliberately unbound: the blade moved to the left mouse button
+  // and the bit is being held for the heavy that follows it.
+  KeyV: Action.Ads,
   KeyF: Action.Grapple,
   Digit1: Action.WeaponPrimary,
   Digit2: Action.WeaponSecondary,
@@ -174,14 +176,24 @@ export class InputController {
     this.recordRelease(action);
   };
 
+  /**
+   * Left is the blade, right is the sidearm. Aiming came off the mouse entirely and
+   * onto `KeyV`: with melee as the primary verb there are three attack-adjacent verbs
+   * and two mouse buttons, and the one a player uses least is the deliberate,
+   * stand-still zoom.
+   */
+  private mouseAction(button: number): number {
+    return button === 0 ? Action.Slash : button === 2 ? Action.Fire : 0;
+  }
+
   private onMouseDown = (event: MouseEvent): void => {
     if (!this.locked) return;
-    const action = event.button === 0 ? Action.Fire : event.button === 2 ? Action.Ads : 0;
+    const action = this.mouseAction(event.button);
     if (action) this.recordPress(action);
   };
 
   private onMouseUp = (event: MouseEvent): void => {
-    const action = event.button === 0 ? Action.Fire : event.button === 2 ? Action.Ads : 0;
+    const action = this.mouseAction(event.button);
     if (action) this.recordRelease(action);
   };
 

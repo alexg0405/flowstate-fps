@@ -445,12 +445,18 @@ describe('gameplay overlay states', () => {
     onExit: () => {},
   } as const;
 
-  it('shows the full keyboard guidance on standby, including the grapple binding', () => {
+  it('shows the full guidance on standby, leading with the blade', () => {
     render(<GameOverlay {...baseProps} screenState="standby" snapshot={snapshotFixture()} />);
     const guide = query('.control-guide').textContent ?? '';
-    for (const binding of ['WASD MOVE', 'SPACE JUMP', 'SPACE ×2 DASH', 'F HOOK', 'Q PULL', 'C SLIDE', 'E MELEE', 'R RELOAD']) {
+    // The blade is the primary verb, so it is the first thing the guide names, and
+    // the gun is the button next to it rather than the one under the index finger.
+    for (const binding of ['LMB SLASH', 'RMB SIDEARM', 'WASD MOVE', 'SPACE JUMP', 'SPACE ×2 DASH', 'F HOOK', 'Q PULL', 'C SLIDE', 'V AIM', 'R RELOAD']) {
       expect(guide).toContain(binding);
     }
+    expect(guide.indexOf('LMB SLASH')).toBeLessThan(guide.indexOf('RMB SIDEARM'));
+    // Melee is no longer a keyboard afterthought and aiming is no longer on the mouse.
+    expect(guide).not.toContain('E MELEE');
+    expect(guide).not.toContain('LMB FIRE');
     expect(query('.enter-action').textContent).toContain('Enter run');
   });
 

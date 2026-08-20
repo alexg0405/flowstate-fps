@@ -77,8 +77,6 @@ export const rifle: WeaponDefinition = {
   range: 140,
   hipSpread: 0.018,
   adsSpread: 0.003,
-  meleeDamage: 70,
-  meleeRange: 2.25,
   pellets: 1,
   adsZoom: 20,
   recoilPitch: 0.006,
@@ -88,6 +86,38 @@ export const rifle: WeaponDefinition = {
   bloomMax: 1.6,
   bloomRecovery: 2.2,
 };
+
+/**
+ * The blade, which is the primary verb.
+ *
+ * Every number here is larger than the melee stub it replaces, and the reason is the
+ * one risk this whole pivot turns on: judging reach in first person, with no visible
+ * arm and no visible blade, is genuinely hard, and a swing that misses because the
+ * player misread two metres as three teaches nothing. Ghostrunner's answer is a
+ * generous envelope plus assist, so:
+ *
+ * - **Reach** is 3.6 m rather than 2.25. Measured from the eye to the target capsule's
+ *   centre, so a hunter standing three metres away is comfortably inside it.
+ * - **The arc** is a 65-degree half-angle rather than the 56.6 the old stub used, which
+ *   means a target anywhere in the middle third of the screen is a legal hit.
+ * - **Recovery** is 0.24 s rather than 0.35, which is what makes the blade a rhythm
+ *   instead of a punctuation mark: about four swings a second held down.
+ * - **Damage** kills a ranged hunter or a brawler in two. Chipping a hundred-health
+ *   bot at seventy per swing was the old stub's real problem.
+ *
+ * A bulwark is deliberately not on that list: 65 into the plate is 11.7, so the blade
+ * cannot brute-force it and the answer stays the movement kit.
+ */
+export const melee = {
+  /** Recovery after a swing. The blade can be held down, so this is also its rate. */
+  slashSeconds: 0.24,
+  /** Reach, from the camera to the target capsule's centre. */
+  slashRange: 3.6,
+  /** Cosine of the half-angle the swing sweeps. */
+  slashArcCosine: Math.cos(1.13),
+  /** Damage per swing, before a shield arc scales it. */
+  slashDamage: 65,
+} as const;
 
 /**
  * Bot capsule geometry. The authored hunter models stand 2.06 m tall with their
@@ -120,8 +150,25 @@ export const botProfiles: Record<BotProfile['kind'], BotProfile> = {
     kind: 'ranged', health: 100, moveSpeed: 4.2, preferredRange: 18, fireInterval: 0.85, damage: 10,
     windupSeconds: 0.42, baseSpread: 0.012, spreadPerSpeed: 0.0055,
   },
+  /**
+   * The brawler closes to inside the blade's reach, and that is the whole point of
+   * the number.
+   *
+   * It used to stand off at five metres, which was correct for a game whose primary
+   * verb was a rifle and is fatal for one whose primary verb reaches 3.6 m: measured,
+   * a brawler that stopped at five metres took **zero** of twenty-two swings and
+   * killed the player, because it simply shot from outside the envelope while the
+   * blade cut air. At 2.4 m the same exchange is two swings, two seconds and fourteen
+   * damage taken -- an enemy that has to be answered rather than one that cannot be
+   * reached. `meleeStandoffFitsBlade` in `tests/meleeCombat.test.ts` holds the two
+   * numbers together so neither can be retuned alone.
+   *
+   * A side effect worth naming: `updateBotFire` gates on `preferredRange * 1.5`, so
+   * this also takes the brawler's gun away past 3.6 m. That is the right shape for it
+   * now -- its threat is proximity, and the ranged hunter is the one that shoots.
+   */
   aggressive: {
-    kind: 'aggressive', health: 120, moveSpeed: 6.2, preferredRange: 5, fireInterval: 0.6, damage: 14,
+    kind: 'aggressive', health: 120, moveSpeed: 6.2, preferredRange: 2.4, fireInterval: 0.6, damage: 14,
     windupSeconds: 0.28, baseSpread: 0.02, spreadPerSpeed: 0.0075,
   },
   /**

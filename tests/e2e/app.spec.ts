@@ -289,6 +289,32 @@ test('resolves a double-tapped jump into a dash in the live runtime', async ({ p
   await expect(page.locator('.flow-cluster .combo-multiplier')).toBeVisible();
 });
 
+test('slashes on the left mouse button in the live runtime', async ({ page }) => {
+  test.slow();
+  await page.addInitScript(() => {
+    HTMLCanvasElement.prototype.requestPointerLock = () => Promise.reject(new DOMException('Pointer lock unavailable in embedded preview.'));
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: /start run/i }).click();
+  await page.getByRole('button', { name: /debug/i }).click();
+  await page.getByRole('button', { name: /enter run/i }).click();
+  await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden();
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('state      grounded'), { timeout: 30_000 }).toBe(true);
+
+  // The blade is on the left button now, and it is held rather than clicked, so the
+  // action has to enter and stay in `melee` for as long as the button is down.
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent('mousedown', { button: 0 })));
+  await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('/ melee'), { timeout: 20_000 }).toBe(true);
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 0 })));
+
+  // And the sidearm is on the right button, which is what still spends a round.
+  const ammo = page.locator('.hud-ammo .ammo-value strong');
+  await expect(ammo).toHaveText('30', { timeout: 20_000 });
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent('mousedown', { button: 2 })));
+  await expect.poll(async () => Number(await ammo.innerText()), { timeout: 20_000 }).toBeLessThan(30);
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 2 })));
+});
+
 test('builds a weapon in the armory and carries it into a run', async ({ page }) => {
   test.slow();
   await page.goto('/');

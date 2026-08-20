@@ -22,7 +22,7 @@ import {
   type WeaponDefinition,
   type Vec3,
 } from '../contracts';
-import { aimAssist, botCapsule, botColliderBottom, botProfiles, comboScoring, movementProfile, playerCapsule, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
+import { aimAssist, botCapsule, botColliderBottom, botProfiles, comboScoring, melee, movementProfile, playerCapsule, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
 import { chassisMultiplier } from '../content/modifiers';
 import { defaultArmory, resolveWeaponStats } from '../content/weapons';
 import { NavigationService } from '../navigation/NavigationService';
@@ -352,7 +352,7 @@ export class FlowSimulation implements GameSimulation {
     // free; the cost of dying was already charged when it happened.
     if (this.player.locomotion === 'dead') {
       const downed: GameEvent[] = [];
-      if (input.pressed & (Action.Jump | Action.Fire)) this.respawn(downed);
+      if (input.pressed & (Action.Jump | Action.Fire | Action.Slash)) this.respawn(downed);
       return { snapshot: this.snapshot(), events: downed };
     }
     this.elapsedSeconds += dt;
@@ -1142,23 +1142,10 @@ export class FlowSimulation implements GameSimulation {
     if ((input.pressed & Action.Reload) && player.action !== 'melee' && slot.ammo < weapon.magazineSize && slot.reserveAmmo > 0) {
       this.startReload(events);
     }
-    if ((input.pressed & Action.Melee) && player.meleeTimer === 0) {
-      player.action = 'melee';
-      player.meleeTimer = 0.35;
-      const origin = this.cameraPosition();
-      const direction = directionFromLook(player.yaw, player.pitch);
-      const target = this.closestBotInArc(origin, direction, weapon.meleeRange);
-      events.push(this.event('melee', origin, undefined, undefined, {
-        sourceEntityId: player.id,
-        targetEntityId: target?.id,
-      }));
-      if (target) {
-        this.damageBot(target, weapon.meleeDamage, events, this.positionOf(target.body), {
-          sourceEntityId: player.id,
-          headshot: false,
-        });
-      }
-    }
+    // Held rather than pressed. The blade is the primary verb now, so holding the
+    // button has to produce a rhythm at the recovery rate instead of one swing per
+    // click -- clicking four times a second is not a control scheme.
+    if ((input.held & Action.Slash) && player.meleeTimer === 0) this.slash(events);
 
     const canFire = player.fireCooldown === 0 && player.weaponReadyTimer === 0
       && player.action !== 'reloading' && player.action !== 'melee';
@@ -1195,6 +1182,36 @@ export class FlowSimulation implements GameSimulation {
     } else if (player.action === 'firing' && player.fireCooldown === 0) {
       player.action = 'neutral';
     }
+  }
+
+  /**
+   * One swing of the blade.
+   *
+   * The whole of the reach, the arc and the damage are in `melee` in the content
+   * config, and every one of them is bigger than the stub this replaces -- see the
+   * comment there for why a generous envelope is the answer to first-person depth
+   * perception rather than a concession.
+   *
+   * The swing resolves against the nearest target inside the arc rather than along
+   * the look vector, which is the melee equivalent of the aim assist: the player
+   * points the blade at an enemy and the simulation decides where the edge landed.
+   */
+  private slash(events: GameEvent[]): void {
+    const player = this.player;
+    player.action = 'melee';
+    player.meleeTimer = melee.slashSeconds;
+    const origin = this.cameraPosition();
+    const direction = directionFromLook(player.yaw, player.pitch);
+    const target = this.closestBotInArc(origin, direction, melee.slashRange, melee.slashArcCosine);
+    events.push(this.event('melee', origin, undefined, undefined, {
+      sourceEntityId: player.id,
+      targetEntityId: target?.id,
+    }));
+    if (!target) return;
+    this.damageBot(target, melee.slashDamage, events, this.positionOf(target.body), {
+      sourceEntityId: player.id,
+      headshot: false,
+    });
   }
 
   /**
@@ -1653,7 +1670,12 @@ export class FlowSimulation implements GameSimulation {
     return !hit || hit.collider.handle === this.player.collider.handle;
   }
 
-  private closestBotInArc(origin: RAPIER.Vector, direction: RAPIER.Vector, range: number): BotState | null {
+  /**
+   * Nearest live bot inside a cone from `origin`. The cone is a parameter rather than
+   * the constant `0.55` it used to be, because the blade's arc is authored tuning now
+   * and the two callers want different widths.
+   */
+  private closestBotInArc(origin: RAPIER.Vector, direction: RAPIER.Vector, range: number, arcCosine: number): BotState | null {
     let nearest: BotState | null = null;
     let nearestDistance = range;
     for (const bot of this.bots) {
@@ -1664,7 +1686,7 @@ export class FlowSimulation implements GameSimulation {
       const dz = position.z - origin.z;
       const distance = Math.hypot(dx, dy, dz);
       const dot = (dx * direction.x + dy * direction.y + dz * direction.z) / Math.max(distance, 0.001);
-      if (distance < nearestDistance && dot > 0.55) {
+      if (distance < nearestDistance && dot > arcCosine) {
         nearest = bot;
         nearestDistance = distance;
       }
@@ -1842,7 +1864,7 @@ export class FlowSimulation implements GameSimulation {
     if (!this.player) return 0;
     const weapon = this.player.weapons[this.player.activeSlot].stats;
     if (this.player.action === 'reloading') return clamp(1 - this.player.reloadTimer / weapon.reloadSeconds, 0, 1);
-    if (this.player.action === 'melee') return clamp(1 - this.player.meleeTimer / 0.35, 0, 1);
+    if (this.player.action === 'melee') return clamp(1 - this.player.meleeTimer / melee.slashSeconds, 0, 1);
     if (this.player.action === 'firing') return clamp(1 - this.player.fireCooldown / (60 / weapon.roundsPerMinute), 0, 1);
     return 0;
   }

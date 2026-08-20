@@ -9,16 +9,12 @@ import type {
 
 export const weaponPartSlots: readonly WeaponPartSlot[] = ['optic', 'barrel', 'magazine', 'grip', 'stock'];
 
-/** Melee is a property of the operator, not the gun, so every chassis shares it. */
-const MELEE = { meleeDamage: 70, meleeRange: 2.25 } as const;
-
 export const weaponChassis: readonly WeaponChassisDefinition[] = [
   {
     id: 'carbine',
     label: 'Carbine',
     description: 'Balanced rate and reach. Forgiving at every range.',
     base: {
-      ...MELEE,
       magazineSize: 30, reserveAmmo: 120, roundsPerMinute: 720, reloadSeconds: 1.55,
       damage: 34, headshotMultiplier: 1.75, range: 140, hipSpread: 0.018, adsSpread: 0.003,
       pellets: 1, adsZoom: 20,
@@ -31,7 +27,6 @@ export const weaponChassis: readonly WeaponChassisDefinition[] = [
     label: 'SMG',
     description: 'Very high rate, low damage. Rewards staying close and moving.',
     base: {
-      ...MELEE,
       magazineSize: 40, reserveAmmo: 180, roundsPerMinute: 1020, reloadSeconds: 1.3,
       damage: 20, headshotMultiplier: 1.4, range: 70, hipSpread: 0.034, adsSpread: 0.012,
       pellets: 1, adsZoom: 12,
@@ -44,7 +39,6 @@ export const weaponChassis: readonly WeaponChassisDefinition[] = [
     label: 'Shotgun',
     description: 'Eight pellets per shell. Devastating inside a few metres.',
     base: {
-      ...MELEE,
       magazineSize: 6, reserveAmmo: 48, roundsPerMinute: 96, reloadSeconds: 2.4,
       damage: 13, headshotMultiplier: 1.25, range: 28, hipSpread: 0.085, adsSpread: 0.05,
       pellets: 8, adsZoom: 8,
@@ -57,7 +51,6 @@ export const weaponChassis: readonly WeaponChassisDefinition[] = [
     label: 'DMR',
     description: 'Slow, precise and hard-hitting, with the longest reach.',
     base: {
-      ...MELEE,
       magazineSize: 12, reserveAmmo: 72, roundsPerMinute: 260, reloadSeconds: 1.9,
       damage: 62, headshotMultiplier: 2.2, range: 220, hipSpread: 0.012, adsSpread: 0.0008,
       pellets: 1, adsZoom: 32,

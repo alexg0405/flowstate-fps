@@ -18,6 +18,11 @@ export const Action = {
   WeaponSecondary: 1 << 14,
   WeaponSwap: 1 << 15,
   GrapplePull: 1 << 16,
+  /**
+   * The blade. This is the primary verb: `Fire` is the sidearm now, and it moved to
+   * the right mouse button to make room for it.
+   */
+  Slash: 1 << 17,
 } as const;
 
 export interface InputFrame {
@@ -397,7 +402,14 @@ export interface AimAssistProfile {
   aimHeight: number;
 }
 
-/** Resolved stat block a weapon build produces, and the only shape the simulation reads. */
+/**
+ * Resolved stat block a weapon build produces, and the only shape the simulation reads.
+ *
+ * Melee is not in here. It used to be, as `meleeDamage` and `meleeRange` repeated
+ * identically on all four chassis, because melee belongs to the operator rather than
+ * to the gun. Now that the blade is the primary verb it is tuned once, in
+ * `content/config.ts`, and a gun build cannot change it.
+ */
 export interface WeaponDefinition {
   magazineSize: number;
   reserveAmmo: number;
@@ -408,8 +420,6 @@ export interface WeaponDefinition {
   range: number;
   hipSpread: number;
   adsSpread: number;
-  meleeDamage: number;
-  meleeRange: number;
   /** Projectiles fired per shot. Above one makes the shot a spread pattern. */
   pellets: number;
   /** Degrees of field of view removed while aiming down sights. */
