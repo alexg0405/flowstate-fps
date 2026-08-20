@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { GameEvent, SaveDataV1, SimulationSnapshot, WeaponChassisId, WeaponPartSlot } from '../../contracts';
 import { weaponPartSlots } from '../../content/weapons';
+import { palette } from '../palette';
 import { MaterialLibrary } from './MaterialLibrary';
 
 interface ExtendedPlayerPresentation {
@@ -9,12 +10,24 @@ interface ExtendedPlayerPresentation {
   actionProgress?: number;
 }
 
-/** Per-chassis proportions applied on top of the shared carbine geometry. */
-const CHASSIS_SHAPE: Record<WeaponChassisId, { width: number; length: number; barrel: number; bore: number; stock: boolean }> = {
-  carbine: { width: 1, length: 1, barrel: 1, bore: 1, stock: true },
-  smg: { width: 0.96, length: 0.9, barrel: 0.66, bore: 0.92, stock: false },
-  shotgun: { width: 1.07, length: 0.97, barrel: 0.9, bore: 1.32, stock: true },
-  dmr: { width: 0.97, length: 1.06, barrel: 1.38, bore: 1.04, stock: true },
+/** The builder's selection colour, matched to the slot tile that is open. */
+const HIGHLIGHT = '#7fdcff';
+
+/**
+ * Per-chassis identity. Proportions alone made four guns that read as one gun at
+ * four sizes, so each chassis also owns a silhouette feature and an accent colour:
+ * the shotgun a shell tube under the barrel, the SMG an exposed cell block, the DMR
+ * a dorsal heat spine. `feature` names the group that is switched on for it.
+ */
+const CHASSIS_SHAPE: Record<WeaponChassisId, {
+  width: number; length: number; barrel: number; bore: number; stock: boolean;
+  feature: 'none' | 'tube' | 'cell' | 'spine';
+  accent: string;
+}> = {
+  carbine: { width: 1, length: 1, barrel: 1, bore: 1, stock: true, feature: 'none', accent: palette.cyan },
+  smg: { width: 0.96, length: 0.9, barrel: 0.66, bore: 0.92, stock: false, feature: 'cell', accent: palette.red },
+  shotgun: { width: 1.07, length: 0.97, barrel: 0.9, bore: 1.32, stock: true, feature: 'tube', accent: palette.yellow },
+  dmr: { width: 0.97, length: 1.06, barrel: 1.38, bore: 1.04, stock: true, feature: 'spine', accent: palette.yellowHot },
 };
 
 export class ViewmodelPresenter {
@@ -30,6 +43,12 @@ export class ViewmodelPresenter {
   private readonly stockGroup = new THREE.Group();
   private readonly gripGroup = new THREE.Group();
   private readonly foreGrip = new THREE.Group();
+  /** Chassis silhouette features, one of which is switched on per chassis. */
+  private readonly shellTube = new THREE.Group();
+  private readonly cellBlock = new THREE.Group();
+  private readonly heatSpine = new THREE.Group();
+  /** Owned clone, so the chassis accent can be recoloured without touching the library. */
+  private accentMaterial!: THREE.MeshStandardMaterial;
   private appliedVisualKey = '';
   private readonly bolt = new THREE.Group();
   private readonly muzzleFlash = new THREE.Group();
@@ -42,6 +61,10 @@ export class ViewmodelPresenter {
   private readonly externalActions = new Map<string, THREE.AnimationAction>();
   /** Eased reload dip, so the pose is not applied as a step on the first tick. */
   private reloadPose = 0;
+  /** Slot the gun builder is editing, picked out on the model itself. */
+  private highlightedSlot: WeaponPartSlot | null = null;
+  private readonly highlightOriginals = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+  private readonly highlightClones = new Map<THREE.Material, THREE.Material>();
   private externalClip: string | null = null;
   private externalTransientClip: string | null = null;
   private externalTransientSeconds = 0;
@@ -79,7 +102,13 @@ export class ViewmodelPresenter {
 
     const chassis = CHASSIS_SHAPE[chassisId];
     // Keep the chassis deltas modest: the arms are posed for this body, so large
-    // rescaling pulls the weapon away from the hands.
+    // rescaling pulls the weapon away from the hands. What actually tells the four
+    // apart is the feature group and the accent, below.
+    this.shellTube.visible = chassis.feature === 'tube';
+    this.cellBlock.visible = chassis.feature === 'cell';
+    this.heatSpine.visible = chassis.feature === 'spine';
+    this.accentMaterial.color.set(chassis.accent);
+    this.accentMaterial.emissive.set(chassis.accent);
     this.rifle.scale.set(chassis.width, chassis.width, chassis.length);
     this.barrelGroup.scale.set(chassis.bore, chassis.bore, chassis.barrel);
     this.stockGroup.visible = chassis.stock;
@@ -119,6 +148,55 @@ export class ViewmodelPresenter {
   setHandsVisible(visible: boolean): void {
     this.leftArm.visible = visible;
     this.rightArm.visible = visible;
+  }
+
+  /**
+   * Lights up the part the builder is editing, so the slot list and the model agree
+   * about which piece of the gun is under discussion.
+   *
+   * The tint is a per-material clone rather than a change to the shared library
+   * material: the optic and the barrel are both gunmetal, and recolouring gunmetal
+   * would light up half the weapon. Originals are kept so moving slots restores them
+   * exactly, and the clones are disposed with the presenter.
+   */
+  highlightSlot(slot: WeaponPartSlot | null): void {
+    if (slot === this.highlightedSlot) return;
+    for (const [mesh, material] of this.highlightOriginals) mesh.material = material;
+    this.highlightOriginals.clear();
+    this.highlightedSlot = slot;
+    if (!slot) return;
+    for (const group of this.slotGroups(slot)) {
+      group.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        this.highlightOriginals.set(object, object.material);
+        object.material = Array.isArray(object.material)
+          ? object.material.map((entry) => this.highlightMaterial(entry))
+          : this.highlightMaterial(object.material);
+      });
+    }
+  }
+
+  /** Which pieces of the model a builder slot owns. */
+  private slotGroups(slot: WeaponPartSlot): readonly THREE.Object3D[] {
+    if (slot === 'optic') return [this.opticGroup];
+    if (slot === 'barrel') return [this.barrelGroup];
+    if (slot === 'magazine') return [this.magazine];
+    if (slot === 'grip') return [this.gripGroup, this.foreGrip];
+    return [this.stockGroup];
+  }
+
+  private highlightMaterial(source: THREE.Material): THREE.Material {
+    const existing = this.highlightClones.get(source);
+    if (existing) return existing;
+    const clone = source.clone();
+    if (clone instanceof THREE.MeshStandardMaterial) {
+      clone.emissive.set(HIGHLIGHT);
+      clone.emissiveIntensity = 0.9;
+      clone.color.lerp(new THREE.Color(HIGHLIGHT), 0.3);
+    }
+    this.highlightClones.set(source, clone);
+    this.generatedMaterials.push(clone);
+    return clone;
   }
 
   setExternalModel(model: THREE.Object3D | null, animations: readonly THREE.AnimationClip[] = []): void {
@@ -313,7 +391,11 @@ export class ViewmodelPresenter {
     const ceramic = this.materials.get('ceramic');
     const gunmetal = this.materials.get('gunmetal');
     const carbon = this.materials.get('carbon');
-    const accent = this.materials.get('red-light');
+    // The accent is a clone the presenter owns, so a chassis can recolour every lit
+    // seam on the weapon at once without recolouring the shared library material.
+    this.accentMaterial = this.materials.get('cyan-light').clone() as THREE.MeshStandardMaterial;
+    this.generatedMaterials.push(this.accentMaterial);
+    const accent = this.accentMaterial;
     this.rifle.position.set(0.15, -0.19, -1.02);
 
     const upper = this.extrudedReceiver();
@@ -421,6 +503,9 @@ export class ViewmodelPresenter {
     decal.rotation.y = Math.PI / 2;
     this.rifle.add(decal);
 
+    this.buildCyberDetail(carbon, gunmetal, accent);
+    this.buildChassisFeatures(carbon, gunmetal, accent);
+
     this.muzzleSocket.position.set(0, 0, -1.54);
     this.grappleSocket.position.set(-0.12, 0.06, -0.73);
     this.muzzleLight.position.copy(this.muzzleSocket.position);
@@ -430,6 +515,105 @@ export class ViewmodelPresenter {
     this.rifle.traverse((object) => {
       if (object instanceof THREE.Mesh) object.castShadow = true;
     });
+  }
+
+  /**
+   * The parts that make it read as *this* game's gun rather than a grey rifle: a lit
+   * ammunition readout on the receiver, seams along the body, and a cable from the
+   * receiver into the stock. All of it takes the chassis accent, so swapping chassis
+   * recolours the whole weapon.
+   */
+  private buildCyberDetail(carbon: THREE.Material, gunmetal: THREE.Material, accent: THREE.Material): void {
+    // A counter panel on the left of the receiver, angled toward the player's eye.
+    const panelHousing = this.rounded(0.02, 0.12, 0.2, 0.008, carbon);
+    panelHousing.position.set(-0.128, 0.055, 0.3);
+    const panel = this.rounded(0.008, 0.085, 0.15, 0.004, accent);
+    panel.position.set(-0.142, 0.055, 0.3);
+    this.rifle.add(panelHousing, panel);
+    // Three readout bars on the panel, so it looks like it is displaying something.
+    for (let index = 0; index < 3; index += 1) {
+      const bar = this.rounded(0.004, 0.012, 0.1 - index * 0.022, 0.002, accent);
+      bar.position.set(-0.148, 0.085 - index * 0.03, 0.3);
+      this.rifle.add(bar);
+    }
+
+    // Seams down both sides of the receiver and along the top of the handguard.
+    for (const x of [-0.118, 0.118]) {
+      const seam = this.rounded(0.006, 0.014, 0.46, 0.003, accent);
+      seam.position.set(x, -0.045, 0.26);
+      this.rifle.add(seam);
+    }
+    const spineSeam = this.rounded(0.03, 0.008, 0.5, 0.003, accent);
+    spineSeam.position.set(0, 0.128, -0.42);
+    this.rifle.add(spineSeam);
+
+    // A cable from the receiver into the stock. Cyberpunk guns are plumbed.
+    const cable = new THREE.Mesh(
+      new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3([
+          new THREE.Vector3(-0.1, -0.02, 0.36),
+          new THREE.Vector3(-0.16, -0.12, 0.6),
+          new THREE.Vector3(-0.12, -0.06, 0.86),
+          new THREE.Vector3(-0.04, -0.03, 1.0),
+        ]),
+        18, 0.014, 6, false,
+      ),
+      gunmetal,
+    );
+    this.rifle.add(cable);
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.02, 0.006, 6, 12), accent);
+    collar.position.set(-0.1, -0.02, 0.36);
+    collar.rotation.y = Math.PI / 2;
+    this.rifle.add(collar);
+  }
+
+  /**
+   * One silhouette feature per chassis, switched by `applyBuild`. Built once and
+   * toggled rather than rebuilt, so changing chassis costs no allocation.
+   */
+  private buildChassisFeatures(carbon: THREE.Material, gunmetal: THREE.Material, accent: THREE.Material): void {
+    // Shotgun: a shell tube slung under the barrel, with a pump collar.
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.86, 12), gunmetal);
+    tube.rotation.x = Math.PI / 2;
+    tube.position.set(0, -0.115, -0.62);
+    const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.072, 0.2, 12), carbon);
+    pump.rotation.x = Math.PI / 2;
+    pump.position.set(0, -0.115, -0.44);
+    const shellGlow = this.rounded(0.012, 0.016, 0.5, 0.004, accent);
+    shellGlow.position.set(0.052, -0.115, -0.66);
+    this.shellTube.add(tube, pump, shellGlow);
+    this.rifle.add(this.shellTube);
+
+    // SMG: an exposed cell block canted off the left of the receiver.
+    const cellHousing = this.rounded(0.11, 0.16, 0.26, 0.03, carbon);
+    cellHousing.position.set(-0.14, -0.02, 0.06);
+    cellHousing.rotation.z = 0.24;
+    this.cellBlock.add(cellHousing);
+    for (let index = 0; index < 3; index += 1) {
+      const cell = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.2, 10), accent);
+      cell.rotation.x = Math.PI / 2;
+      cell.position.set(-0.19, -0.02 + (index - 1) * 0.05, 0.06);
+      this.cellBlock.add(cell);
+    }
+    this.rifle.add(this.cellBlock);
+
+    // DMR: a dorsal heat spine with lit gaps between the fins.
+    const spineRail = this.rounded(0.05, 0.05, 0.62, 0.014, gunmetal);
+    spineRail.position.set(0, 0.15, -0.5);
+    this.heatSpine.add(spineRail);
+    for (let index = 0; index < 7; index += 1) {
+      const fin = this.rounded(0.14, 0.075, 0.022, 0.006, gunmetal);
+      fin.position.set(0, 0.185, -0.24 - index * 0.078);
+      this.heatSpine.add(fin);
+      const gap = this.rounded(0.1, 0.012, 0.03, 0.003, accent);
+      gap.position.set(0, 0.15, -0.28 - index * 0.078);
+      this.heatSpine.add(gap);
+    }
+    const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.075, 0.22, 10), gunmetal);
+    brake.rotation.x = Math.PI / 2;
+    brake.position.z = -1.6;
+    this.heatSpine.add(brake);
+    this.rifle.add(this.heatSpine);
   }
 
   private buildMagazine(): void {

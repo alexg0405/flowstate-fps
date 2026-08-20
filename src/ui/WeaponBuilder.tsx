@@ -197,7 +197,7 @@ export function WeaponBuilder({ save, onChange, onClose, deferredNotice = false,
             options={weaponChassis.map((entry) => ({ id: entry.id, label: entry.label }))}
             onChange={(chassisId: WeaponChassisId) => commit({ ...build, chassisId, parts: {} })}
           />
-          <WeaponPreview chassisId={build.chassisId} parts={build.parts} reducedMotion={reducedMotion} />
+          <WeaponPreview chassisId={build.chassisId} parts={build.parts} activeSlot={activeSlot} reducedMotion={reducedMotion} />
           <p className="bench-chassis muted">{chassis?.description}</p>
 
           <div className="slot-rail" role="group" aria-label="Attachment slots">

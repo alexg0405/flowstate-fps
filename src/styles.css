@@ -1022,3 +1022,72 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
   .health-value strong,.ammo-value strong{ font-size: 1.8rem; }
   .run-status .run-brief{ grid-template-columns: repeat(3,1fr); }
 }
+
+/* Display type. The wordmark's treatment -- heavy condensed face, hollow fill, a
+   coloured outline and two hard offsets in two more palette colours -- generalised so
+   the rest of the interface reads as the same object rather than as a caption under a
+   logo. Offsets are in `em` so one rule works at 8rem and at 1rem.
+
+   Two tiers, because the full hollow treatment needs size to survive: `display-cut`
+   for anything above about a rem, `display-edge` -- solid fill, one offset -- for the
+   small tracked-out labels, which would turn to mush hollowed out at 7px. */
+.display-cut,
+.menu-actions .action-secondary .action-copy strong,
+.contract-heading strong,
+.protocol-strip li b,
+.run-record header p,
+.record-time strong,
+.start-card h1,
+.builder-header h2 {
+  font-family: Impact, 'Arial Narrow', sans-serif;
+  font-weight: 900;
+  letter-spacing: .02em;
+  color: transparent;
+  -webkit-text-stroke: .04em var(--cyber-yellow);
+  text-shadow: .09em .07em 0 var(--cyber-red), -.03em -.025em 0 var(--cyber-cyan);
+}
+
+.display-edge,
+.menu-actions .action-copy small,
+.protocol-strip li span,
+.contract-heading .micro-label,
+.contract-heading small,
+.run-record .record-stats dt,
+.record-empty {
+  font-family: Impact, 'Arial Narrow', sans-serif;
+  font-weight: 900;
+  color: var(--cyber-paper);
+  text-shadow: .06em .05em 0 var(--cyber-red);
+}
+/* An empty record still has to be readable, so it takes the cool offset rather than
+   the red one it would otherwise share with the label above it. */
+.record-empty { font-size: .78rem; letter-spacing: .1em; text-shadow: .05em .04em 0 var(--cyber-cyan); }
+
+/* The variance: each block takes a different colour off the same three. */
+.contract-heading strong { -webkit-text-stroke-color: var(--cyber-cyan); text-shadow: .09em .07em 0 var(--cyber-yellow), -.03em -.025em 0 var(--cyber-red); }
+.protocol-strip li b { font-size: 1.05rem; -webkit-text-stroke-color: var(--cyber-red); text-shadow: .09em .07em 0 var(--cyber-cyan); }
+.protocol-strip li span { color: var(--cyber-paper); font-size: .62rem; letter-spacing: .14em; text-shadow: .06em .05em 0 var(--cyber-cyan); }
+.run-record header p { font-size: 1.15rem; -webkit-text-stroke-color: var(--cyber-cyan); text-shadow: .09em .07em 0 var(--cyber-red); }
+.record-time strong { -webkit-text-stroke-color: var(--cyber-yellow); text-shadow: .07em .06em 0 var(--cyber-cyan), -.025em -.02em 0 var(--cyber-red); }
+.run-record .record-stats dt { color: var(--cyber-dim); text-shadow: none; }
+.menu-actions .action-secondary:first-of-type .action-copy strong { -webkit-text-stroke-color: var(--cyber-cyan); text-shadow: .09em .07em 0 var(--cyber-yellow), -.03em -.025em 0 var(--cyber-red); }
+
+/* The primary action sits on a yellow fill, so it takes the ink solid with a light
+   offset instead: a hollow glyph on yellow has nothing to read against. */
+.menu-actions .action-primary .action-copy strong {
+  font-family: Impact, 'Arial Narrow', sans-serif;
+  font-weight: 900;
+  color: var(--cyber-ink);
+  text-shadow: .05em .04em 0 rgba(255,255,255,.55);
+}
+.menu-actions .action-primary .action-copy small { color: var(--cyber-ink); text-shadow: .05em .04em 0 rgba(255,255,255,.4); }
+
+/* Sizes, so the outline has room to read. */
+.menu-actions .action-copy strong { font-size: 1.15rem; letter-spacing: .04em; }
+/* The subtitle carries a lighter offset than the title: tracked-out small caps go
+   muddy under a hard shadow the size the heading wears. */
+.menu-actions .action-copy small { font-size: .66rem; letter-spacing: .1em; opacity: .85; text-shadow: .035em .03em 0 rgba(255,45,85,.55); }
+.contract-heading strong { font-size: 1.5rem; }
+.contract-heading .micro-label, .contract-heading small { font-size: .62rem; letter-spacing: .13em; }
+.contract-heading small { color: var(--cyber-dim); text-shadow: none; }
+.start-card h1, .builder-header h2 { -webkit-text-stroke-width: .022em; }

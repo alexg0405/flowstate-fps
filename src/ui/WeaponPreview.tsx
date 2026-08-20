@@ -35,6 +35,8 @@ function visibleBounds(root: THREE.Object3D, target: THREE.Box3): THREE.Box3 {
 interface WeaponPreviewProps {
   chassisId: WeaponChassisId;
   parts: Partial<Record<WeaponPartSlot, string>>;
+  /** Slot the bench is editing; its part is lit up on the model. */
+  activeSlot?: WeaponPartSlot | null;
   reducedMotion?: boolean;
 }
 
@@ -49,7 +51,7 @@ interface WeaponPreviewProps {
  * pause overlay and from a jsdom test, and none of those may fail because a context
  * could not be created -- the bench falls back to a static plate.
  */
-export function WeaponPreview({ chassisId, parts, reducedMotion = false }: WeaponPreviewProps) {
+export function WeaponPreview({ chassisId, parts, activeSlot = null, reducedMotion = false }: WeaponPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const presenterRef = useRef<ViewmodelPresenter | null>(null);
   const frameRef = useRef<(() => void) | null>(null);
@@ -205,6 +207,10 @@ export function WeaponPreview({ chassisId, parts, reducedMotion = false }: Weapo
     presenterRef.current?.applyBuild(chassisId, parts);
     frameRef.current?.();
   }, [chassisId, parts]);
+
+  useEffect(() => {
+    presenterRef.current?.highlightSlot(activeSlot);
+  }, [activeSlot, chassisId, parts]);
 
   if (!available) {
     return (
