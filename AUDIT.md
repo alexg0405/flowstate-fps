@@ -1760,6 +1760,51 @@ rendering cases.
   derive it from `migrateSaveData`.
 - Trap 11 is **done**. There is a volume control, and it is the first row of the settings
   grid.
+### The e2e suite, corrected: five of the ten failures were mine
+
+The full suite was run at the end and came back **41 passed / 10 failed / 3 skipped** in
+14.6 minutes. The ten are five cases in two browsers, and they split cleanly:
+
+**Three were mine, and are fixed.** Two cases open the settings panel by clicking its
+summary text, and job 0 renamed that summary to *Camera, sound & accessibility* when it
+gained the volume row. One reads the ammo corner for a magazine count at rest, where job 2
+made the corner say `BLADE`. All three now pass -- and they are the cost of not running the
+whole suite between jobs: the targeted subsets I ran covered what I *thought* I had touched,
+and a renamed string is not on that list.
+
+**Two are older than this pass**, and they are the interesting ones -- see below.
+
+### A route deadlock, and the previous section's claim about isolation was wrong
+
+`freezes the frame on a landed blow` and `never freezes the frame with reduced motion on`
+both fail inside `fightIntoTheAtrium`, at `expect(await hostiles()).toBeLessThan(2)`. They
+fail **in isolation on an idle machine**, and they fail **identically at `f35050b`** -- the
+commit before this pass, built and run in a clean worktree. So section 15's "every failing
+case passes in isolation" was not true of these two, and the load-average explanation does
+not cover them.
+
+What actually happens, instrumented sweep by sweep at 1280x720:
+
+| | hostiles left | wave | player health | player position |
+| --- | --- | --- | --- | --- |
+| after 1 s of blade | 3 | W1/2 | 114 | `0.0 2.9 -41.3` |
+| after 4 s of blade | **2** | W1/2 | 107 | `0.0 2.9 -41.3` |
+| after 24 sweeps of blade (6 s) | 2 | W1/2 | 107 | `0.0 2.9 -41.3` |
+| after 16 further sweeps of *sustained gunfire* | 2 | W1/2 | 107 | `0.0 2.9 -41.3` |
+
+Nothing moves. Two hostiles of wave 1 are alive and `active` -- they are in the snapshot, so
+the HUD counts them -- and from `z = -41.3` the player cannot reach them with a 3.6 m blade,
+cannot hit them with a 140 m rifle across sixteen sweeps of yaw, and takes not one point of
+damage from them. The room never advances to wave 2, so the encounter cannot complete.
+
+That is a **soft-lock in the shipped route**, not a test problem, and it is the first thing I
+would fix next. The obvious suspects are the interaction between `botLeashMetres` (22 m from
+a hostile's own spawn) and where the player stops on entering the Atrium, or line of sight
+through the arena's own geometry -- both of which would leave exactly this signature: alive,
+active, unreachable, and harmless. It wants the two hostiles' ids and positions dumped from
+the debug channel, which is a ten-minute job with `?scene=` and the position line that
+section 15 added for exactly this kind of hunt.
+
 ### A bug this pass did not cause and did not fix
 
 **Holding the blade button makes the sidearm unusable.** Reported by the player as "whenever
@@ -1786,6 +1831,39 @@ while `Action.Fire` is held.** The current swing still finishes, the held-slash 
 unchanged, the heavy on `E` keeps its priority as the deliberate verb, and a player with the
 left button down who presses the right one gets a shot 0.24 s later. That is a change to the
 control scheme rather than a defect fix, so it is written down here rather than taken.
+
+### Mobile, measured rather than asserted
+
+The player's report is that the game is not mobile compatible. Measured on a 390x844
+viewport at device pixel ratio 3, with touch, `isMobile`, and an Android Chrome user agent:
+
+- **The run boots and steps.** No page errors, the standby card comes down, the HUD renders
+  and the clock advances -- through the `softLocked` fallback in `InputController`, because
+  Pointer Lock is either absent or refused. That fallback, written for embedded previews, is
+  the seam a touch scheme would attach to.
+- **There is no touch input at all.** `InputController` listens for `keydown`, `keyup`,
+  `mousedown`, `mouseup` and `mousemove`, and nothing else. No stick, no look drag, no
+  buttons: a phone can start a run, stand still in it, and nothing more.
+- **It runs at roughly a tenth of real time** in this emulation -- 0.34 s of run clock in
+  3 s of wall clock. 390x844 at DPR 3 is a 1170x2532 backbuffer, close to 3 megapixels,
+  against a route that measures 307 draw calls and 130k triangles with eight hostiles up.
+  `ResolutionController` and the graphics-quality setting exist and would carry a lot of
+  this, but a phone needs its own profile and probably a DPR cap.
+- **The play frame collides at that width.** The objective line renders *underneath* the
+  `SIM/LINK`, `DEBUG` and `EXIT` chrome, and on the menu the action buttons run off the
+  right edge -- `Gun builder` is clipped and `Gameplay editor` is off-screen entirely. The
+  stylesheet's smallest breakpoint is 900 px; nothing has been designed under it.
+- **Portrait is the wrong shape.** A 92-degree vertical FOV in a 390x844 window is a
+  letterbox on its side. Landscape plus fullscreen, and probably an orientation prompt, is
+  the target.
+- **The touch niceties are all absent**: no `touch-action`, no `overscroll-behavior`, no
+  `env(safe-area-inset-*)`, no `user-select` guards. Pull-to-refresh and double-tap zoom
+  would both fire mid-fight.
+
+So "not mobile compatible" is accurate, and the order of work is: an input scheme first
+(nothing else matters without one), then landscape and fullscreen, then a phone performance
+profile, then the play frame under 900 px. It is a feature, not a defect -- three to five
+sessions of work, and worth deciding whether the game wants it before starting.
 
 - The three visual baselines were not regenerated and did not need to be. If a future audio
   or HUD pass moves them, something is wrong -- that inference is still good.

@@ -118,7 +118,7 @@ test('bakes editor navigation data in a worker', async ({ page }) => {
 test('persists camera accessibility settings', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: /start run/i }).click();
-  await page.getByText(/camera & accessibility/i).click();
+  await page.getByText(/camera, sound & accessibility/i).click();
   await page.getByLabel('Field of view').fill('104');
   await page.getByRole('button', { name: /reduced motion preset/i }).click();
   const settings = await page.evaluate(() => JSON.parse(localStorage.getItem('flowstate-fps-save-v1') ?? '{}').settings);
@@ -139,7 +139,7 @@ test('shows grapple guidance, reduced motion, and responsive editorial UI', asyn
   await expect(page.getByText(/grapple lines/i)).toBeVisible();
   await page.getByRole('button', { name: /start run/i }).click();
   await expect(page.getByText(/F\s*HOOK/i)).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
-  await page.getByText(/camera & accessibility/i).click();
+  await page.getByText(/camera, sound & accessibility/i).click();
   await page.getByLabel('Reduced motion').check();
   const reducedMotion = await page.evaluate(() => JSON.parse(localStorage.getItem('flowstate-fps-save-v1') ?? '{}').settings?.reducedMotion);
   expect(reducedMotion).toBe(true);
@@ -200,7 +200,12 @@ test('drives the active HUD while input is captured', async ({ page }) => {
   // HUD entirely, so the live telemetry is read from the debug channel.
   await expect(page.getByLabel(/^grapple (armed|tethered|relink)$/i)).toBeVisible();
   await expect(page.locator('.flow-cluster .combo-multiplier')).toBeVisible();
-  await expect(page.locator('.hud-ammo .ammo-value')).toContainText('30', { timeout: 20_000 });
+  // The corner is about whatever is in the player's hands, and at rest that is the blade.
+  // The magazine is the sidearm's, and it appears when the sidearm does.
+  await expect(page.locator('.hud-ammo .ammo-value')).toContainText('BLADE', { timeout: 20_000 });
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent('mousedown', { button: 2 })));
+  await expect(page.locator('.hud-ammo .ammo-weapon')).toContainText(/carbine/i, { timeout: 20_000 });
+  await page.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 2 })));
   // Read from the tuning rather than hardcoded: the crowd pass moved the pool from 100
   // to 140, and a HUD test that names the number is a HUD test that breaks every time
   // the balance does.
