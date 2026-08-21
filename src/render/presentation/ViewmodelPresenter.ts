@@ -88,13 +88,6 @@ export class ViewmodelPresenter {
   private lateralRecoil = 0;
   private muzzleEnergy = 0;
   private grappleKick = 0;
-  /**
-   * Seconds the sidearm stays on screen after it is used. The blade is the primary verb
-   * and what the player sees at rest; the gun is what comes up when they fire it and
-   * goes away again, which is the only honest way to show a loadout of two weapons on
-   * one pair of hands.
-   */
-  private gunHold = 0;
   /** Progress through the current swing, and whether it was the heavy. */
   private swingHeavy = false;
   private swingActive = false;
@@ -304,9 +297,6 @@ export class ViewmodelPresenter {
         this.swingHeavy = event.heavy === true;
         this.swingActive = true;
       } else if (event.kind === 'shot') {
-        // Firing brings the sidearm up and keeps it up for a beat, so a burst does not
-        // flicker between the two weapons.
-        this.gunHold = 0.95;
         this.recoil = Math.min(1, this.recoil + 0.72);
         this.lateralRecoil = ((event.id * 16807) % 1000 / 1000 - 0.5) * 0.016;
         this.muzzleEnergy = 1;
@@ -352,14 +342,11 @@ export class ViewmodelPresenter {
     else this.playExternalClip('vm_idle', 0.12, true);
     this.externalMixer?.update(deltaSeconds);
 
-    // Which weapon is in frame. The blade is what the hands hold; the sidearm comes up
-    // when it is used -- fired, or being reloaded -- and drops away again. Reload counts
-    // because a gun the player cannot see cannot be seen reloading, and the reload pose
-    // this presenter already runs is the clearest thing it does.
-    const usingGun = snapshot.player.action === 'firing' || snapshot.player.action === 'reloading';
-    if (usingGun) this.gunHold = Math.max(this.gunHold, 0.95);
-    this.gunHold = Math.max(0, this.gunHold - deltaSeconds);
-    const gunVisible = !this.bladeAllowed || this.gunHold > 0;
+    // Which weapon is in frame, and it is read rather than decided. This used to be a
+    // private 0.95 s timer in here, which meant the HUD had no way to agree with it --
+    // and the ammo corner said `CARBINE 30/120` over a blade for as long as that lasted.
+    // `player.weapons.inHand` is the simulation's answer and both layers read it.
+    const gunVisible = !this.bladeAllowed || snapshot.player.weapons.inHand === 'gun';
     this.blade.visible = this.bladeAllowed && !gunVisible;
     if (this.externalModel) this.externalModel.visible = gunVisible;
     else this.rifle.visible = gunVisible;

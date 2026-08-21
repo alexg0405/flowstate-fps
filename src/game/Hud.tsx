@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { RunModifier, SimulationSnapshot } from '../contracts';
+import { bladeStyle } from '../content/blades';
 import { movementProfile, runScoring } from '../content/config';
 import type { ChainOvation, DamageFeedback, DodgeMark, GhostStanding, HitFeedback } from '../runtime/GameRuntime';
 import { formatTime } from './format';
@@ -59,10 +60,17 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
   const invulnerable = snapshot.player.dodge.invulnerable;
   const magazineSize = Math.max(1, snapshot.player.magazineSize);
   const ammoFraction = snapshot.player.ammo / magazineSize;
-  const ammoState = snapshot.player.ammo === 0 ? 'empty' : ammoFraction <= 0.25 ? 'low' : 'nominal';
   const reloading = snapshot.player.action === 'reloading';
-  // The weapon strip moved to the pause screen, so the corner names the live gun.
+  // What is actually in the player's hands, read from the simulation rather than guessed.
+  // The corner used to name the active gun and its magazine unconditionally, so it read
+  // `CARBINE 30/120` while a blade was on screen -- and it could not have been fixed here
+  // alone, because the decision was a private timer inside `ViewmodelPresenter`.
+  const gunInHand = snapshot.player.weapons.inHand === 'gun';
+  const blade = bladeStyle(snapshot.player.weapons.blade);
   const activeWeapon = snapshot.player.weapons.slots[snapshot.player.weapons.activeSlot];
+  // A magazine that is not in the player's hands is not a warning. The low and empty
+  // states -- and the corner flag and root class they drive -- belong to the gun.
+  const ammoState = !gunInHand ? 'nominal' : snapshot.player.ammo === 0 ? 'empty' : ammoFraction <= 0.25 ? 'low' : 'nominal';
   // Each hit gets a stable key, so the CSS animation replays per hit without timers.
   const latestHit = hits.at(-1);
   const down = snapshot.player.awaitingRespawn;
@@ -183,14 +191,24 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
         <div className="health-value" aria-label={`Health ${health} of ${maxHealth}`}><strong>{health}</strong><span>HP</span></div>
         {healthState !== 'nominal' && <b className="corner-flag">{healthState.toUpperCase()}</b>}
       </div>
-      <div className="hud-ammo">
+      {/* One corner, two things it can be about. The blade has no magazine, so it says
+          the style instead of a number it does not have -- and the gun keeps the
+          magazine readout and the capacity its `aria-label` announces, which is
+          accessibility work that has survived two HUD passes. */}
+      <div className={`hud-ammo ${gunInHand ? 'holding-gun' : 'holding-blade'}`}>
         <div className="ammo-weapon">
-          <span>{activeWeapon?.name ?? ''}</span>
+          <span>{gunInHand ? activeWeapon?.name ?? '' : blade.label}</span>
           {ammoState !== 'nominal' && <b className="corner-flag">{ammoState === 'empty' ? 'EMPTY' : 'LOW'}</b>}
         </div>
-        <div className="ammo-value" aria-label={`${snapshot.player.ammo} of ${magazineSize} rounds in magazine`}>
-          <strong>{snapshot.player.ammo}</strong><span>/ {snapshot.player.reserveAmmo}</span>
-        </div>
+        {gunInHand ? (
+          <div className="ammo-value" aria-label={`${snapshot.player.ammo} of ${magazineSize} rounds in magazine`}>
+            <strong>{snapshot.player.ammo}</strong><span>/ {snapshot.player.reserveAmmo}</span>
+          </div>
+        ) : (
+          <div className="ammo-value blade-value" aria-label={`${blade.label} blade in hand, no ammunition`}>
+            <strong>BLADE</strong><span>◇</span>
+          </div>
+        )}
         {reloading && <div className="reload-track" role="progressbar" aria-label="Reloading"><i style={{ transform: `scaleX(${snapshot.player.actionProgress})` }} /></div>}
       </div>
     </div>

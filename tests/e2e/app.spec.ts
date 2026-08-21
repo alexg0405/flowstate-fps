@@ -354,10 +354,15 @@ test('swings both blades and the sidearm in the live runtime', async ({ page }) 
   });
   await expect.poll(async () => (await page.locator('.debug-panel').innerText()).includes('/ melee'), { timeout: 20_000 }).toBe(true);
 
-  // And the sidearm is on the right button, which is what still spends a round.
+  // And the sidearm is on the right button, which is what still spends a round -- and
+  // what brings the gun into the player's hands. Until then the corner is about the
+  // blade, because the blade is what is on screen: it used to read `CARBINE 30/120`
+  // over one.
   const ammo = page.locator('.hud-ammo .ammo-value strong');
-  await expect(ammo).toHaveText('30', { timeout: 20_000 });
+  await expect(ammo).toHaveText('BLADE', { timeout: 20_000 });
+  await expect(page.locator('.hud-ammo .ammo-weapon')).toContainText(/tempo/i);
   await page.evaluate(() => window.dispatchEvent(new MouseEvent('mousedown', { button: 2 })));
+  await expect(page.locator('.hud-ammo .ammo-weapon')).toContainText(/carbine/i, { timeout: 20_000 });
   await expect.poll(async () => Number(await ammo.innerText()), { timeout: 20_000 }).toBeLessThan(30);
   await page.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 2 })));
 });
@@ -598,10 +603,13 @@ test('builds a weapon in the armory and carries it into a run', async ({ page })
   await page.getByRole('button', { name: 'Done' }).click();
   await page.getByRole('button', { name: /start run/i }).click();
   await expect(page.getByRole('button', { name: /enter run/i })).toBeVisible({ timeout: RUNTIME_READY_TIMEOUT });
-  // 6 base shells with an extended magazine resolves to 9.
+  // 6 base shells with an extended magazine resolves to 9. Read off the pause card's
+  // weapon strip rather than the HUD corner: the corner is about whatever is in the
+  // player's hands, and at the standby screen that is the blade.
   // Uppercasing is a CSS transform, so match the underlying text.
-  await expect(page.getByRole('group', { name: /carried weapons/i })).toContainText(/breacher/i);
-  await expect(page.locator('.hud-ammo .ammo-value')).toContainText('9', { timeout: 20_000 });
+  const carriedWeapons = page.getByRole('group', { name: /carried weapons/i });
+  await expect(carriedWeapons).toContainText(/breacher/i);
+  await expect(carriedWeapons).toContainText('9', { timeout: 20_000 });
 });
 
 test('swaps between the two carried weapons in the live runtime', async ({ page }) => {
@@ -615,11 +623,18 @@ test('swaps between the two carried weapons in the live runtime', async ({ page 
   await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
 
   const weapon = page.locator('.hud-ammo .ammo-weapon');
-  await expect(weapon).toContainText(/carbine/i, { timeout: 20_000 });
+  // At rest the blade is what is in hand, and the corner says so.
+  await expect(weapon).toContainText(/tempo/i, { timeout: 20_000 });
 
+  // Selecting a slot is asking for that gun, so it comes up -- name and magazine
+  // together, which is the point: the two used to be able to disagree.
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit2' })));
   await expect(weapon).toContainText(/smg/i, { timeout: 20_000 });
   await expect(page.locator('.hud-ammo .ammo-value')).toContainText('40');
+
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit1' })));
+  await expect(weapon).toContainText(/carbine/i, { timeout: 20_000 });
+  await expect(page.locator('.hud-ammo .ammo-value')).toContainText('30');
 });
 
 test('opens the gun builder from the pause overlay', async ({ page }) => {

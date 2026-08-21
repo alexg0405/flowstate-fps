@@ -61,6 +61,25 @@ function query(selector: string): HTMLElement {
   return element;
 }
 
+/**
+ * The loadout as the snapshot publishes it. `inHand` defaults to the gun here because
+ * most of these cases are about the ammo corner, and the blade cases say so explicitly --
+ * which is the point of the field existing: what is in the player's hands is a fact the
+ * simulation states rather than something the HUD infers.
+ */
+function weaponsFixture(inHand: 'blade' | 'gun'): SimulationSnapshot['player']['weapons'] {
+  return {
+    activeSlot: 0,
+    ready: true,
+    inHand,
+    blade: 'tempo',
+    slots: [
+      { name: 'Carbine', chassisId: 'carbine' as const, parts: {}, ammo: 30, reserveAmmo: 120 },
+      { name: 'SMG', chassisId: 'smg' as const, parts: {}, ammo: 40, reserveAmmo: 180 },
+    ],
+  };
+}
+
 function snapshotFixture(overrides: Partial<SimulationSnapshot['player']> = {}, snapshot: Partial<SimulationSnapshot> = {}): SimulationSnapshot {
   return {
     tick: 120,
@@ -72,10 +91,7 @@ function snapshotFixture(overrides: Partial<SimulationSnapshot['player']> = {}, 
       ammo: 24,
       reserveAmmo: 119,
       magazineSize: 30,
-      weapons: { activeSlot: 0, ready: true, slots: [
-        { name: 'Carbine', chassisId: 'carbine' as const, parts: {}, ammo: 30, reserveAmmo: 120 },
-        { name: 'SMG', chassisId: 'smg' as const, parts: {}, ammo: 40, reserveAmmo: 180 },
-      ] },
+      weapons: weaponsFixture('gun'),
       locomotion: 'grounded',
       action: 'neutral',
       adsProgress: 0,
@@ -451,6 +467,45 @@ describe('hit feedback', () => {
     expect([...container.querySelectorAll('.damage-number')].map((node) => node.textContent)).toEqual(['34', '59', '12']);
     // Only the newest hit drives the crosshair marker.
     expect(container.querySelectorAll('.hitmarker')).toHaveLength(1);
+  });
+});
+
+describe('the ammo corner says what is in hand', () => {
+  it('names the blade and offers no magazine while the blade is up', () => {
+    render(<Hud snapshot={snapshotFixture({ weapons: weaponsFixture('blade') })} />);
+    // The bug this replaces: the corner read `CARBINE 30/120` while a blade was on
+    // screen and in the player's hands, because it named the active gun unconditionally.
+    expect(query('.ammo-weapon span').textContent).toBe('Tempo');
+    expect(query('.ammo-value').getAttribute('aria-label')).toBe('Tempo blade in hand, no ammunition');
+    expect(query('.ammo-value').textContent).not.toContain('24');
+    expect(query('.hud-ammo').className).toContain('holding-blade');
+  });
+
+  it('names the style the run is actually carrying', () => {
+    render(<Hud snapshot={snapshotFixture({ weapons: { ...weaponsFixture('blade'), blade: 'riposte' } })} />);
+    expect(query('.ammo-weapon span').textContent).toBe('Riposte');
+  });
+
+  it('keeps the gun magazine and the capacity its label announces', () => {
+    render(<Hud snapshot={snapshotFixture({ weapons: weaponsFixture('gun') })} />);
+    // Accessibility work that has survived two HUD passes, and the fix for the label
+    // above must not be a way of deleting it.
+    expect(query('.ammo-weapon span').textContent).toBe('Carbine');
+    expect(query('.ammo-value').getAttribute('aria-label')).toBe('24 of 30 rounds in magazine');
+    expect(query('.ammo-value').textContent).toBe('24/ 119');
+  });
+
+  it('does not warn about a magazine that is not in the player\'s hands', () => {
+    render(<Hud snapshot={snapshotFixture({ ammo: 0, weapons: weaponsFixture('blade') })} />);
+    // An empty gun in a holster is not an emergency. The corner flag, the red border
+    // and the root class all belong to the weapon the player is holding.
+    expect(query('.hud').className).toContain('ammo-nominal');
+    expect(container.querySelector('.hud-ammo .corner-flag')).toBeNull();
+  });
+
+  it('still draws the reload track, which is the one thing the gun has to be seen doing', () => {
+    render(<Hud snapshot={snapshotFixture({ action: 'reloading', actionProgress: 0.5, weapons: weaponsFixture('gun') })} />);
+    expect(query('.reload-track')).toBeTruthy();
   });
 });
 

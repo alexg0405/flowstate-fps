@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Action, type InputFrame, type LegacyLevelDocumentV1, type LevelPrimitive, type Vec3 } from '../src/contracts';
 import { aimAssist, botColliderBottom, movementProfile } from '../src/content/config';
 import { cookLevel } from '../src/content/defaultLevel';
+import { gunHoldSeconds } from '../src/content/weapons';
 import { FlowSimulation } from '../src/simulation/FlowSimulation';
 
 const TICK = 1 / 60;
@@ -413,5 +414,84 @@ describe('bot damage persistence', () => {
     // Under about ten degrees of half-angle. Anything wider is not an assist.
     expect(Math.acos(aimAssist.acquireCosine)).toBeLessThan(0.18);
     expect(Math.acos(aimAssist.holdCosine)).toBeLessThan(0.31);
+  });
+});
+
+describe('which weapon is in the player\'s hands', () => {
+  it('holds the blade at rest, brings the gun up when it fires, and gives it back', async () => {
+    const simulation = await start(level([FLOOR]));
+    let tick = settle(simulation);
+    // The blade is the primary verb and what the hands hold. It is also what the ammo
+    // corner was contradicting: it read `CARBINE 30/120` over a blade, because the
+    // decision lived in a private timer inside `ViewmodelPresenter` that the HUD could
+    // not see. This is that decision, in the one place both layers read.
+    expect(simulation.step(frame(tick, {}), TICK).snapshot.player.weapons.inHand).toBe('blade');
+
+    tick += 1;
+    expect(simulation.step(frame(tick, { held: Action.Fire }), TICK).snapshot.player.weapons.inHand).toBe('gun');
+
+    // The hold is what stops a burst flickering between two models at 720 rounds a
+    // minute, so the gun stays up for a beat after the trigger is released.
+    let output = simulation.step(frame(tick + 1, { released: Action.Fire }), TICK);
+    expect(output.snapshot.player.weapons.inHand).toBe('gun');
+    let dropped = 0;
+    for (let step = tick + 2; step < tick + 300 && dropped === 0; step += 1) {
+      output = simulation.step(frame(step), TICK);
+      if (output.snapshot.player.weapons.inHand === 'blade') dropped = step;
+    }
+    // Measured rather than asserted at a tick: the hold is refreshed for as long as the
+    // action reads `firing`, which outlasts the trigger by the fire interval.
+    const held = (dropped - tick) / 60;
+    expect(held).toBeGreaterThan(gunHoldSeconds);
+    expect(held).toBeLessThan(gunHoldSeconds * 1.3);
+    simulation.dispose();
+  });
+
+  it('takes the gun straight back out of the way for a swing', async () => {
+    const simulation = await start(level([FLOOR]));
+    const tick = settle(simulation);
+    expect(simulation.step(frame(tick, { held: Action.Fire }), TICK).snapshot.player.weapons.inHand).toBe('gun');
+    // Well inside the hold. The blade is what does the swinging: the previous
+    // arrangement kept the gun on screen for up to 0.95 s after a shot and ran the
+    // blade's swing pose on it.
+    const output = simulation.step(frame(tick + 1, { held: Action.Slash }), TICK);
+    expect(output.snapshot.player.action).toBe('melee');
+    expect(output.snapshot.player.weapons.inHand).toBe('blade');
+    simulation.dispose();
+  });
+
+  it('keeps the gun up for the whole reload, which is the one thing it has to be seen doing', async () => {
+    const simulation = await start(level([FLOOR]));
+    let tick = settle(simulation);
+    simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    tick += 1;
+    let output = simulation.step(frame(tick, { pressed: Action.Reload }), TICK);
+    expect(output.snapshot.player.action).toBe('reloading');
+    // Longer than the hold, so this would have expired if the reload did not refresh it.
+    for (let step = tick + 1; step < tick + Math.ceil(gunHoldSeconds * 60) + 4; step += 1) {
+      output = simulation.step(frame(step), TICK);
+      if (output.snapshot.player.action === 'reloading') expect(output.snapshot.player.weapons.inHand).toBe('gun');
+    }
+    simulation.dispose();
+  });
+
+  it('brings the gun up when the player asks for a different one', async () => {
+    const simulation = await start(level([FLOOR]));
+    const tick = settle(simulation);
+    expect(simulation.step(frame(tick), TICK).snapshot.player.weapons.inHand).toBe('blade');
+    // Selecting a slot is asking for that gun. The corner used to change its name here
+    // while the blade stayed on screen, which is the same disagreement in reverse.
+    const output = simulation.step(frame(tick + 1, { pressed: Action.WeaponSecondary }), TICK);
+    expect(output.snapshot.player.weapons.activeSlot).toBe(1);
+    expect(output.snapshot.player.weapons.inHand).toBe('gun');
+    simulation.dispose();
+  });
+
+  it('names the blade the run was started with, so presentation never has to guess', async () => {
+    const simulation = new FlowSimulation(undefined, undefined, null, 'riposte');
+    await simulation.loadLevel(cookLevel(level([FLOOR])));
+    const tick = settle(simulation);
+    expect(simulation.step(frame(tick), TICK).snapshot.player.weapons.blade).toBe('riposte');
+    simulation.dispose();
   });
 });

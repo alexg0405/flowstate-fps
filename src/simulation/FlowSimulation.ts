@@ -27,7 +27,7 @@ import {
 import { aimAssist, botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
 import { bladeStyle } from '../content/blades';
 import { chassisMultiplier } from '../content/modifiers';
-import { defaultArmory, resolveWeaponStats } from '../content/weapons';
+import { defaultArmory, gunHoldSeconds, resolveWeaponStats } from '../content/weapons';
 import { NavigationService } from '../navigation/NavigationService';
 import { approach, consumeAirCharge, resetFromGround, resetFromWall, type SurfaceResetState } from './movementRules';
 import { hashSeed, SeededRandom } from './random';
@@ -115,6 +115,12 @@ interface PlayerState extends SurfaceResetState {
   wallJumpReady: boolean;
   /** Set once per trigger pull, so an empty weapon clicks once rather than per tick. */
   dryFireReported: boolean;
+  /**
+   * Time left with the sidearm still in hand. See `gunHoldSeconds`: the blade is what
+   * the player holds, the gun comes up when it is used and drops away again, and this is
+   * the only copy of that decision -- the viewmodel and the HUD both read it now.
+   */
+  gunHoldTimer: number;
   comboLinks: number;
   comboTimer: number;
   /** Movement tech already spent on the current chain. */
@@ -310,6 +316,7 @@ export class FlowSimulation implements GameSimulation {
       lockedTargetId: null,
       wallJumpReady: false,
       dryFireReported: false,
+      gunHoldTimer: 0,
       comboLinks: 0,
       comboTimer: 0,
       comboKinds: [],
@@ -394,6 +401,7 @@ export class FlowSimulation implements GameSimulation {
     this.updateBots(dt, events);
     this.world.step();
     this.updateCombat(input, dt, events);
+    this.updateInHand(dt);
     this.updateObjectives(events);
 
     // The early return above already guarantees the player was alive this tick, and
@@ -1279,6 +1287,26 @@ export class FlowSimulation implements GameSimulation {
   }
 
   /**
+   * Which weapon is in the player's hands.
+   *
+   * This is in the simulation because two layers were deciding it independently.
+   * `ViewmodelPresenter` owned a private 0.95 s timer that chose which model to draw and
+   * the HUD had no way to ask it, so the ammo corner read `CARBINE 30/120` over a blade.
+   * The decision belongs to one place and both presentation layers read the field.
+   *
+   * Run after `updateCombat`, so a shot fired on this tick is in hand on this tick's
+   * snapshot rather than the next one. A swing clears the hold outright: the blade is
+   * what does the swinging, and the previous arrangement animated a blade swing on a gun
+   * for up to 0.95 s after a shot.
+   */
+  private updateInHand(dt: number): void {
+    const player = this.player;
+    player.gunHoldTimer = Math.max(0, player.gunHoldTimer - dt);
+    if (player.action === 'firing' || player.action === 'reloading') player.gunHoldTimer = gunHoldSeconds;
+    else if (player.action === 'melee') player.gunHoldTimer = 0;
+  }
+
+  /**
    * Moves the aim, rather than only the viewmodel. The kick is recorded so recovery
    * knows exactly how much of the current view it is entitled to take back.
    */
@@ -1348,6 +1376,10 @@ export class FlowSimulation implements GameSimulation {
           : player.activeSlot;
     if (requested === player.activeSlot || requested >= player.weapons.length) return;
     player.activeSlot = requested;
+    // Asking for a gun brings it up. Without this the corner changed its name while the
+    // blade stayed on screen -- the same lie the `inHand` field exists to stop, said in
+    // the other direction.
+    player.gunHoldTimer = gunHoldSeconds;
     // The accumulator belongs to the weapon that produced it, and the new one recovers
     // at its own rate; carrying it over would apply one gun's climb to another's curve.
     player.recoilPitch = 0;
@@ -1943,6 +1975,8 @@ export class FlowSimulation implements GameSimulation {
         weapons: {
           activeSlot: this.player?.activeSlot ?? 0,
           ready: (this.player?.weaponReadyTimer ?? 0) === 0,
+          inHand: (this.player?.gunHoldTimer ?? 0) > 0 ? 'gun' as const : 'blade' as const,
+          blade: this.blade.id,
           slots: this.player?.weapons.map((slot) => ({
             name: slot.build.name,
             chassisId: slot.build.chassisId,

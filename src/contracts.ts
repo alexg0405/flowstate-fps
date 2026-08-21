@@ -94,6 +94,18 @@ export interface SimulationSnapshot {
     weapons: {
       activeSlot: number;
       ready: boolean;
+      /**
+       * Which weapon is actually in the player's hands right now.
+       *
+       * Decided in the simulation, and that is the whole point of it. The viewmodel used
+       * to own a private timer that chose which model to draw, and the HUD had no way to
+       * ask it -- so the ammo corner read `CARBINE 30/120` while a blade was on screen
+       * and in the player's hands. Two timers in two layers is how a play frame ends up
+       * lying about the thing the player is holding. One field, read by both.
+       */
+      inHand: 'blade' | 'gun';
+      /** The blade style carried into this run, so presentation can name what is held. */
+      blade: BladeStyleId;
       slots: readonly {
         name: string;
         chassisId: WeaponChassisId;

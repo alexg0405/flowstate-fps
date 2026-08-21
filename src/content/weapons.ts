@@ -9,6 +9,20 @@ import type {
 
 export const weaponPartSlots: readonly WeaponPartSlot[] = ['optic', 'barrel', 'magazine', 'grip', 'stock'];
 
+/**
+ * How long the sidearm stays in the player's hands after it is used.
+ *
+ * The blade and the gun share one pair of hands: the blade is what is held, the gun comes
+ * up when it is fired or reloaded and drops away again. The hold is what stops a burst
+ * flickering between the two models -- at 720 rounds a minute a per-shot decision would
+ * swap weapons twelve times a second.
+ *
+ * It is tuning and it lives here, next to the gun it belongs to, because it used to be a
+ * literal inside `ViewmodelPresenter` -- and a number the renderer owned privately is
+ * exactly why the HUD could not agree with it about what the player was holding.
+ */
+export const gunHoldSeconds = 0.95;
+
 export const weaponChassis: readonly WeaponChassisDefinition[] = [
   {
     id: 'carbine',

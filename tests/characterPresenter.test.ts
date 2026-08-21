@@ -189,7 +189,7 @@ function snapshot(tick: number, entities: EntitySnapshot[] = []): SimulationSnap
       ammo: 30,
       reserveAmmo: 90,
       magazineSize: 30,
-      weapons: { activeSlot: 0, ready: true, slots: [
+      weapons: { activeSlot: 0, ready: true, inHand: 'blade' as const, blade: 'tempo' as const, slots: [
         { name: 'Carbine', chassisId: 'carbine' as const, parts: {}, ammo: 30, reserveAmmo: 120 },
         { name: 'SMG', chassisId: 'smg' as const, parts: {}, ammo: 40, reserveAmmo: 180 },
       ] },

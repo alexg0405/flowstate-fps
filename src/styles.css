@@ -1026,6 +1026,11 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 .health-value strong,.ammo-value strong{ color: var(--cyber-paper); font: 900 2.3rem/.8 Impact,'Arial Narrow',sans-serif; font-variant-numeric: tabular-nums; }
 .health-value span{ color: var(--cyber-cyan); font: 800 .58rem ui-monospace,monospace; }
 .ammo-value span{ color: #8b9ba1; font: 800 .58rem ui-monospace,monospace; }
+/* The blade has no magazine, so the corner says what is in hand instead of a number it
+   does not have. Set smaller than the ammo count on purpose: a word in the size the
+   magazine uses reads as a louder claim than the readout it replaces. */
+.blade-value strong{ font-size: 1.5rem; letter-spacing: .03em; }
+.blade-value span{ color: var(--cyber-yellow); font-size: .8rem; }
 .ammo-weapon{ display: flex; gap: .45rem; align-items: baseline; }
 .ammo-weapon span{ color: #7b8c92; font: 700 .44rem ui-monospace,monospace; letter-spacing: .14em; text-transform: uppercase; text-shadow: 0 2px 5px rgba(0,0,0,.9); }
 .corner-flag{ padding: .06rem .28rem; color: var(--cyber-ink); background: var(--cyber-yellow); font: 900 .42rem ui-monospace,monospace; letter-spacing: .1em; }
