@@ -1760,5 +1760,32 @@ rendering cases.
   derive it from `migrateSaveData`.
 - Trap 11 is **done**. There is a volume control, and it is the first row of the settings
   grid.
+### A bug this pass did not cause and did not fix
+
+**Holding the blade button makes the sidearm unusable.** Reported by the player as "whenever
+I pull my gun out and try to shoot it just switches to the blade", and measured headlessly
+over two seconds of each input pattern:
+
+| input | shots fired | in hand |
+| --- | --- | --- |
+| right button only | **21** | gun, throughout |
+| left *and* right button | **0** | blade, throughout |
+| right button tapped | 6 | gun, dropping back to the blade between taps |
+| one slash, then hold right | 18 | blade for the recovery, then gun |
+
+The mechanism is that the two verbs share one `ActionState`. `updateCombat` starts a light
+swing whenever `Action.Slash` is *held* and `meleeTimer` is zero -- which is the pivot's
+deliberate rhythm -- and `canFire` refuses to fire while `player.action === 'melee'`. A held
+left button therefore re-enters `melee` every 0.24 s and the gun never gets a tick to fire
+in. It predates this pass: before `inHand` existed the viewmodel showed the blade in exactly
+the same circumstances, because its own gun timer was only ever refreshed by a shot that
+could not happen.
+
+The fix I would make is two lines and one design decision: **do not start a new light swing
+while `Action.Fire` is held.** The current swing still finishes, the held-slash rhythm is
+unchanged, the heavy on `E` keeps its priority as the deliberate verb, and a player with the
+left button down who presses the right one gets a shot 0.24 s later. That is a change to the
+control scheme rather than a defect fix, so it is written down here rather than taken.
+
 - The three visual baselines were not regenerated and did not need to be. If a future audio
   or HUD pass moves them, something is wrong -- that inference is still good.
