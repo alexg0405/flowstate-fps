@@ -340,7 +340,16 @@ export class WorldPresenter {
     const paneMaterial = this.emissiveMaterial('#ffd9a3', 1.05);
     const faceWidth = Math.max(sx, sz);
     const pattern: FacadePattern = facadePatterns[Math.floor(faceWidth + sy) % facadePatterns.length];
-    const layout = paneLayout(pattern, 220, faceWidth, sy);
+    // Budgeted from the mass's own area at roughly a storey per cell, rather than from a
+    // flat count. A flat 220 spread over a 26 by 96 m face gives cells eight metres tall,
+    // which on the skyline is invisible and on a mass thirteen metres from the player is a
+    // wall of pale rectangles the size of a garage door -- the single worst-reading thing
+    // in the regenerated baseline. Storey-scaled cells mean a near mass gets many small
+    // windows, like a building, and a far one gets the same ones too small to count.
+    const STOREY = 3.6;
+    const BAY = 2.4;
+    const budget = Math.min(260, Math.max(24, Math.round((faceWidth / BAY) * (sy / STOREY))));
+    const layout = paneLayout(pattern, budget, faceWidth, sy);
     const cellWidth = faceWidth / layout.columns;
     const cellHeight = sy / layout.rows;
     const panes = new THREE.InstancedMesh(

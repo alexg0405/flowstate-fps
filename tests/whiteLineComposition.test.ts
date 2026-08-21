@@ -31,9 +31,9 @@ describe('the composition layer costs the route nothing', () => {
     expect(validateLevel(defaultLevel).errors).toEqual([]);
   });
 
-  it('adds eight masses and no surfaces', () => {
+  it('adds six masses and no surfaces', () => {
     expect(masses.map((entry) => entry.id)).toEqual([
-      'canyon-left', 'canyon-right', 'hero-spire', 'void-wall',
+      'hero-spire', 'void-wall',
       'roof-below-a', 'roof-below-b', 'roof-counterweight', 'sky-span',
     ]);
     for (const entry of masses) {

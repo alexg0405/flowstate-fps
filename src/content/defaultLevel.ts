@@ -159,11 +159,24 @@ function mass(id: string, position: Vec3, scale: Vec3, color: string, rotation: 
  * verticals.
  */
 const whiteLineComposition: CollisionPrimitiveV2[] = [
-  // 1. The canyon. Two masses two metres outside the start walls, so the first thing the
-  // player sees is a hundred metres of building rather than seven metres of wall and then
-  // sky. Different heights and depths, because a matched pair reads as a corridor.
-  mass('canyon-left', [-26, 42, -6], [30, 120, 44], '#151d27'),
-  mass('canyon-right', [26, 30, -2], [26, 96, 40], '#101822'),
+  // 1. There is no canyon here, and that is a measured retraction rather than an omission.
+  //
+  // Two masses went in beside the start walls -- 120 m and 96 m, two metres outside them --
+  // on the theory that the opening shot should be a hundred metres of building rather than
+  // seven metres of wall and then sky. Measured against the pre-change baseline, they took
+  // the sky in the upper 42% of the frame from **12.6% to 3.3%**. Making them asymmetric,
+  // which is the rule that works everywhere else on this route, recovered almost none of
+  // it: 4.6% to 3.3%, because what sits behind them is the 180-tower procedural skyline
+  // and there was never sky there to uncover.
+  //
+  // The silhouette projection could not have caught this and it is worth being precise
+  // about why. It drew a large bright sky field because a sky field is a rectangle it was
+  // told to draw. The real upper frame on this route is towers in every direction, so a
+  // mass added anywhere near the route does not silhouette against sky -- it replaces the
+  // one narrow slot of sky that exists.
+  //
+  // The occluder is the skyline, not the walls and not these. Until `buildCity` leaves
+  // gaps, adding mass beside this route can only subtract.
 
   // 2. The subject, revealed coming over the bridge into the first arena. 214 m out and
   // 520 m tall, which is what it costs to have sky on both sides of it at this field of
