@@ -358,6 +358,15 @@ export class GameRuntime {
       yaw: this.snapshot.camera.yaw,
       playerId: this.playerId() ?? 0,
     });
+    // The continuous half of the mix, driven every frame rather than by events: the low
+    // floor a live room sits on and the movement layer that opens with speed. Kept apart
+    // from `consume` because that method's job is turning things that happened into
+    // sounds, and this one is reporting a state.
+    this.audio.sustain({
+      speed: this.snapshot.player.speed,
+      threat: this.snapshot.entities.reduce((total, entity) => total + (entity.kind === 'bot' ? 1 : 0), 0),
+      down: this.snapshot.player.awaitingRespawn,
+    });
     const ghostPosition = this.playback?.positionAt(this.snapshot.elapsedSeconds) ?? null;
     const stats = this.renderer.render(this.snapshot, this.pendingEvents, this.accumulator / STEP_SECONDS, ghostPosition);
     // Both of these read the camera, which is only current immediately after render.

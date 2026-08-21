@@ -27,7 +27,18 @@ function recordingContext() {
   const ducks: Duck[] = [];
   /** Which shared bus each voice was connected to, in order, so sends are observable. */
   const sends: string[] = [];
-  const shared: string[] = ['bus', 'wetNear', 'wetFar'];
+  /** Every cutoff each filter was ever set to, so a swept filter is observable. */
+  const filterCutoffs: number[][] = [];
+  /**
+   * The gains built with the graph, in construction order. Only the bus is ever ducked, so
+   * only the bus records into `ducks`; the bed's own gains would otherwise look like a
+   * duck every time `sustain` moved them.
+   */
+  // The bed's two per-oscillator balance gains are not in this list on purpose: they are
+  // created straight after an oscillator, so they are attributed to it as voices. What is
+  // left source-less is the bus, the two sends, and the bed's two output gains.
+  const shared: string[] = ['bus', 'wetNear', 'wetFar', 'floor', 'drive'];
+  const bedAutomation: { node: string; value: number }[] = [];
   let sharedCount = 0;
 
   class Param {
@@ -36,6 +47,7 @@ function recordingContext() {
     setValueAtTime(value: number, at: number) { this.value = value; this.onSet?.(value, at); return this; }
     exponentialRampToValueAtTime(_value: number, _at: number): Param { return this; }
     linearRampToValueAtTime() { return this; }
+    setTargetAtTime(_value: number, _at: number, _constant: number): Param { return this; }
     cancelScheduledValues() { return this; }
   }
   class Node {
@@ -75,9 +87,18 @@ function recordingContext() {
         // is a ramp down, a hold, and a ramp back -- so they are recorded too.
         node.label = shared[sharedCount] ?? `shared-${sharedCount}`;
         sharedCount += 1;
-        const param = new Param((value, at) => ducks.push({ value, at }));
+        const label = node.label;
+        const record = label === 'bus' ? ducks : null;
+        const param = new Param((value, at) => {
+          if (record) record.push({ value, at });
+          else bedAutomation.push({ node: label ?? '?', value });
+        });
         param.exponentialRampToValueAtTime = (value: number, at: number) => {
-          ducks.push({ value, at });
+          if (record) record.push({ value, at });
+          return param;
+        };
+        param.setTargetAtTime = (value: number) => {
+          if (!record) bedAutomation.push({ node: label ?? '?', value });
           return param;
         };
         node.gain = param;
@@ -107,15 +128,19 @@ function recordingContext() {
     },
     createBiquadFilter() {
       const record = { type: '', frequency: 0 };
+      const cutoffs: number[] = [];
+      filterCutoffs.push(cutoffs);
       const node = new Node() as Node & { type: string; frequency: { value: number }; Q: { value: number } };
       Object.defineProperty(node, 'type', {
         set(value: string) { record.type = value; pendingFilter = record; },
         get() { return record.type; },
       });
       node.frequency = {
-        set value(next: number) { record.frequency = next; pendingFilter = record; },
+        set value(next: number) { record.frequency = next; cutoffs.push(next); pendingFilter = record; },
         get value() { return record.frequency; },
-      } as { value: number };
+        setTargetAtTime(next: number) { cutoffs.push(next); return this; },
+        setValueAtTime(next: number) { cutoffs.push(next); return this; },
+      } as unknown as { value: number };
       node.Q = { value: 0 };
       return node;
     },
@@ -142,7 +167,7 @@ function recordingContext() {
     },
     close() {},
   };
-  return { context, voices, noises, ducks, sends };
+  return { context, voices, noises, ducks, sends, bedAutomation, filterCutoffs };
 }
 
 async function busWith(recorder: ReturnType<typeof recordingContext>): Promise<AudioManager> {
@@ -451,6 +476,94 @@ describe('the mix has weight, space and punctuation', () => {
     // But the variation is hashed from the event id, not rolled, so the same shot
     // sounds the same way every time it is replayed.
     expect(await pitchesFor(1)).toEqual(first);
+  });
+});
+
+describe('the bed under the run', () => {
+  const at = (speed: number, threat: number, down = false) => ({ speed, threat, down });
+
+  it('says nothing until the run asks for it', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    // The menu shares this class and never calls `sustain`. A drone under a main menu is
+    // a drone the player mutes before they ever reach a fight.
+    for (const kind of ['hover', 'select', 'confirm'] as const) bus.cue(kind);
+    expect(recorder.bedAutomation).toHaveLength(0);
+  });
+
+  it('holds a floor up between fights and a heavier one in a room', async () => {
+    const levels = async (threat: number): Promise<number> => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.sustain(at(0, threat));
+      const floor = recorder.bedAutomation.filter((entry) => entry.node === 'floor');
+      expect(floor).toHaveLength(1);
+      return floor[0].value;
+    };
+    const corridor = await levels(0);
+    const room = await levels(5);
+    // There *is* a floor with nothing happening -- that is the point of a bed -- and a
+    // live room weighs more than a corridor.
+    expect(corridor).toBeGreaterThan(0);
+    expect(room).toBeGreaterThan(corridor * 1.8);
+  });
+
+  it('opens the movement layer with speed, and closes it at a standstill', async () => {
+    const drive = async (speed: number) => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.sustain(at(speed, 0));
+      return {
+        gain: recorder.bedAutomation.filter((entry) => entry.node === 'drive').at(-1)?.value ?? -1,
+        cutoff: Math.max(...recorder.filterCutoffs.flat()),
+      };
+    };
+    const still = await drive(0);
+    const walking = await drive(7);
+    const flying = await drive(24);
+    // Silent standing, and it both rises and brightens as the player accelerates: the
+    // renderer has widened the frame with speed since AUDIT.md section 3.3 and the mix
+    // said nothing at all.
+    expect(still.gain).toBe(0);
+    expect(walking.gain).toBeGreaterThan(0);
+    expect(flying.gain).toBeGreaterThan(walking.gain);
+    expect(flying.cutoff).toBeGreaterThan(walking.cutoff);
+  });
+
+  it('drops the floor out from under a downed player', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.sustain(at(18, 5, true));
+    // Not a quieter version of being alive. The floor going out is the loudest thing
+    // about dying, and the death cue's own duck lands in the hole it leaves.
+    for (const entry of recorder.bedAutomation) expect(entry.value).toBe(0);
+  });
+
+  it('sits under every transient in the mix', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.sustain(at(24, 5));
+    const loudest = Math.max(...recorder.bedAutomation.map((entry) => entry.value));
+
+    const shotRecorder = recordingContext();
+    const shotBus = await busWith(shotRecorder);
+    shotBus.consume([{ id: 1, tick: 1, kind: 'shot', sourceEntityId: 1 }]);
+    const shot = Math.max(...shotRecorder.voices.map((voice) => voice.gain), ...shotRecorder.noises.map((noise) => noise.gain));
+    // A bed you notice is a bed you turn off.
+    expect(loudest).toBeLessThan(shot);
+  });
+
+  it('runs through the bus, so a duck takes the floor with it', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.sustain(at(20, 4));
+    bus.consume([{ id: 1, tick: 1, kind: 'kill', targetEntityId: 7 }]);
+    // The whole reason the bed exists: the duck had nothing sounding to remove, so the
+    // return -- which is the effect -- had nothing to return from. Both layers are
+    // connected to the bus the duck automates rather than past it.
+    expect(recorder.sends.filter((send) => send === 'bus').length).toBeGreaterThan(0);
+    expect(recorder.ducks.length).toBeGreaterThan(0);
+    expect(Math.min(...recorder.ducks.map((duck) => duck.value))).toBeLessThan(recorder.ducks[0].value);
   });
 });
 

@@ -1,5 +1,22 @@
 import type { GameEvent, Vec3 } from '../contracts';
 
+/**
+ * What the run sounds like *between* events.
+ *
+ * Every cue in this mix is a transient, which left the low end existing only in bursts:
+ * the bass arrived with a hit and left with it, and the duck -- the mix's punctuation --
+ * had almost nothing to take away, because there was nothing sounding to duck. This is
+ * the floor those two things were missing.
+ */
+export interface AudioSustainState {
+  /** Player speed in metres a second. Opens the movement layer. */
+  speed: number;
+  /** Hostiles able to act. A live room weighs more than a corridor. */
+  threat: number;
+  /** True while the player is down, when the floor falls away entirely. */
+  down: boolean;
+}
+
 /** Where the player is and which way they face, so threats can be placed in the mix. */
 export interface AudioListenerState {
   position: Vec3;
@@ -68,6 +85,45 @@ const DUCK_ATTACK_SECONDS = 0.012;
 const DUCK_HOLD_SECONDS = 0.07;
 
 /**
+ * The bed.
+ *
+ * A floor and a movement layer, and the split is the whole design. The floor is a fifth --
+ * 34 Hz under 51 -- held nearly constant so the mix has a bottom to sit on and the duck has
+ * something to remove; it is louder in a live room than in a corridor, which is how a room
+ * gets weight without music. The movement layer is filtered noise that opens with speed,
+ * giving the movement kit the audible half of a cue the renderer has had since AUDIT.md
+ * section 3.3: the frame already widens with speed and the mix said nothing.
+ *
+ * Every level here sits well under a transient -- a shot's sub is 0.13 and a kill's is
+ * 0.16 -- because a bed you notice is a bed you turn off.
+ */
+const BED = {
+  /** Fundamental and the fifth above it. */
+  floorHz: 34,
+  fifthHz: 51,
+  /** Floor level with nothing active, and with a room live. */
+  floorQuiet: 0.022,
+  floorEngaged: 0.05,
+  /** Hostiles at which the room is as heavy as it gets. */
+  threatFull: 5,
+  /** Movement layer at a standstill and at full tilt. */
+  driveQuiet: 0,
+  driveFull: 0.07,
+  /** Speed the movement layer starts opening at, and where it is fully open. */
+  driveFromSpeed: 4,
+  driveFullSpeed: 20,
+  /** Where the movement layer is filtered, closed and open. */
+  driveCutoffLow: 90,
+  driveCutoffHigh: 430,
+  /**
+   * How quickly the layers follow. Slow on purpose: a bed that tracks speed frame by frame
+   * is a siren, and the point is that the player notices the *state* rather than the
+   * tracking.
+   */
+  followSeconds: 0.45,
+} as const;
+
+/**
  * Length of the generated impulse response, how sharply it decays, and how dark it is.
  *
  * The tail is deliberately long and heavily damped. An undamped noise decay is a hiss,
@@ -122,15 +178,21 @@ export class AudioManager {
   private driveCurve: Float32Array<ArrayBuffer> | null = null;
   /** Context time the current duck finishes at. A new one is refused before then. */
   private duckUntil = 0;
+  /** The bed's two layers. Built with the graph, silent until `sustain` asks for them. */
+  private floorGain: GainNode | null = null;
+  private driveGain: GainNode | null = null;
+  private driveFilter: BiquadFilterNode | null = null;
 
   async resume(): Promise<void> {
     if (typeof AudioContext !== 'function') return;
     try {
       this.context ??= new AudioContext();
       if (this.context.state !== 'running') await this.context.resume();
-      if (!this.bus) this.buildGraph(this.context);
+      // Order matters: the bed's movement layer loops the noise buffer and its floor is
+      // saturated by the drive curve, so both have to exist before the graph is built.
       this.noiseBuffer ??= this.createNoiseBuffer(this.context, 0.5);
       this.driveCurve ??= createDriveCurve(SUB_DRIVE);
+      if (!this.bus) this.buildGraph(this.context);
     } catch {
       this.context = null;
       this.bus = null;
@@ -392,6 +454,9 @@ export class AudioManager {
     this.wetFar = null;
     this.noiseBuffer = null;
     this.driveCurve = null;
+    this.floorGain = null;
+    this.driveGain = null;
+    this.driveFilter = null;
     this.duckUntil = 0;
   }
 
@@ -500,6 +565,89 @@ export class AudioManager {
     far.connect(reverb);
     this.wetNear = near;
     this.wetFar = far;
+    this.buildBed(context, bus);
+  }
+
+  /**
+   * The bed, built once and started immediately at zero gain.
+   *
+   * Started here rather than lazily on the first `sustain` for two reasons. An oscillator
+   * cannot be restarted once stopped, so the alternative is building and tearing one down
+   * per run. And it keeps the graph's shape fixed: everything that exists, exists from
+   * `resume`, which is what lets the whole mix be exercised against a test double.
+   *
+   * It routes into the bus, not past it, so a duck takes the floor away with the rest --
+   * which is the entire reason the bed is here.
+   */
+  private buildBed(context: AudioContext, bus: GainNode): void {
+    const floor = context.createGain();
+    floor.gain.value = 0;
+    floor.connect(bus);
+    for (const [frequency, type, level] of [[BED.floorHz, 'sine', 1], [BED.fifthHz, 'triangle', 0.45]] as const) {
+      const oscillator = context.createOscillator();
+      oscillator.type = type;
+      oscillator.frequency.value = frequency;
+      const filter = context.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 190;
+      filter.Q.value = 0.6;
+      const layer = context.createGain();
+      layer.gain.value = level;
+      const shaper = this.driveCurve && typeof context.createWaveShaper === 'function' ? context.createWaveShaper() : null;
+      if (shaper) {
+        shaper.curve = this.driveCurve;
+        oscillator.connect(shaper).connect(filter);
+      } else {
+        oscillator.connect(filter);
+      }
+      filter.connect(layer).connect(floor);
+      oscillator.start();
+    }
+    this.floorGain = floor;
+
+    // The movement layer. Noise rather than a tone, because speed is a rush and not a
+    // note, and lowpassed hard so it stays underneath everything.
+    const drive = context.createGain();
+    drive.gain.value = 0;
+    drive.connect(bus);
+    const driveFilter = context.createBiquadFilter();
+    driveFilter.type = 'lowpass';
+    driveFilter.frequency.value = BED.driveCutoffLow;
+    driveFilter.Q.value = 1.1;
+    driveFilter.connect(drive);
+    if (this.noiseBuffer) {
+      const source = context.createBufferSource();
+      source.buffer = this.noiseBuffer;
+      source.loop = true;
+      source.connect(driveFilter);
+      source.start();
+    }
+    this.driveGain = drive;
+    this.driveFilter = driveFilter;
+  }
+
+  /**
+   * Follows the run. Called every frame, and everything it touches is a smoothed target
+   * rather than a value, so the bed reports the player's *state* instead of tracking their
+   * velocity frame by frame -- which would be a siren.
+   */
+  sustain(state: AudioSustainState): void {
+    const context = this.context;
+    if (!context || context.state !== 'running' || !this.floorGain || !this.driveGain || !this.driveFilter) return;
+    const now = context.currentTime;
+    const engaged = Math.min(1, Math.max(0, state.threat / BED.threatFull));
+    const speed = Math.min(1, Math.max(0, (state.speed - BED.driveFromSpeed) / (BED.driveFullSpeed - BED.driveFromSpeed)));
+    // Down is silence, not a quieter version of being alive: the floor going out from
+    // under the player is the loudest thing about dying.
+    const floor = state.down ? 0 : BED.floorQuiet + (BED.floorEngaged - BED.floorQuiet) * engaged;
+    const drive = state.down ? 0 : BED.driveQuiet + (BED.driveFull - BED.driveQuiet) * speed;
+    this.floorGain.gain.setTargetAtTime?.(floor, now, BED.followSeconds);
+    this.driveGain.gain.setTargetAtTime?.(drive, now, BED.followSeconds);
+    this.driveFilter.frequency.setTargetAtTime?.(
+      BED.driveCutoffLow + (BED.driveCutoffHigh - BED.driveCutoffLow) * speed,
+      now,
+      BED.followSeconds,
+    );
   }
 
   /**
