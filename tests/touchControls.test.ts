@@ -74,7 +74,7 @@ describe('which controls are drawn', () => {
 
   it('reaches every verb the keyboard scheme does, bar the two slot keys', () => {
     const reachable = touchButtons.reduce((mask, button) => mask | button.action, 0);
-    for (const action of [Action.Slash, Action.Melee, Action.Fire, Action.Jump, Action.Crouch, Action.Grapple, Action.GrapplePull, Action.Reload, Action.Ads, Action.WeaponSwap]) {
+    for (const action of [Action.Attack, Action.Melee, Action.Jump, Action.Crouch, Action.Grapple, Action.GrapplePull, Action.Reload, Action.Ads, Action.WeaponSwap]) {
       expect(reachable & action).toBe(action);
     }
   });
@@ -155,11 +155,11 @@ describe('touch reaches the simulation the same way a keyboard does', () => {
 
   it('leaves everything but the movement bits alone when the stick moves', () => {
     const { input } = engaged();
-    input.touch.press(Action.Slash);
+    input.touch.press(Action.Attack);
     input.touch.move(Action.Forward);
     // A thumb on `CUT` and a thumb on the stick are two fingers doing two things, which
     // is the most ordinary moment this game has.
-    expect(input.frame(1).held & Action.Slash).toBe(Action.Slash);
+    expect(input.frame(1).held & Action.Attack).toBe(Action.Attack);
     expect(input.frame(2).held & Action.Forward).toBe(Action.Forward);
     input.dispose();
   });
@@ -176,11 +176,11 @@ describe('touch reaches the simulation the same way a keyboard does', () => {
 
   it('hands the run back on a button, since there is no Escape key to press', () => {
     const { input } = engaged();
-    input.touch.press(Action.Slash);
+    input.touch.press(Action.Attack);
     input.release();
     expect(input.isLocked()).toBe(false);
     // Whatever was held is reported released once, so a bit cannot survive the pause.
-    expect(input.frame(1).released & Action.Slash).toBe(Action.Slash);
+    expect(input.frame(1).released & Action.Attack).toBe(Action.Attack);
     // And nothing a thumb does while paused reaches the simulation.
     input.touch.press(Action.Jump);
     expect(input.frame(2).held).toBe(0);

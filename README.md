@@ -32,20 +32,20 @@ FLOWSTATE_STATIC_DIST=1 npm run test:e2e
 - `Q` (while hooked): pull yourself in faster. Each press adds to your travel speed for the rest of the hook, up to a ceiling, so you choose how hard to commit to a line. It has its own key so it can never be confused with a jump or a dash. Jumping is suppressed while hooked since it cannot fight the line, but double-tapping `Space` still dashes, which cancels the hook as a deliberate escape.
 - `Space` (airborne, against a wall-run surface): wall jump — this always wins over the dash double-tap, so kicking down a corridor never turns into a dash
 - `C` or `Ctrl`: slide
-- `1` / `2`: draw the first or second carried weapon; `Tab` swaps between them
-- Left mouse: the trigger, and it uses whatever is in your hands. With the blade up it swings — held rather than clicked, so it produces a rhythm at the blade's own recovery rate. With the gun up it fires, so drawing a weapon deliberately is not undone by the button every shooter puts the trigger on. The ammo corner always names which one you are holding.
-- Right mouse: fire the sidearm. This is also how the gun is drawn; it puts itself away 0.95 s after the last shot.
-- `E`: the heavy swing — slower, wider, and the only swing that sweeps more than one target. It also draws the blade, so it is how you get back to it without waiting.
-- `V`: ADS. Holding it locks onto the bot nearest the crosshair and tracks its centre mass. The acquisition cone covers roughly the visible screen; the lock drops when the target dies, leaves the wider hold cone, or moves behind cover, and manual look still applies first so you can drag off or switch targets.
+- `1` / `2` / `3`: what is in your hands — the blade, the first gun, the second gun. `Tab` cycles the same three in the same order. Nothing else moves it: a weapon stays out until you ask for another one.
+- Left mouse: the trigger, and it is one verb. It attacks with whatever you have selected — the blade swings, a gun fires — so the button means one thing and the number keys decide what that thing does. Held rather than clicked, so it produces a rhythm at the weapon's own rate. The ammo corner always names what you are holding.
+- Right mouse: ADS, and it only does anything with a gun in hand. Holding it locks onto the bot nearest the crosshair and tracks its centre mass. The acquisition cone covers roughly the visible screen; the lock drops when the target dies, leaves the wider hold cone, or moves behind cover, and manual look still applies first so you can drag off or switch targets.
+- `E`: the heavy swing — slower, wider, and the only swing that sweeps more than one target. A blade attack, so it needs the blade in hand like every other one.
 - `R`: reload
 - `Esc`: release Pointer Lock (or embedded-preview mouse capture) and pause
 
 On a phone or tablet the game draws an on-screen scheme instead, chosen from
 `(pointer: coarse)` — the device's *primary* pointer, so a laptop with a touchscreen keeps
 its keyboard. A floating thumbstick moves (push it to the edge to sprint), a drag anywhere
-looks, and a cluster under the right thumb carries `CUT`, `JUMP`, `HEAVY`, `GUN`, `HOOK`
-and `SLIDE`, with `PULL` appearing only while a hook is out and `RELOAD`/`AIM` only while
-the gun is up. `JUMP` twice is still the dash and the perfect dodge. `PAUSE` hands the run
+looks, and a cluster under the right thumb carries `HIT`, `JUMP`, `HOOK` and `SLIDE`, with
+`HEAVY` while the blade is up, `PULL` while a hook is out, and `RELOAD`/`AIM` while the
+gun is. `SWAP` is the number keys' job in the room a phone actually has: it cycles the
+blade and the two guns. `JUMP` twice is still the dash and the perfect dodge. `PAUSE` hands the run
 back, since there is no `Esc` to press. The route is played in landscape and says so in
 portrait; fullscreen and an orientation lock are requested where the browser supports them.
 

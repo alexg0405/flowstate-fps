@@ -81,9 +81,9 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
             <div className="control-guide">
               {touch ? (
                 <>
-                  <span><kbd>CUT</kbd> SLASH</span>
+                  <span><kbd>HIT</kbd> ATTACK</span>
                   <span><kbd>HEAVY</kbd> SWEEP</span>
-                  <span><kbd>GUN</kbd> SIDEARM</span>
+                  <span><kbd>SWAP</kbd> WEAPON</span>
                   <span><kbd>LEFT THUMB</kbd> MOVE</span>
                   <span><kbd>JUMP</kbd> JUMP</span>
                   <span><kbd>JUMP ×2</kbd> DASH / DODGE</span>
@@ -96,9 +96,9 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
                 </>
               ) : (
                 <>
-                  <span><kbd>LMB</kbd> SLASH / FIRE</span>
+                  <span><kbd>LMB</kbd> ATTACK</span>
                   <span><kbd>E</kbd> HEAVY</span>
-                  <span><kbd>RMB</kbd> SIDEARM</span>
+                  <span><kbd>RMB</kbd> AIM</span>
                   <span><kbd>WASD</kbd> MOVE</span>
                   <span><kbd>SPACE</kbd> JUMP</span>
                   <span><kbd>SPACE ×2</kbd> DASH / DODGE</span>
@@ -106,7 +106,7 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
                   <span><kbd>Q</kbd> PULL</span>
                   <span><kbd>SPACE</kbd> WALL JUMP</span>
                   <span><kbd>C</kbd> SLIDE</span>
-                  <span><kbd>V</kbd> AIM</span>
+                  <span><kbd>1 2 3</kbd> BLADE / GUNS</span>
                   <span><kbd>R</kbd> RELOAD</span>
                 </>
               )}

@@ -61,16 +61,16 @@ describe('the on-screen control scheme', () => {
   it('holds a bit down rather than firing it on release', () => {
     const input = recorder();
     render(<TouchControls input={input} grappling={false} gunInHand={false} onPause={() => {}} />);
-    const cut = button('Slash')!;
+    const cut = button('Attack with the selected weapon')!;
     expect(cut).toBeTruthy();
     act(() => { cut.dispatchEvent(pointer('pointerdown')); });
     // A cut that waited for the finger to lift would be a quarter of a second late, and
     // the hook would be wrong in a way the player could not work around at all.
-    expect(input.pressed).toEqual([Action.Slash]);
+    expect(input.pressed).toEqual([Action.Attack]);
     expect(input.released).toEqual([]);
     expect(cut.getAttribute('aria-pressed')).toBe('true');
     act(() => { cut.dispatchEvent(pointer('pointerup')); });
-    expect(input.released).toEqual([Action.Slash]);
+    expect(input.released).toEqual([Action.Attack]);
   });
 
   it('turns a drag into look, in the units the sensitivity setting is in', () => {

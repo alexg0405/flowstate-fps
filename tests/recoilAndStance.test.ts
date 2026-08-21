@@ -8,7 +8,13 @@ import { FlowSimulation } from '../src/simulation/FlowSimulation';
 const TICK = 1 / 60;
 
 function frame(tick: number, overrides: Partial<InputFrame> = {}): InputFrame {
-  return { tick, held: 0, pressed: 0, released: 0, look: [0, 0], ...overrides };
+  // Every case in this file is about the gun, and the gun is a *selection* now rather
+  // than the weapon the player starts a run holding. Drawing it costs a bit rather than
+  // a frame: selection resolves at the top of `updateCombat`, before the trigger is read.
+  // A frame that names a weapon itself is left alone, or the swap case could never swap.
+  const input: InputFrame = { tick, held: 0, pressed: 0, released: 0, look: [0, 0], ...overrides };
+  const names = Action.SelectBlade | Action.SelectGunOne | Action.SelectGunTwo | Action.WeaponSwap;
+  return { ...input, pressed: input.pressed & names ? input.pressed : input.pressed | Action.SelectGunOne };
 }
 
 function flat(primitives: LegacyLevelDocumentV1['primitives'] = []): LegacyLevelDocumentV1 {
@@ -44,7 +50,7 @@ describe('recoil moves the aim', () => {
   it('kicks the view up on every shot', async () => {
     const simulation = await range();
     const before = simulation.step(frame(21), TICK).snapshot.camera.pitch;
-    const after = simulation.step(frame(22, { held: Action.Fire, pressed: Action.Fire }), TICK).snapshot.camera.pitch;
+    const after = simulation.step(frame(22, { held: Action.Attack, pressed: Action.Attack }), TICK).snapshot.camera.pitch;
     // Positive pitch is up, and the viewmodel kick was previously the only thing that
     // moved at all -- the aim itself never did.
     expect(after).toBeGreaterThan(before);
@@ -55,8 +61,8 @@ describe('recoil moves the aim', () => {
   it('climbs across a burst', async () => {
     const simulation = await range();
     const start = simulation.step(frame(21), TICK).snapshot.camera.pitch;
-    let output = simulation.step(frame(22, { held: Action.Fire, pressed: Action.Fire }), TICK);
-    for (let tick = 23; tick <= 90; tick += 1) output = simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    let output = simulation.step(frame(22, { held: Action.Attack, pressed: Action.Attack }), TICK);
+    for (let tick = 23; tick <= 90; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     // Recovery is suspended between shots, so the pattern accumulates instead of being
     // cancelled by a recovery rate fast enough to settle between bursts.
     expect(output.snapshot.camera.pitch - start).toBeGreaterThan(0.02);
@@ -66,11 +72,11 @@ describe('recoil moves the aim', () => {
   it('hands the view back once firing stops', async () => {
     const simulation = await range();
     const start = simulation.step(frame(21), TICK).snapshot.camera.pitch;
-    let output = simulation.step(frame(22, { held: Action.Fire, pressed: Action.Fire }), TICK);
-    for (let tick = 23; tick <= 70; tick += 1) output = simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    let output = simulation.step(frame(22, { held: Action.Attack, pressed: Action.Attack }), TICK);
+    for (let tick = 23; tick <= 70; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     const climbed = output.snapshot.camera.pitch;
 
-    for (let tick = 71; tick <= 71 + 240; tick += 1) output = simulation.step(frame(tick, { released: tick === 71 ? Action.Fire : 0 }), TICK);
+    for (let tick = 71; tick <= 71 + 240; tick += 1) output = simulation.step(frame(tick, { released: tick === 71 ? Action.Attack : 0 }), TICK);
     expect(output.snapshot.camera.pitch).toBeLessThan(climbed);
     expect(output.snapshot.camera.pitch).toBeCloseTo(start, 3);
     simulation.dispose();
@@ -78,11 +84,11 @@ describe('recoil moves the aim', () => {
 
   it('holds the climb for a moment before recovering', async () => {
     const simulation = await range();
-    let output = simulation.step(frame(21, { held: Action.Fire, pressed: Action.Fire }), TICK);
+    let output = simulation.step(frame(21, { held: Action.Attack, pressed: Action.Attack }), TICK);
     const kicked = output.snapshot.camera.pitch;
     // Inside the hold window nothing is handed back yet.
     const holdTicks = Math.floor(recoilHoldSeconds * 60) - 1;
-    for (let tick = 22; tick <= 21 + holdTicks; tick += 1) output = simulation.step(frame(tick, { released: tick === 22 ? Action.Fire : 0 }), TICK);
+    for (let tick = 22; tick <= 21 + holdTicks; tick += 1) output = simulation.step(frame(tick, { released: tick === 22 ? Action.Attack : 0 }), TICK);
     expect(output.snapshot.camera.pitch).toBeCloseTo(kicked, 6);
     simulation.dispose();
   });
@@ -91,7 +97,7 @@ describe('recoil moves the aim', () => {
     const simulation = await range();
     const start = simulation.step(frame(21), TICK).snapshot.camera.pitch;
     // One shot, then pull down hard by more than the kick, then let it settle.
-    simulation.step(frame(22, { held: Action.Fire, pressed: Action.Fire }), TICK);
+    simulation.step(frame(22, { held: Action.Attack, pressed: Action.Attack }), TICK);
     let output = simulation.step(frame(23, { look: [0, 60] }), TICK);
     for (let tick = 24; tick <= 24 + 240; tick += 1) output = simulation.step(frame(tick), TICK);
     // Recovery takes back only what recoil added, so the player's own pull survives it
@@ -103,9 +109,9 @@ describe('recoil moves the aim', () => {
   it('kicks less while aiming, which is most of the reason to aim', async () => {
     const kick = async (aiming: boolean): Promise<number> => {
       const simulation = await range();
-      const held = aiming ? Action.Fire | Action.Ads : Action.Fire;
+      const held = aiming ? Action.Attack | Action.Ads : Action.Attack;
       const before = simulation.step(frame(21, { held: aiming ? Action.Ads : 0 }), TICK).snapshot.camera.pitch;
-      const after = simulation.step(frame(22, { held, pressed: Action.Fire }), TICK).snapshot.camera.pitch;
+      const after = simulation.step(frame(22, { held, pressed: Action.Attack }), TICK).snapshot.camera.pitch;
       simulation.dispose();
       return after - before;
     };
@@ -117,13 +123,13 @@ describe('recoil moves the aim', () => {
 
   it('resets the accumulator on a weapon swap', async () => {
     const simulation = await range();
-    let output = simulation.step(frame(21, { held: Action.Fire, pressed: Action.Fire }), TICK);
-    for (let tick = 22; tick <= 60; tick += 1) output = simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    let output = simulation.step(frame(21, { held: Action.Attack, pressed: Action.Attack }), TICK);
+    for (let tick = 22; tick <= 60; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     const climbed = output.snapshot.camera.pitch;
 
     // A different weapon recovers at its own rate; carrying the accumulator across
     // would apply one gun's climb to another gun's curve.
-    output = simulation.step(frame(61, { pressed: Action.WeaponSecondary }), TICK);
+    output = simulation.step(frame(61, { pressed: Action.SelectGunTwo }), TICK);
     for (let tick = 62; tick <= 200; tick += 1) output = simulation.step(frame(tick), TICK);
     expect(output.snapshot.camera.pitch).toBeCloseTo(climbed, 6);
     expect(output.snapshot.player.spreadBloom).toBe(0);
@@ -134,21 +140,21 @@ describe('recoil moves the aim', () => {
 describe('spread bloom', () => {
   it('grows with sustained fire and sheds when it stops', async () => {
     const simulation = await range();
-    let output = simulation.step(frame(21, { held: Action.Fire, pressed: Action.Fire }), TICK);
+    let output = simulation.step(frame(21, { held: Action.Attack, pressed: Action.Attack }), TICK);
     expect(output.snapshot.player.spreadBloom).toBeGreaterThan(0);
-    for (let tick = 22; tick <= 90; tick += 1) output = simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    for (let tick = 22; tick <= 90; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     const bloomed = output.snapshot.player.spreadBloom;
     expect(bloomed).toBeGreaterThan(0.5);
 
-    for (let tick = 91; tick <= 91 + 180; tick += 1) output = simulation.step(frame(tick, { released: tick === 91 ? Action.Fire : 0 }), TICK);
+    for (let tick = 91; tick <= 91 + 180; tick += 1) output = simulation.step(frame(tick, { released: tick === 91 ? Action.Attack : 0 }), TICK);
     expect(output.snapshot.player.spreadBloom).toBe(0);
     simulation.dispose();
   });
 
   it('is capped, so sustained fire cannot spray without limit', async () => {
     const simulation = await range();
-    let output = simulation.step(frame(21, { held: Action.Fire, pressed: Action.Fire }), TICK);
-    for (let tick = 22; tick <= 600; tick += 1) output = simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    let output = simulation.step(frame(21, { held: Action.Attack, pressed: Action.Attack }), TICK);
+    for (let tick = 22; tick <= 600; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     expect(output.snapshot.player.spreadBloom).toBeLessThanOrEqual(1);
     simulation.dispose();
   });
@@ -158,7 +164,7 @@ describe('spread bloom', () => {
     // widen the shot that produced it.
     const impactOf = async (): Promise<readonly number[]> => {
       const simulation = await range('dmr');
-      const output = simulation.step(frame(21, { held: Action.Fire | Action.Ads, pressed: Action.Fire }), TICK);
+      const output = simulation.step(frame(21, { held: Action.Attack | Action.Ads, pressed: Action.Attack }), TICK);
       const impact = output.events.find((event) => event.kind === 'impact')!.position!;
       simulation.dispose();
       return impact;

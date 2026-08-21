@@ -28,7 +28,11 @@ function arena(guard: SpawnDefinition): LegacyLevelDocumentV1 {
 const idle: Omit<InputFrame, 'tick'> = { held: 0, pressed: 0, released: 0, look: [0, 0] };
 
 function frame(tick: number, overrides: Partial<InputFrame> = {}): InputFrame {
-  return { tick, ...idle, ...overrides };
+  // Every case in this file is about the gun, and the gun is a *selection* now rather
+  // than the weapon the player starts a run holding. Drawing it costs a bit rather than
+  // a frame: selection resolves at the top of `updateCombat`, before the trigger is read.
+  const input: InputFrame = { tick, ...idle, ...overrides };
+  return { ...input, pressed: input.pressed | Action.SelectGunOne };
 }
 
 /** Steps the simulation, returning the events produced and the guard's last state. */
@@ -47,7 +51,7 @@ function run(simulation: FlowSimulation, ticks: number, input: (tick: number) =>
 
 /** Fires on the first tick, before a turn rate has moved anything. */
 function firstHit(simulation: FlowSimulation): GameEvent | undefined {
-  const { events } = run(simulation, 2, (tick) => (tick === 1 ? frame(tick, { held: Action.Fire, pressed: Action.Fire }) : frame(tick)));
+  const { events } = run(simulation, 2, (tick) => (tick === 1 ? frame(tick, { held: Action.Attack, pressed: Action.Attack }) : frame(tick)));
   return events.find((event) => event.kind === 'hit' && event.targetEntityId !== 1);
 }
 

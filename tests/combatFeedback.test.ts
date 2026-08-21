@@ -30,7 +30,11 @@ function arena(overrides: Partial<LegacyLevelDocumentV1> = {}): LegacyLevelDocum
 const idle: Omit<InputFrame, 'tick'> = { held: 0, pressed: 0, released: 0, look: [0, 0] };
 
 function frame(tick: number, overrides: Partial<InputFrame> = {}): InputFrame {
-  return { tick, ...idle, ...overrides };
+  // Every case in this file is about the gun, and the gun is a *selection* now rather
+  // than the weapon the player starts a run holding. Drawing it costs a bit rather than
+  // a frame: selection resolves at the top of `updateCombat`, before the trigger is read.
+  const input: InputFrame = { tick, ...idle, ...overrides };
+  return { ...input, pressed: input.pressed | Action.SelectGunOne };
 }
 
 /** Runs until `predicate` is satisfied, returning every event produced on the way. */
@@ -153,7 +157,7 @@ describe('player weapon feedback', () => {
     let longestFiringRun = 0;
     let action = 'neutral';
     for (let tick = 1; tick <= 3000; tick += 1) {
-      const output = simulation.step(frame(tick, { held: Action.Fire, pressed: tick === 1 ? Action.Fire : 0 }), 1 / 60);
+      const output = simulation.step(frame(tick, { held: Action.Attack, pressed: tick === 1 ? Action.Attack : 0 }), 1 / 60);
       dryFires += output.events.filter((event) => event.kind === 'dryFire').length;
       action = output.snapshot.player.action;
       const empty = output.snapshot.player.ammo === 0 && output.snapshot.player.reserveAmmo === 0;
@@ -180,7 +184,7 @@ describe('player weapon feedback', () => {
       await simulation.loadLevel(cookLevel(level));
       // Aim first, then fire on a later tick so the look has already applied.
       simulation.step(frame(1, { look: [look[0], look[1]] }), 1 / 60);
-      const output = simulation.step(frame(2, { held: Action.Fire, pressed: Action.Fire }), 1 / 60);
+      const output = simulation.step(frame(2, { held: Action.Attack, pressed: Action.Attack }), 1 / 60);
       const camera = output.snapshot.camera.position;
       const angles = output.events
         .filter((event) => event.kind === 'impact' && event.position)

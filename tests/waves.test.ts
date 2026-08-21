@@ -57,10 +57,10 @@ async function start(level: LegacyLevelDocumentV1): Promise<FlowSimulation> {
 /** Holds the blade until the room reports it is done, or the budget runs out. */
 function clear(simulation: FlowSimulation, ticks = 1600) {
   const waveEvents: number[] = [];
-  let output = simulation.step(frame(5, { held: Action.Slash, pressed: Action.Slash }), TICK);
+  let output = simulation.step(frame(5, { held: Action.Attack, pressed: Action.Attack }), TICK);
   let peakConcurrent = 0;
   for (let tick = 6; tick <= ticks; tick += 1) {
-    output = simulation.step(frame(tick, { held: Action.Slash }), TICK);
+    output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     for (const event of output.events) if (event.kind === 'wave') waveEvents.push(Math.round(event.value ?? 0));
     peakConcurrent = Math.max(peakConcurrent, output.snapshot.entities.filter((entity) => entity.kind === 'bot').length);
     if (output.snapshot.objective === 'Reach the finish gate') break;
@@ -85,7 +85,7 @@ describe('a room can have waves', () => {
     // Kill the first wave only, then stop swinging.
     let cleared = false;
     for (let tick = 5; tick <= 200 && !cleared; tick += 1) {
-      const output = simulation.step(frame(tick, { held: Action.Slash, pressed: tick === 5 ? Action.Slash : 0 }), TICK);
+      const output = simulation.step(frame(tick, { held: Action.Attack, pressed: tick === 5 ? Action.Attack : 0 }), TICK);
       cleared = output.events.some((event) => event.kind === 'wave');
     }
     expect(cleared).toBe(true);
@@ -117,7 +117,7 @@ describe('a room can have waves', () => {
   it('does not resurrect a cleared wave after a checkpoint restore', async () => {
     const simulation = await start(room(3));
     for (let tick = 5; tick <= 200; tick += 1) {
-      const output = simulation.step(frame(tick, { held: Action.Slash, pressed: tick === 5 ? Action.Slash : 0 }), TICK);
+      const output = simulation.step(frame(tick, { held: Action.Attack, pressed: tick === 5 ? Action.Attack : 0 }), TICK);
       if (output.events.some((event) => event.kind === 'wave')) break;
     }
     simulation.restoreCheckpoint();
@@ -144,7 +144,7 @@ describe('a room can have waves', () => {
       const simulation = await start(room(3));
       const log: string[] = [];
       for (let tick = 5; tick <= 900; tick += 1) {
-        const output = simulation.step(frame(tick, { held: Action.Slash, pressed: tick === 5 ? Action.Slash : 0 }), TICK);
+        const output = simulation.step(frame(tick, { held: Action.Attack, pressed: tick === 5 ? Action.Attack : 0 }), TICK);
         for (const event of output.events) {
           if (event.kind === 'wave' || event.kind === 'kill') log.push(`${event.tick} ${event.kind} ${event.value ?? ''}`);
         }

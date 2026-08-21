@@ -69,8 +69,10 @@ describe('fixed input replay', () => {
       const desiredPitch = Math.atan2(dy, Math.hypot(dx, dz));
       output = simulation.step({
         tick,
-        held: Action.Fire,
-        pressed: tick === 2 ? Action.Fire : 0,
+        held: Action.Attack,
+        // The gun is a selection now; drawn on the first frame of the tape.
+        // The gun is a selection now, drawn on the first frame this tape pulls a trigger.
+        pressed: tick === 2 ? Action.Attack | Action.SelectGunOne : 0,
         released: 0,
         look: [(camera.yaw - desiredYaw) / 0.002, (camera.pitch - desiredPitch) / 0.002],
       }, 1 / 60);
@@ -88,8 +90,8 @@ describe('fixed input replay', () => {
 
     let output = simulation.step({
       tick: 1,
-      held: Action.Fire | Action.Ads,
-      pressed: Action.Fire,
+      held: Action.Attack | Action.Ads,
+      pressed: Action.Attack | Action.SelectGunOne,
       released: 0,
       look: [0, 0],
     }, 1 / 60);
@@ -129,8 +131,8 @@ describe('fixed input replay', () => {
 
     let output = simulation.step({
       tick: 1,
-      held: Action.Fire | Action.Ads,
-      pressed: Action.Fire,
+      held: Action.Attack | Action.Ads,
+      pressed: Action.Attack | Action.SelectGunOne,
       released: 0,
       look: [0, -18],
     }, 1 / 60);
@@ -176,7 +178,7 @@ describe('fixed input replay', () => {
   it('reports static impact normals and surface tags', async () => {
     const simulation = new FlowSimulation();
     await simulation.loadLevel(cookLevel(replayLevel));
-    const output = simulation.step({ tick: 1, held: Action.Fire, pressed: Action.Fire, released: 0, look: [0, 500] }, 1 / 60);
+    const output = simulation.step({ tick: 1, held: Action.Attack, pressed: Action.Attack | Action.SelectGunOne, released: 0, look: [0, 500] }, 1 / 60);
     expect(output.events).toContainEqual(expect.objectContaining({
       kind: 'impact',
       sourceEntityId: 1,
@@ -298,7 +300,9 @@ function makeFrames(count: number): InputFrame[] {
   return Array.from({ length: count }, (_, index) => ({
     tick: index + 1,
     held: Action.Forward | (index < 110 ? Action.Sprint : 0),
-    pressed: (index === 15 ? Action.Jump : 0) | (index === 55 ? Action.Dash : 0) | (index === 115 ? Action.Crouch : 0),
+    // The gun is drawn on the first frame of the tape: this file is about determinism,
+    // and a tape that never selects a weapon would be testing the blade.
+    pressed: (index === 0 ? Action.SelectGunOne : 0) | (index === 15 ? Action.Jump : 0) | (index === 55 ? Action.Dash : 0) | (index === 115 ? Action.Crouch : 0),
     released: 0,
     look: [index === 85 ? 18 : 0, 0] as const,
   }));

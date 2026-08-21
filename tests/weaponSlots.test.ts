@@ -36,10 +36,13 @@ const dmr = defaultBuildFor('dmr', 'b', 'DMR');
 const shotgun = defaultBuildFor('shotgun', 'c', 'Shotgun');
 
 describe('two-slot loadout', () => {
-  it('starts on the primary with both slots loaded from their own stats', async () => {
+  it('starts on the blade with both slots loaded from their own stats', async () => {
     const simulation = await start([carbine, dmr]);
     const output = simulation.step(frame(1), TICK);
     const weapons = output.snapshot.player.weapons;
+    // The blade is the primary verb, so it is what a run starts in the player's hands;
+    // the first gun slot is merely the one that would come up if they asked for a gun.
+    expect(weapons.inHand).toBe('blade');
     expect(weapons.activeSlot).toBe(0);
     expect(weapons.slots.map((slot) => slot.name)).toEqual(['Carbine', 'DMR']);
     expect(weapons.slots[0].ammo).toBe(resolveWeaponStats(carbine).magazineSize);
@@ -48,62 +51,77 @@ describe('two-slot loadout', () => {
     simulation.dispose();
   });
 
-  it('selects a slot directly and toggles with the swap key', async () => {
+  it('selects each of the three directly, and cycles them in the same order', async () => {
     const simulation = await start([carbine, dmr]);
-    let output = simulation.step(frame(1, { pressed: Action.WeaponSecondary }), TICK);
+    let output = simulation.step(frame(1, { pressed: Action.SelectGunOne }), TICK);
+    expect(output.snapshot.player.weapons.inHand).toBe('gun');
+    expect(output.snapshot.player.weapons.activeSlot).toBe(0);
+    expect(output.snapshot.player.magazineSize).toBe(resolveWeaponStats(carbine).magazineSize);
+
+    output = simulation.step(frame(2, { pressed: Action.SelectGunTwo }), TICK);
     expect(output.snapshot.player.weapons.activeSlot).toBe(1);
     expect(output.snapshot.player.magazineSize).toBe(resolveWeaponStats(dmr).magazineSize);
 
-    output = simulation.step(frame(2, { pressed: Action.WeaponPrimary }), TICK);
-    expect(output.snapshot.player.weapons.activeSlot).toBe(0);
+    output = simulation.step(frame(3, { pressed: Action.SelectBlade }), TICK);
+    expect(output.snapshot.player.weapons.inHand).toBe('blade');
 
-    output = simulation.step(frame(3, { pressed: Action.WeaponSwap }), TICK);
-    expect(output.snapshot.player.weapons.activeSlot).toBe(1);
+    // The swap key walks the same three in the same order the keys are in, so a player
+    // who never learns the numbers still gets a predictable rotation.
     output = simulation.step(frame(4, { pressed: Action.WeaponSwap }), TICK);
-    expect(output.snapshot.player.weapons.activeSlot).toBe(0);
+    expect(output.snapshot.player.weapons).toMatchObject({ inHand: 'gun', activeSlot: 0 });
+    output = simulation.step(frame(5, { pressed: Action.WeaponSwap }), TICK);
+    expect(output.snapshot.player.weapons).toMatchObject({ inHand: 'gun', activeSlot: 1 });
+    output = simulation.step(frame(6, { pressed: Action.WeaponSwap }), TICK);
+    expect(output.snapshot.player.weapons.inHand).toBe('blade');
     simulation.dispose();
   });
 
   it('blocks firing until the swapped weapon is ready', async () => {
     const simulation = await start([carbine, dmr]);
-    let output = simulation.step(frame(1, { pressed: Action.WeaponSecondary }), TICK);
+    // Drawing a gun from the blade is a change of hands and costs nothing. Swapping one
+    // gun for another is the move that has to be paid for, and this is that move.
+    let output = simulation.step(frame(1, { pressed: Action.SelectGunOne }), TICK);
+    expect(output.snapshot.player.weapons.ready).toBe(true);
+    output = simulation.step(frame(2, { pressed: Action.SelectGunTwo }), TICK);
     expect(output.snapshot.player.weapons.ready).toBe(false);
 
-    output = simulation.step(frame(2, { held: Action.Fire, pressed: Action.Fire }), TICK);
+    output = simulation.step(frame(3, { held: Action.Attack, pressed: Action.Attack }), TICK);
     expect(output.events.some((event) => event.kind === 'shot')).toBe(false);
     expect(output.snapshot.player.weapons.slots[1].ammo).toBe(resolveWeaponStats(dmr).magazineSize);
 
-    for (let tick = 3; tick < 40; tick += 1) output = simulation.step(frame(tick), TICK);
+    for (let tick = 4; tick < 40; tick += 1) output = simulation.step(frame(tick), TICK);
     expect(output.snapshot.player.weapons.ready).toBe(true);
-    output = simulation.step(frame(40, { held: Action.Fire, pressed: Action.Fire }), TICK);
+    output = simulation.step(frame(40, { held: Action.Attack, pressed: Action.Attack }), TICK);
     expect(output.events.some((event) => event.kind === 'shot')).toBe(true);
     simulation.dispose();
   });
 
   it('spends ammo from the active slot only', async () => {
     const simulation = await start([carbine, dmr]);
-    let output = simulation.step(frame(1, { held: Action.Fire, pressed: Action.Fire }), TICK);
-    for (let tick = 2; tick < 40; tick += 1) output = simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    let output = simulation.step(frame(1, { held: Action.Attack, pressed: Action.Attack | Action.SelectGunOne }), TICK);
+    for (let tick = 2; tick < 40; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     const slots = output.snapshot.player.weapons.slots;
     expect(slots[0].ammo).toBeLessThan(resolveWeaponStats(carbine).magazineSize);
     expect(slots[1].ammo).toBe(resolveWeaponStats(dmr).magazineSize);
     simulation.dispose();
   });
 
-  it('rewinds both slots and the active slot on a checkpoint restore', async () => {
+  it('rewinds both slots, the active slot and what was in hand on a checkpoint restore', async () => {
     const simulation = await start([carbine, dmr]);
-    let output = simulation.step(frame(1, { held: Action.Fire, pressed: Action.Fire }), TICK);
-    for (let tick = 2; tick < 30; tick += 1) output = simulation.step(frame(tick, { held: Action.Fire }), TICK);
-    output = simulation.step(frame(30, { pressed: Action.WeaponSecondary }), TICK);
+    let output = simulation.step(frame(1, { held: Action.Attack, pressed: Action.Attack | Action.SelectGunOne }), TICK);
+    for (let tick = 2; tick < 30; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
+    output = simulation.step(frame(30, { pressed: Action.SelectGunTwo }), TICK);
     expect(output.snapshot.player.weapons.slots[0].ammo).toBeLessThan(resolveWeaponStats(carbine).magazineSize);
     expect(output.snapshot.player.weapons.activeSlot).toBe(1);
 
-    // The checkpoint was taken at spawn, so restoring returns both slots to full
-    // and puts the primary back in hand.
+    // The checkpoint was taken at spawn, so restoring returns both slots to full and
+    // puts the blade back in hand -- a restore must not rearm the player differently
+    // from how they started.
     simulation.restoreCheckpoint();
     output = simulation.step(frame(31), TICK);
     expect(output.snapshot.player.weapons.slots[0].ammo).toBe(resolveWeaponStats(carbine).magazineSize);
     expect(output.snapshot.player.weapons.slots[1].ammo).toBe(resolveWeaponStats(dmr).magazineSize);
+    expect(output.snapshot.player.weapons.inHand).toBe('blade');
     expect(output.snapshot.player.weapons.activeSlot).toBe(0);
     expect(output.snapshot.player.weapons.ready).toBe(true);
     simulation.dispose();
@@ -113,7 +131,7 @@ describe('two-slot loadout', () => {
 describe('chassis behaviour', () => {
   it('fires one trace per pellet so a shotgun spreads', async () => {
     const simulation = await start([shotgun, carbine]);
-    const output = simulation.step(frame(1, { held: Action.Fire, pressed: Action.Fire }), TICK);
+    const output = simulation.step(frame(1, { held: Action.Attack, pressed: Action.Attack | Action.SelectGunOne }), TICK);
     const shots = output.events.filter((event) => event.kind === 'shot');
     const impacts = output.events.filter((event) => event.kind === 'impact');
     expect(shots).toHaveLength(1);
@@ -124,8 +142,9 @@ describe('chassis behaviour', () => {
   it('applies the chassis ADS zoom to the camera', async () => {
     const wide = await start([shotgun, carbine]);
     const narrow = await start([dmr, carbine]);
-    const wideFov = wide.step(frame(1, { held: Action.Ads }), TICK).snapshot.camera.fov;
-    const narrowFov = narrow.step(frame(1, { held: Action.Ads }), TICK).snapshot.camera.fov;
+    // Sights belong to a gun, so the gun has to be up for there to be any zoom at all.
+    const wideFov = wide.step(frame(1, { held: Action.Ads, pressed: Action.SelectGunOne }), TICK).snapshot.camera.fov;
+    const narrowFov = narrow.step(frame(1, { held: Action.Ads, pressed: Action.SelectGunOne }), TICK).snapshot.camera.fov;
     expect(narrowFov).toBeLessThan(wideFov);
     wide.dispose();
     narrow.dispose();
@@ -133,8 +152,8 @@ describe('chassis behaviour', () => {
 
   it('reloads to the active weapon capacity', async () => {
     const simulation = await start([dmr, carbine]);
-    let output = simulation.step(frame(1, { held: Action.Fire, pressed: Action.Fire }), TICK);
-    for (let tick = 2; tick < 20; tick += 1) output = simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    let output = simulation.step(frame(1, { held: Action.Attack, pressed: Action.Attack | Action.SelectGunOne }), TICK);
+    for (let tick = 2; tick < 20; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     const afterBurst = output.snapshot.player.weapons.slots[0].ammo;
     expect(afterBurst).toBeLessThan(resolveWeaponStats(dmr).magazineSize);
 

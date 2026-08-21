@@ -42,7 +42,11 @@ async function start(document: LegacyLevelDocumentV1): Promise<FlowSimulation> {
 }
 
 function frame(tick: number, patch: Partial<InputFrame> = {}): InputFrame {
-  return { tick, held: 0, pressed: 0, released: 0, look: [0, 0], ...patch };
+  // Every case in this file is about the gun, and the gun is a *selection* now rather
+  // than the weapon the player starts a run holding. Drawing it costs a bit rather than
+  // a frame: selection resolves at the top of `updateCombat`, before the trigger is read.
+  const input: InputFrame = { tick, held: 0, pressed: 0, released: 0, look: [0, 0], ...patch };
+  return { ...input, pressed: input.pressed | Action.SelectGunOne };
 }
 
 /** Look inputs are divided by the default 0.002 sensitivity inside the simulation. */
@@ -161,8 +165,8 @@ describe('grapple detachment rules', () => {
     let cleared = false;
     for (let tick = 2; tick < 240 && !cleared; tick += 1) {
       output = simulation.step(frame(tick, {
-        held: Action.Grapple | Action.Fire,
-        pressed: tick === 2 ? Action.Fire : 0,
+        held: Action.Grapple | Action.Attack,
+        pressed: tick === 2 ? Action.Attack : 0,
         look: aimAt(output, [0, 0.3, 0]),
       }), TICK);
       cleared = output.snapshot.openGateIds.includes('arena-gate');

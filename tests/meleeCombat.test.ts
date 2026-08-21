@@ -87,8 +87,8 @@ function hold(simulation: FlowSimulation, from: number, ticks: number): GameEven
   const events: GameEvent[] = [];
   for (let tick = from; tick < from + ticks; tick += 1) {
     events.push(...simulation.step(frame(tick, {
-      held: Action.Slash,
-      pressed: tick === from ? Action.Slash : 0,
+      held: Action.Attack,
+      pressed: tick === from ? Action.Attack : 0,
     }), TICK).events);
   }
   return events;
@@ -149,7 +149,7 @@ describe('the blade is the primary verb', () => {
     let furthestHit = 0;
     let nearestMiss = Infinity;
     for (let tick = 5; tick <= 240; tick += 1) {
-      const output = simulation.step(frame(tick, { held: Action.Slash, pressed: tick === 5 ? Action.Slash : 0 }), TICK);
+      const output = simulation.step(frame(tick, { held: Action.Attack, pressed: tick === 5 ? Action.Attack : 0 }), TICK);
       const swing = output.events.find((event) => event.kind === 'melee');
       if (!swing) continue;
       const { distance } = bearing(output);
@@ -168,7 +168,7 @@ describe('the blade is the primary verb', () => {
     // inside the blade's 65. The angle is measured rather than assumed, because a
     // hostile is already steering by the time the swing lands.
     const simulation = await start(arena({ kind: 'bot-bulwark', position: [2.5 * Math.sin(0.96), 1, -2.5 * Math.cos(0.96)] }));
-    const output = simulation.step(frame(5, { held: Action.Slash, pressed: Action.Slash }), TICK);
+    const output = simulation.step(frame(5, { held: Action.Attack, pressed: Action.Attack }), TICK);
     const { angle } = bearing(output);
     expect(angle).toBeGreaterThan(Math.acos(0.55));
     expect(angle).toBeLessThan(Math.acos(melee.light.arcCosine));
@@ -196,13 +196,15 @@ describe('the blade is the primary verb', () => {
     simulation.dispose();
   });
 
-  it('leaves the sidearm on its own button, unchanged', async () => {
+  it('turns the same button into the sidearm once the gun is selected', async () => {
     const simulation = await start(arena({ kind: 'bot-ranged', position: [0, 1, -2.5] }));
-    // `Action.Fire` is the gun now, and it still spends a round and traces a shot.
-    const output = simulation.step(frame(10, { held: Action.Fire, pressed: Action.Fire }), TICK);
+    // One trigger, and the selection decides what it does. Drawn and fired on the same
+    // tick: selection resolves before the trigger is read.
+    const output = simulation.step(frame(10, { held: Action.Attack, pressed: Action.Attack | Action.SelectGunOne }), TICK);
     expect(output.events.some((event) => event.kind === 'shot')).toBe(true);
     expect(output.snapshot.player.ammo).toBe(output.snapshot.player.magazineSize - 1);
-    // And the blade costs nothing from the magazine.
+    // And the blade costs nothing from the magazine once it is back in hand.
+    simulation.step(frame(11, { pressed: Action.SelectBlade }), TICK);
     hold(simulation, 20, 1);
     expect(simulation.step(frame(30), TICK).snapshot.player.ammo).toBe(output.snapshot.player.magazineSize - 1);
     simulation.dispose();
@@ -210,7 +212,7 @@ describe('the blade is the primary verb', () => {
 
   it('publishes the swing as an action with progress the viewmodel can read', async () => {
     const simulation = await start(arena(null));
-    const swung = simulation.step(frame(10, { held: Action.Slash, pressed: Action.Slash }), TICK);
+    const swung = simulation.step(frame(10, { held: Action.Attack, pressed: Action.Attack }), TICK);
     expect(swung.snapshot.player.action).toBe('melee');
     // Timers are drained before the swing is offered, so the tick it starts on reads
     // zero progress and the recovery is measurable from there.
@@ -237,7 +239,7 @@ describe('the blade is the primary verb', () => {
     let landed = 0;
     let killed = 0;
     for (let tick = 5; tick <= 400 && killed === 0; tick += 1) {
-      const output = simulation.step(frame(tick, { held: Action.Slash, pressed: tick === 5 ? Action.Slash : 0 }), TICK);
+      const output = simulation.step(frame(tick, { held: Action.Attack, pressed: tick === 5 ? Action.Attack : 0 }), TICK);
       for (const event of output.events) {
         if (event.kind === 'melee' && event.targetEntityId !== undefined) landed += 1;
         if (event.kind === 'kill') killed = tick;
@@ -274,7 +276,7 @@ describe('the blade is the primary verb', () => {
     );
     const simulation = await start(level);
 
-    const light = simulation.step(frame(5, { held: Action.Slash, pressed: Action.Slash }), TICK);
+    const light = simulation.step(frame(5, { held: Action.Attack, pressed: Action.Attack }), TICK);
     expect(light.events.filter((event) => event.kind === 'hit')).toHaveLength(1);
     // Let the light recover, then the heavy.
     for (let tick = 6; tick <= 5 + Math.ceil(melee.light.seconds * 60); tick += 1) simulation.step(frame(tick), TICK);
@@ -344,7 +346,7 @@ describe('the blade is the primary verb', () => {
       const simulation = await start(arena({ kind: 'bot-aggressive', position: [0, 1, -3] }));
       const health: number[] = [];
       for (let tick = 10; tick <= 200; tick += 1) {
-        const output = simulation.step(frame(tick, { held: Action.Slash | Action.Forward }), TICK);
+        const output = simulation.step(frame(tick, { held: Action.Attack | Action.Forward }), TICK);
         health.push(Math.round((output.snapshot.entities.find((entity) => entity.kind === 'bot')?.health ?? 0) * 100));
       }
       simulation.dispose();

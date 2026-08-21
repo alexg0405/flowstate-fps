@@ -27,7 +27,7 @@ import {
 import { aimAssist, botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, lifestealForKill, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
 import { bladeStyle } from '../content/blades';
 import { chassisMultiplier } from '../content/modifiers';
-import { defaultArmory, gunHoldSeconds, resolveWeaponStats } from '../content/weapons';
+import { defaultArmory, resolveWeaponStats } from '../content/weapons';
 import { NavigationService } from '../navigation/NavigationService';
 import { approach, consumeAirCharge, resetFromGround, resetFromWall, type SurfaceResetState } from './movementRules';
 import { hashSeed, SeededRandom } from './random';
@@ -116,11 +116,19 @@ interface PlayerState extends SurfaceResetState {
   /** Set once per trigger pull, so an empty weapon clicks once rather than per tick. */
   dryFireReported: boolean;
   /**
-   * Time left with the sidearm still in hand. See `gunHoldSeconds`: the blade is what
+   * Which of the three carried weapons is in the player's hands. See `Action.SelectBlade`.
+   *
+   * This was a 0.95 s timer refreshed by firing -- the blade came back on its own, which
+   * meant the attack button changed meaning underneath a player who had not asked for
+   * anything. It is a choice now, and it holds until the next one.
+   */
+  inHand: 'blade' | 'gun';
+  /**
+   * Unused remnant of the old timer, kept out of the state entirely. See `inHand`.
    * the player holds, the gun comes up when it is used and drops away again, and this is
    * the only copy of that decision -- the viewmodel and the HUD both read it now.
    */
-  gunHoldTimer: number;
+
   comboLinks: number;
   comboTimer: number;
   /** Movement tech already spent on the current chain. */
@@ -316,7 +324,7 @@ export class FlowSimulation implements GameSimulation {
       lockedTargetId: null,
       wallJumpReady: false,
       dryFireReported: false,
-      gunHoldTimer: 0,
+      inHand: 'blade',
       comboLinks: 0,
       comboTimer: 0,
       comboKinds: [],
@@ -386,7 +394,7 @@ export class FlowSimulation implements GameSimulation {
     // free; the cost of dying was already charged when it happened.
     if (this.player.locomotion === 'dead') {
       const downed: GameEvent[] = [];
-      if (input.pressed & (Action.Jump | Action.Fire | Action.Slash)) this.respawn(downed);
+      if (input.pressed & (Action.Jump | Action.Attack)) this.respawn(downed);
       return { snapshot: this.snapshot(), events: downed };
     }
     this.elapsedSeconds += dt;
@@ -438,6 +446,7 @@ export class FlowSimulation implements GameSimulation {
       ammo: this.player?.weapons.map((slot) => slot.ammo) ?? [],
       reserveAmmo: this.player?.weapons.map((slot) => slot.reserveAmmo) ?? [],
       activeSlot: this.player?.activeSlot ?? 0,
+      inHand: this.player?.inHand ?? 'blade',
       score: this.player?.score ?? 0,
       completedEncounterIds: [...this.completedEncounters],
       defeatedBotIds: this.bots.filter((bot) => !bot.alive).map((bot) => bot.id),
@@ -456,6 +465,7 @@ export class FlowSimulation implements GameSimulation {
       slot.reserveAmmo = this.checkpoint.reserveAmmo[index] ?? slot.stats.reserveAmmo;
     });
     this.player.activeSlot = this.checkpoint.activeSlot;
+    this.player.inHand = this.checkpoint.inHand;
     this.player.weaponReadyTimer = 0;
     this.player.score = this.checkpoint.score;
     this.player.locomotion = 'airborne';
@@ -1185,54 +1195,39 @@ export class FlowSimulation implements GameSimulation {
 
   private updateCombat(input: InputFrame, _dt: number, events: GameEvent[]): void {
     const player = this.player;
-    player.ads = Boolean(input.held & Action.Ads);
     // One click per trigger pull, whether the player pulled on an empty weapon or
-    // held through the last round. Either button counts, because either can be the
-    // trigger -- see `gunInHand` below.
-    if (input.released & (Action.Fire | Action.Slash)) player.dryFireReported = false;
+    // held through the last round.
+    if (input.released & Action.Attack) player.dryFireReported = false;
+    // Selection first: everything below reads what is in the player's hands, and a
+    // weapon drawn on this tick has to be the one this tick acts with.
     this.updateWeaponSwitch(input);
+    // Sights belong to a gun. A blade has none, and leaving the zoom live across a swap
+    // would hand the player a slowed walk with nothing to aim.
+    player.ads = player.inHand === 'gun' && Boolean(input.held & Action.Ads);
     const slot = player.weapons[player.activeSlot];
     const weapon = slot.stats;
 
-    if ((input.pressed & Action.Reload) && player.action !== 'melee' && slot.ammo < weapon.magazineSize && slot.reserveAmmo > 0) {
+    if ((input.pressed & Action.Reload) && player.inHand === 'gun' && player.action !== 'melee' && slot.ammo < weapon.magazineSize && slot.reserveAmmo > 0) {
       this.startReload(events);
     }
-    /**
-     * Whether the gun is what the player is currently holding.
-     *
-     * Read before `updateInHand` decays it, so this is the weapon the player can *see*
-     * in their hands on the frame they pressed the button -- which is the only reading
-     * of "what is in my hands" that a player can act on.
-     */
-    const gunInHand = player.gunHoldTimer > 0;
+    const bladeInHand = player.inHand === 'blade';
 
-    // Held rather than pressed. The blade is the primary verb now, so holding the
-    // button has to produce a rhythm at the recovery rate instead of one swing per
-    // click -- clicking four times a second is not a control scheme. The heavy is
-    // pressed rather than held, and it is checked first: it is the deliberate one, and
-    // a player holding both should get the swing they went out of their way to ask for.
+    // One trigger, and the selection decides what it does. Held rather than pressed,
+    // because the blade is the primary verb and holding the button has to produce a
+    // rhythm at the recovery rate instead of one swing per click -- clicking four times
+    // a second is not a control scheme.
     //
-    // The primary button only swings while the blade is actually up. It used to swing
-    // unconditionally, which meant a player who had deliberately drawn a gun -- with
-    // `1`, `2`, `Tab` or the sidearm button -- had it yanked back out of their hands by
-    // the button every shooter in the world puts the trigger on. The rule now is the one
-    // a player can state without reading anything: **the trigger uses whatever is in
-    // your hands**, and the ammo corner already says which that is.
-    //
-    // The blade is never locked behind this. The heavy on `E` swings regardless and
-    // clears the hold outright, so it doubles as the draw, and the gun puts itself away
-    // 0.95 s after the last shot.
-    if (player.meleeTimer === 0) {
+    // The heavy is pressed rather than held and is checked first: it is the deliberate
+    // one, and a player holding both should get the swing they went out of their way to
+    // ask for. It is a blade attack, so it needs the blade in hand like every other one.
+    if (player.meleeTimer === 0 && bladeInHand) {
       if (input.pressed & Action.Melee) this.swing(events, 'heavy');
-      else if ((input.held & Action.Slash) && !gunInHand) this.swing(events, 'light');
+      else if (input.held & Action.Attack) this.swing(events, 'light');
     }
 
     const canFire = player.fireCooldown === 0 && player.weaponReadyTimer === 0
       && player.action !== 'reloading' && player.action !== 'melee';
-    // The sidearm button always fires -- that is how the gun is drawn in the first place
-    // -- and the primary button joins it once the gun is what is in hand.
-    const triggerHeld = (input.held & Action.Fire) || (gunInHand && (input.held & Action.Slash));
-    if (triggerHeld && canFire) {
+    if (!bladeInHand && (input.held & Action.Attack) && canFire) {
       if (slot.ammo <= 0) {
         if (slot.reserveAmmo > 0) this.startReload(events);
         else if (!player.dryFireReported) {
@@ -1323,11 +1318,11 @@ export class FlowSimulation implements GameSimulation {
    * what does the swinging, and the previous arrangement animated a blade swing on a gun
    * for up to 0.95 s after a shot.
    */
-  private updateInHand(dt: number): void {
-    const player = this.player;
-    player.gunHoldTimer = Math.max(0, player.gunHoldTimer - dt);
-    if (player.action === 'firing' || player.action === 'reloading') player.gunHoldTimer = gunHoldSeconds;
-    else if (player.action === 'melee') player.gunHoldTimer = 0;
+  private updateInHand(_dt: number): void {
+    // Nothing to decay any more: `inHand` is what the player last selected, and only a
+    // slot key, the swap key or a checkpoint restore moves it. Kept as a seam because
+    // the ordering comment above still holds -- whatever decides this has to run after
+    // `updateCombat` so a switch made on this tick is in the snapshot on this tick.
   }
 
   /**
@@ -1386,35 +1381,54 @@ export class FlowSimulation implements GameSimulation {
   }
 
   /**
-   * Slot keys select directly and swap toggles. A short ready timer blocks firing
-   * so switching is a real decision rather than a free stat swap mid-burst.
+   * What the player is holding, and it is only ever their choice.
+   *
+   * Three slots on three keys -- the blade first, because it is the primary verb -- and
+   * a swap key that cycles the same three in the same order. Nothing else moves it: the
+   * previous arrangement drew a gun whenever one was fired and put the blade back 0.95 s
+   * later, so the attack button meant different things at different times without the
+   * player having asked for either.
+   *
+   * A short ready timer blocks firing after any change, so switching is a real decision
+   * rather than a free stat swap mid-burst.
    */
   private updateWeaponSwitch(input: InputFrame): void {
     const player = this.player;
-    const requested = input.pressed & Action.WeaponPrimary
+    // The cycle order is blade, gun one, gun two -- the order the keys are in.
+    const carried = player.weapons.length;
+    const current = player.inHand === 'blade' ? 0 : player.activeSlot + 1;
+    const requested = input.pressed & Action.SelectBlade
       ? 0
-      : input.pressed & Action.WeaponSecondary
+      : input.pressed & Action.SelectGunOne
         ? 1
-        : input.pressed & Action.WeaponSwap
-          ? (player.activeSlot + 1) % player.weapons.length
-          : player.activeSlot;
-    if (requested === player.activeSlot || requested >= player.weapons.length) return;
-    player.activeSlot = requested;
-    // Asking for a gun brings it up. Without this the corner changed its name while the
-    // blade stayed on screen -- the same lie the `inHand` field exists to stop, said in
-    // the other direction.
-    player.gunHoldTimer = gunHoldSeconds;
+        : input.pressed & Action.SelectGunTwo
+          ? 2
+          : input.pressed & Action.WeaponSwap
+            ? (current + 1) % (carried + 1)
+            : current;
+    if (requested === current || requested > carried) return;
+    const wasGun = player.inHand === 'gun';
+    const previousSlot = player.activeSlot;
+    player.inHand = requested === 0 ? 'blade' : 'gun';
+    if (requested > 0) player.activeSlot = requested - 1;
     // The accumulator belongs to the weapon that produced it, and the new one recovers
     // at its own rate; carrying it over would apply one gun's climb to another's curve.
     player.recoilPitch = 0;
     player.recoilYaw = 0;
     player.bloom = 0;
-    player.weaponReadyTimer = WEAPON_SWAP_SECONDS;
-    player.fireCooldown = Math.max(player.fireCooldown, WEAPON_SWAP_SECONDS);
+    // A reload cannot survive the magazine leaving the player's hands, whichever
+    // direction they went.
     if (player.action === 'reloading') {
       player.action = 'neutral';
       player.reloadTimer = 0;
     }
+    // Only a *gun* swap costs the ready beat. Putting the blade away and taking it out
+    // is a change of hands rather than a change of magazine, and this game is fast
+    // enough that charging a third of a second for it would turn the selection the
+    // player just gained into something they avoid using.
+    if (!(wasGun && player.inHand === 'gun' && previousSlot !== player.activeSlot)) return;
+    player.weaponReadyTimer = WEAPON_SWAP_SECONDS;
+    player.fireCooldown = Math.max(player.fireCooldown, WEAPON_SWAP_SECONDS);
   }
 
   private updateBots(dt: number, events: GameEvent[]): void {
@@ -2021,7 +2035,7 @@ export class FlowSimulation implements GameSimulation {
         weapons: {
           activeSlot: this.player?.activeSlot ?? 0,
           ready: (this.player?.weaponReadyTimer ?? 0) === 0,
-          inHand: (this.player?.gunHoldTimer ?? 0) > 0 ? 'gun' as const : 'blade' as const,
+          inHand: this.player?.inHand ?? 'blade',
           blade: this.blade.id,
           slots: this.player?.weapons.map((slot) => ({
             name: slot.build.name,

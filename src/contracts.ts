@@ -9,21 +9,33 @@ export const Action = {
   Sprint: 1 << 5,
   Crouch: 1 << 6,
   Dash: 1 << 7,
-  Fire: 1 << 8,
   Ads: 1 << 9,
   Reload: 1 << 10,
   Melee: 1 << 11,
   Grapple: 1 << 12,
-  WeaponPrimary: 1 << 13,
-  WeaponSecondary: 1 << 14,
+  /**
+   * What is in the player's hands, chosen explicitly and kept until they choose again.
+   *
+   * There used to be two gun slots and a blade that came back on a 0.95 s timer, which
+   * meant the attack button silently changed meaning while the player was holding it.
+   * Three slots and three keys: the choice is the player's and it is visible in the ammo
+   * corner.
+   */
+  SelectBlade: 1 << 13,
+  SelectGunOne: 1 << 14,
+  SelectGunTwo: 1 << 18,
+  /** Cycles the three in order, for a thumb that is busy. */
   WeaponSwap: 1 << 15,
   GrapplePull: 1 << 16,
   /**
-   * The blade. This is the primary verb: `Fire` is the sidearm now, and it moved to
-   * the right mouse button to make room for it. `Melee` is the heavy on the same
-   * blade -- slower, wider, and the only swing that sweeps more than one target.
+   * The trigger, and it is one verb rather than two.
+   *
+   * It attacks with whatever is in hand -- the blade swings, a gun fires -- so the
+   * primary mouse button means one thing and the *selection* decides what that thing
+   * does. Holding it produces a rhythm at the weapon's own rate. `Melee` is the heavy
+   * on the blade: slower, wider, and the only swing that sweeps more than one target.
    */
-  Slash: 1 << 17,
+  Attack: 1 << 17,
 } as const;
 
 export interface InputFrame {
@@ -815,6 +827,8 @@ export interface CheckpointState {
   ammo: readonly number[];
   reserveAmmo: readonly number[];
   activeSlot: number;
+  /** What was in the player's hands, so a restore does not rearm them differently. */
+  inHand: 'blade' | 'gun';
   score: number;
   completedEncounterIds: readonly string[];
   defeatedBotIds: readonly number[];
