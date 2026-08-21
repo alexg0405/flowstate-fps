@@ -879,6 +879,33 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 .builder-card { width: min(1080px, 94vw); }
 .builder-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; padding-bottom: .8rem; margin-bottom: 1rem; border-bottom: 2px solid rgba(8,247,255,.2); }
 .builder-header h2 { margin: .1rem 0 0; font: 900 2rem Impact,'Arial Narrow',sans-serif; letter-spacing: .04em; text-transform: uppercase; }
+/* The blade cards. Three of them, and each one is read for the last line rather than the
+   first: the style's effect on the chain is the choice being made. */
+.blade-styles{ display: grid; gap: .4rem; }
+.blade-style{
+  display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto auto;
+  gap: .1rem .5rem; align-items: baseline; text-align: left;
+  padding: .45rem .6rem .5rem; background: rgba(10,17,22,.7);
+  border: 1px solid rgba(8,247,255,.16); color: var(--cyber-paper); cursor: pointer;
+  clip-path: polygon(0 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%);
+}
+/* The global button hover inverts to solid yellow, which is right for a control and
+   wrong for a card carrying three lines of text -- on a selected card it hid the chain
+   note, which is the only line the card exists for. These keep every state readable. */
+.blade-style:hover:not(:disabled){
+  color: var(--cyber-paper); background: rgba(8,247,255,.07);
+  border-color: rgba(8,247,255,.42); box-shadow: none; transform: none;
+}
+.blade-style.selected{ border-color: var(--cyber-yellow); background: rgba(244,236,24,.1); }
+.blade-style.selected:hover:not(:disabled){
+  color: var(--cyber-paper); background: rgba(244,236,24,.16); border-color: var(--cyber-yellow);
+}
+.blade-swatch{ grid-row: 1 / span 3; width: 3px; align-self: stretch; }
+.blade-style strong{ font: 800 .8rem ui-monospace,monospace; letter-spacing: .06em; }
+.blade-style small{ color: var(--cyber-dim); font: 500 .68rem ui-monospace,monospace; }
+.blade-style em{ color: var(--cyber-cyan); font: 600 .68rem ui-monospace,monospace; font-style: normal; }
+.blade-style.selected em{ color: var(--cyber-yellow); }
+
 .builder-notice { margin: 0 0 1rem; padding: .5rem .7rem; color: var(--cyber-yellow); background: rgba(244,236,24,.08); border-left: 2px solid var(--cyber-yellow); font: 700 .55rem ui-monospace,monospace; }
 .builder-body { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.2rem; align-items: start; }
 .builder-column { min-width: 0; }

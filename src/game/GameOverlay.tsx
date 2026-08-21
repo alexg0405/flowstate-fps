@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import type { RunModifier, RuntimeLevelV1, SaveDataV4, SaveSettingsV2, SimulationSnapshot } from '../contracts';
+import type { RunModifier, RuntimeLevelV1, SaveDataV5, SaveSettingsV2, SimulationSnapshot } from '../contracts';
 import { playUiCue } from '../audio/interfaceAudio';
 import type { RecordedRun } from '../persistence/saveStore';
 import { presentation } from '../content/config';
@@ -16,12 +16,12 @@ interface GameOverlayProps {
   snapshot: SimulationSnapshot | undefined;
   level: RuntimeLevelV1;
   settings: SaveSettingsV2;
-  save: SaveDataV4;
+  save: SaveDataV5;
   /** Set once the finished run has been graded and persisted. */
   result?: RecordedRun | null;
   /** The day's rules, or null outside a daily. */
   modifier?: RunModifier | null;
-  onSaveChange: (next: SaveDataV4) => void;
+  onSaveChange: (next: SaveDataV5) => void;
   onSettingsChange: (patch: Partial<SaveSettingsV2>) => void;
   onEnter: () => void;
   onExit: () => void;

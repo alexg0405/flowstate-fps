@@ -505,6 +505,54 @@ export interface WeaponBuild {
   parts: Partial<Record<WeaponPartSlot, string>>;
 }
 
+/**
+ * The blade the player carries, chosen rather than assembled.
+ *
+ * Guns are a stat game -- four chassis, five slots, multipliers -- and that is the right
+ * shape for a secondary. The blade is the primary verb, so its reward layer is a *rules*
+ * game instead: a style changes how the chain behaves, not how much damage a number says.
+ * That is also why there are no part slots here. Duplicating the parts machinery for a
+ * second weapon would have produced two stat games and no reason to prefer either.
+ */
+export type BladeStyleId = 'tempo' | 'cleave' | 'riposte';
+
+/** What a style does to the flow chain. Every field is relative to `comboScoring`. */
+export interface BladeChainBehaviour {
+  /** Links a kill pays. The base is one, and a headshot already doubles it. */
+  killLinks: number;
+  /** Links a perfect dodge pays. */
+  dodgeLinks: number;
+  /** Added to the seconds a chain survives with nothing extending it. */
+  windowBonusSeconds: number;
+  /** Added to the multiplier every link is worth. */
+  linkStepBonus: number;
+}
+
+/** One swing's envelope. Both swings share the shape; only the numbers differ. */
+export interface BladeSwingProfile {
+  seconds: number;
+  range: number;
+  arcCosine: number;
+  damage: number;
+}
+
+export interface BladeStyleDefinition {
+  id: BladeStyleId;
+  label: string;
+  /** One line, in the register the bench already writes in. */
+  description: string;
+  /** What the style is *for*, said in terms of the chain rather than the stats. */
+  chainNote: string;
+  light: BladeSwingProfile;
+  heavy: BladeSwingProfile & {
+    /** Least a shield arc may scale the heavy to. */
+    shieldFloor: number;
+  };
+  chain: BladeChainBehaviour;
+  /** Colour the generated blade's lit edge takes. Stays inside the player's yellow. */
+  accent: string;
+}
+
 export interface BotProfile {
   kind: 'ranged' | 'aggressive' | 'bulwark';
   health: number;
@@ -692,7 +740,25 @@ export interface SaveDataV4 {
   loadout: readonly [string, string];
 }
 
-export type SaveData = LegacySaveDataV1 | SaveDataV2 | SaveDataV3 | SaveDataV4;
+export interface SaveDataV5 {
+  schemaVersion: 5;
+  settings: SaveSettingsV2;
+  /** Best attempt by score. Every stat on it comes from that one run. */
+  bestRun: RunRecord | null;
+  /** Fastest clear, which may well be a different attempt, so it is labelled apart. */
+  bestTimeSeconds: number | null;
+  /** Every weapon build the player has assembled. */
+  armory: WeaponBuild[];
+  /** Ids of the two builds carried into a run, in slot order. */
+  loadout: readonly [string, string];
+  /**
+   * The blade style carried into a run. Added in V5, because the blade became the
+   * primary verb and the thing a player chooses about it is how their chain behaves.
+   */
+  blade: BladeStyleId;
+}
+
+export type SaveData = LegacySaveDataV1 | SaveDataV2 | SaveDataV3 | SaveDataV4 | SaveDataV5;
 
 /** @deprecated Compatibility alias for consumers that still use the V1 name. */
 export type SaveDataV1 = SaveData;

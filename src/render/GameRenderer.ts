@@ -102,6 +102,11 @@ export class GameRenderer {
   private authoredViewmodel: THREE.Object3D | null = null;
   private authoredViewmodelClips: readonly THREE.AnimationClip[] = [];
 
+  /** The carried blade's accent, so the generated edge takes the style's identity. */
+  setBladeAccent(accent: string): void {
+    this.viewmodel.setBladeAccent(accent);
+  }
+
   constructor(readonly canvas: HTMLCanvasElement, settings: SaveDataV1['settings']) {
     this.settings = { ...settings };
     this.renderer = new THREE.WebGLRenderer({

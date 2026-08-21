@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { Action, type GameEvent, type InputFrame, type LegacyLevelDocumentV1, type Vec3 } from '../src/contracts';
-import { botCapsule, botProfiles, melee, playerCapsule } from '../src/content/config';
+import { botCapsule, botProfiles, playerCapsule } from '../src/content/config';
+import { bladeStyle } from '../src/content/blades';
+
+/** The blade a run carries unless the save says otherwise, and the reference envelope. */
+const melee = bladeStyle('tempo');
 import { cookLevel } from '../src/content/defaultLevel';
 import { FlowSimulation } from '../src/simulation/FlowSimulation';
 

@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
-import type { SaveDataV4, WeaponBuild, WeaponChassisId, WeaponDefinition, WeaponPartDefinition, WeaponPartSlot } from '../contracts';
+import type { SaveDataV5, WeaponBuild, WeaponChassisId, WeaponDefinition, WeaponPartDefinition, WeaponPartSlot } from '../contracts';
+import { bladeStyles } from '../content/blades';
 import { getWeaponChassis, partsForSlot, resolveWeaponStats, weaponChassis, weaponPartSlots } from '../content/weapons';
 import { Section, Tabs, UiButton } from './Primitives';
 import { WeaponPreview } from './WeaponPreview';
 
 interface WeaponBuilderProps {
-  save: SaveDataV4;
-  onChange: (next: SaveDataV4) => void;
+  save: SaveDataV5;
+  onChange: (next: SaveDataV5) => void;
   onClose: () => void;
   /** Shown when the builder is open mid-run, where changes wait for a respawn. */
   deferredNotice?: boolean;
@@ -142,7 +143,7 @@ export function WeaponBuilder({ save, onChange, onClose, deferredNotice = false,
     <section className="weapon-builder" aria-label="Weapon builder">
       <header className="builder-header">
         <div>
-          <p className="eyebrow">Gun builder</p>
+          <p className="eyebrow">Loadout bench</p>
           <h2>{build.name}</h2>
         </div>
         <UiButton onClick={onClose}>Done</UiButton>
@@ -171,8 +172,31 @@ export function WeaponBuilder({ save, onChange, onClose, deferredNotice = false,
             </div>
           </Section>
 
+          {/* The blade, first, because it is the primary verb -- and it is *chosen* rather
+              than assembled. What a style buys is a different rule for building a chain,
+              which is why each card says what it does to the chain and not what it does
+              to a damage bar. See `content/blades.ts` for why it is not a parts game. */}
+          <Section title="Blade" meta={bladeStyles.find((style) => style.id === save.blade)?.label ?? 'Tempo'}>
+            <div className="blade-styles" role="radiogroup" aria-label="Blade style">
+              {bladeStyles.map((style) => (
+                <button
+                  key={style.id}
+                  role="radio"
+                  aria-checked={save.blade === style.id}
+                  className={`blade-style ${save.blade === style.id ? 'selected' : ''}`}
+                  onClick={() => onChange({ ...save, blade: style.id })}
+                >
+                  <i className="blade-swatch" style={{ background: style.accent }} aria-hidden="true" />
+                  <strong>{style.label}</strong>
+                  <small>{style.description}</small>
+                  <em>{style.chainNote}</em>
+                </button>
+              ))}
+            </div>
+          </Section>
+
           <Section title="Loadout" meta={loadoutIndex >= 0 ? `Slot ${loadoutIndex + 1}` : 'Not carried'}>
-            <p className="muted">Two builds are carried into a run.</p>
+            <p className="muted">The blade is the primary. Two guns are carried as sidearms.</p>
             <div className="builder-actions">
               <UiButton tone={save.loadout[0] === build.id ? 'primary' : 'neutral'} onClick={() => assignSlot(0)}>Carry as 1</UiButton>
               <UiButton tone={save.loadout[1] === build.id ? 'primary' : 'neutral'} onClick={() => assignSlot(1)}>Carry as 2</UiButton>

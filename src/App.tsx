@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import type { RuntimeLevelV1, SaveDataV4, SpawnDefinition } from './contracts';
+import type { RuntimeLevelV1, SaveDataV5, SpawnDefinition } from './contracts';
 import { installInterfaceAudio } from './audio/interfaceAudio';
 import { cookLevel, defaultLevel } from './content/defaultLevel';
 import { modifierForDate } from './content/modifiers';
@@ -102,7 +102,7 @@ function BuilderRoute({ onClose }: { onClose: () => void }) {
   return (
     <WeaponBuilder
       save={save}
-      onChange={(next: SaveDataV4) => {
+      onChange={(next: SaveDataV5) => {
         setSave(next);
         writeSave(next);
       }}

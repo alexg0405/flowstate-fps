@@ -99,6 +99,8 @@ export class ViewmodelPresenter {
   private swingHeavy = false;
   private swingActive = false;
   private bladeAllowed = true;
+  /** Owned clones, so a style's accent can be set without touching the shared library. */
+  private bladeEdgeMaterials: THREE.MeshStandardMaterial[] = [];
   private settings: SaveDataV1['settings'];
 
   constructor(private readonly materials: MaterialLibrary, settings: SaveDataV1['settings']) {
@@ -121,6 +123,17 @@ export class ViewmodelPresenter {
    * drum magazine shows the drum, and a blade hanging across that preview is noise:
    * the bench is about the gun.
    */
+  /**
+   * The carried style's accent. Every style stays inside the player's half of the palette
+   * -- see `content/blades.ts` -- so this is identity rather than a free colour picker.
+   */
+  setBladeAccent(accent: string): void {
+    for (const material of this.bladeEdgeMaterials) {
+      material.color.set(accent);
+      material.emissive.set(accent);
+    }
+  }
+
   showBlade(allowed: boolean): void {
     this.bladeAllowed = allowed;
     if (!allowed) this.blade.visible = false;
@@ -845,6 +858,7 @@ export class ViewmodelPresenter {
     edgeGlow.rotation.x = Math.PI / 2;
     edgeGlow.position.set(0, 0.018, -0.44);
 
+    this.bladeEdgeMaterials = [edgeMaterial, glowMaterial];
     for (const part of [grip, pommel, guard, ricasso, span, point, edge, edgeGlow]) {
       part.castShadow = part !== edgeGlow;
       this.bladePivot.add(part);

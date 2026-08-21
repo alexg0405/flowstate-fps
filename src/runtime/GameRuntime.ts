@@ -1,5 +1,6 @@
-import type { GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveDataV1, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
+import type { BladeStyleId, GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveDataV1, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
 import { AudioManager } from '../audio/AudioManager';
+import { bladeStyle } from '../content/blades';
 import { chainEarnsFlourish } from '../content/config';
 import { InputController } from '../input/InputController';
 import { GameRenderer, type RenderStats } from '../render/GameRenderer';
@@ -139,9 +140,11 @@ export class GameRuntime {
     loadout?: readonly WeaponBuild[],
     private readonly recordGhost?: GhostTrack,
     modifier: RunModifier | null = null,
+    blade?: BladeStyleId,
   ) {
-    this.simulation = new FlowSimulation(settings, loadout, modifier);
+    this.simulation = new FlowSimulation(settings, loadout, modifier, blade);
     this.renderer = new GameRenderer(canvas, settings);
+    this.renderer.setBladeAccent(bladeStyle(blade).accent);
     this.input = new InputController(canvas);
     this.unsubscribeLock = this.input.onLockChange((locked) => {
       this.accumulator = 0;

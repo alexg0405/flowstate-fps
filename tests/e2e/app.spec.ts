@@ -580,7 +580,9 @@ test('builds a weapon in the armory and carries it into a run', async ({ page })
   await page.getByRole('button', { name: 'Carry as 1' }).click();
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('flowstate-fps-save-v1') ?? '{}'));
-  expect(saved.schemaVersion).toBe(4);
+  expect(saved.schemaVersion).toBe(5);
+  // V5 added the blade, and a save written by the bench has to carry one.
+  expect(saved.blade).toBe('tempo');
   const carried = saved.armory.find((build: { id: string }) => build.id === saved.loadout[0]);
   expect(carried).toMatchObject({ name: 'Breacher', chassisId: 'shotgun' });
   expect(carried.parts.magazine).toBe('magazine.extended');

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeLevelV1, SaveDataV4, SaveSettingsV2 } from '../contracts';
+import type { RuntimeLevelV1, SaveDataV5, SaveSettingsV2 } from '../contracts';
 import { modifierForDate } from '../content/modifiers';
 import { GameRuntime, type RuntimeUpdate } from '../runtime/GameRuntime';
 import { loadoutBuilds, loadSave, recordRun, writeSave, type RecordedRun } from '../persistence/saveStore';
@@ -44,6 +44,7 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
         // is worth and how hard it pushes back.
         save.bestRun?.modifierId === modifier.id ? save.bestRun?.ghost : undefined,
         modifier,
+        save.blade,
       );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -93,7 +94,7 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
   };
 
   const updateSettings = (patch: Partial<SaveSettingsV2>) => {
-    const next: SaveDataV4 = { ...save, settings: { ...save.settings, ...patch } };
+    const next: SaveDataV5 = { ...save, settings: { ...save.settings, ...patch } };
     setSave(next);
     writeSave(next);
     runtimeRef.current?.updateSettings(next.settings);

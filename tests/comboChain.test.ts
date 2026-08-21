@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { Action, type GameEvent, type InputFrame, type LegacyLevelDocumentV1 } from '../src/contracts';
-import { comboScoring, melee } from '../src/content/config';
+import { comboScoring } from '../src/content/config';
+import { bladeStyle } from '../src/content/blades';
+
+const melee = bladeStyle('tempo');
+/**
+ * How long a chain survives with nothing extending it. A property of the carried blade
+ * now, not a constant: Tempo holds a chain open two seconds longer than the base, which
+ * is the whole reason to carry it.
+ */
+const WINDOW_SECONDS = comboScoring.linkWindowSeconds + melee.chain.windowBonusSeconds;
 import { cookLevel } from '../src/content/defaultLevel';
 import { FlowSimulation } from '../src/simulation/FlowSimulation';
 
@@ -230,7 +239,7 @@ describe('the flow chain', () => {
 
     let broke: GameEvent | undefined;
     let tick = 24;
-    const deadline = tick + Math.ceil(comboScoring.linkWindowSeconds * 60) + 30;
+    const deadline = tick + Math.ceil(WINDOW_SECONDS * 60) + 30;
     for (; tick <= deadline && !broke; tick += 1) {
       broke = simulation.step(frame(tick), TICK).events.find((event) => event.kind === 'comboBreak');
     }

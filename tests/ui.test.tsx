@@ -1,8 +1,9 @@
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SaveDataV4, SaveSettingsV2, SimulationSnapshot } from '../src/contracts';
+import type { SaveDataV5, SaveSettingsV2, SimulationSnapshot } from '../src/contracts';
 import { cookLevel, defaultLevel } from '../src/content/defaultLevel';
+import { bladeStyles } from '../src/content/blades';
 import { defaultArmory } from '../src/content/weapons';
 import { GameOverlay, SettingsPanel } from '../src/game/GameOverlay';
 import { Hud } from '../src/game/Hud';
@@ -104,15 +105,16 @@ function snapshotFixture(overrides: Partial<SimulationSnapshot['player']> = {}, 
   };
 }
 
-function saveFixture(): SaveDataV4 {
+function saveFixture(): SaveDataV5 {
   const armory = defaultArmory();
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     settings: settingsFixture,
     bestRun: null,
     bestTimeSeconds: null,
     armory,
     loadout: [armory[0].id, armory[1].id],
+    blade: 'tempo',
   };
 }
 
@@ -708,13 +710,56 @@ describe('settings panel accessibility controls', () => {
   });
 });
 
+describe('the bench chooses a blade', () => {
+  it('leads with the blade, and each card is read for what it does to the chain', () => {
+    let latest = saveFixture();
+    render(<WeaponBuilder save={latest} onChange={(next) => { latest = next; }} onClose={() => {}} />);
+
+    const cards = [...container.querySelectorAll('.blade-style')];
+    expect(cards).toHaveLength(bladeStyles.length);
+    // The last line of a card is the chain note, and that is the choice being made: a
+    // card that only reported damage would put the blade back in the gun's stat game.
+    for (const card of cards) {
+      const note = card.querySelector('em');
+      expect(note?.textContent ?? '').not.toBe('');
+    }
+    // The blade section comes before the gun loadout, because it is the primary verb.
+    const body = query('.builder-armory').textContent ?? '';
+    expect(body.indexOf('Tempo')).toBeLessThan(body.indexOf('sidearms'));
+  });
+
+  it('reports and changes which style is carried', () => {
+    let latest = saveFixture();
+    const rerender = () => render(<WeaponBuilder save={latest} onChange={(next) => { latest = next; }} onClose={() => {}} />);
+    rerender();
+
+    const selected = () => [...container.querySelectorAll('.blade-style')].find((card) => card.getAttribute('aria-checked') === 'true');
+    expect(selected()?.textContent).toContain('Tempo');
+
+    const cleave = [...container.querySelectorAll<HTMLElement>('.blade-style')].find((card) => card.textContent?.includes('Cleave'))!;
+    act(() => cleave.click());
+    expect(latest.blade).toBe('cleave');
+    rerender();
+    expect(selected()?.textContent).toContain('Cleave');
+  });
+
+  it('keeps the gun bench intact beside it', () => {
+    // A repoint, not a rewrite: the chassis tabs, the slots and the stat rows are all
+    // still there, because the sidearm is still a stat game.
+    render(<WeaponBuilder save={saveFixture()} onChange={() => {}} onClose={() => {}} />);
+    expect(container.querySelector('.blade-styles')).not.toBeNull();
+    expect(container.querySelectorAll('[role="tab"]').length).toBeGreaterThanOrEqual(4);
+    expect(query('.builder-bench')).not.toBeNull();
+  });
+});
+
 describe('save migration', () => {
   it('defaults reduced motion from the media query when a legacy save omits it', () => {
     // jsdom omits matchMedia entirely, so the preference has to be stubbed in.
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('prefers-reduced-motion') }));
     try {
       const migrated = migrateSaveData({ schemaVersion: 1, settings: { fov: 100 }, bestTimeSeconds: null, bestScore: 0, rank: null });
-      expect(migrated.schemaVersion).toBe(4);
+      expect(migrated.schemaVersion).toBe(5);
       expect(migrated.settings.reducedMotion).toBe(true);
       expect(migrated.settings.fov).toBe(100);
     } finally {
@@ -759,7 +804,7 @@ describe('interface primitives', () => {
 });
 
 describe('weapon builder', () => {
-  function open(overrides: Partial<SaveDataV4> = {}) {
+  function open(overrides: Partial<SaveDataV5> = {}) {
     const save = { ...saveFixture(), ...overrides };
     const onChange = vi.fn();
     render(<WeaponBuilder save={save} onChange={onChange} onClose={() => {}} />);
@@ -786,7 +831,7 @@ describe('weapon builder', () => {
     const { onChange } = open();
     const drum = openSlot('Magazine').find((card) => card.textContent?.includes('Drum'));
     act(() => drum!.click());
-    const next = onChange.mock.calls.at(-1)![0] as SaveDataV4;
+    const next = onChange.mock.calls.at(-1)![0] as SaveDataV5;
     expect(next.armory[0].parts.magazine).toBe('magazine.drum');
     // The drum should genuinely raise capacity once resolved.
     expect(resolveWeaponStats(next.armory[0]).magazineSize).toBeGreaterThan(resolveWeaponStats(saveFixture().armory[0]).magazineSize);
@@ -840,7 +885,7 @@ describe('weapon builder', () => {
     const { onChange } = open();
     const shotgunTab = [...container.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === 'Shotgun');
     act(() => (shotgunTab as HTMLButtonElement).click());
-    const next = onChange.mock.calls.at(-1)![0] as SaveDataV4;
+    const next = onChange.mock.calls.at(-1)![0] as SaveDataV5;
     expect(next.armory[0].chassisId).toBe('shotgun');
     expect(next.armory[0].parts).toEqual({});
   });
@@ -848,21 +893,21 @@ describe('weapon builder', () => {
   it('renames a build', () => {
     const { onChange } = open();
     setFieldValue(query('input[aria-label="Build name"]') as HTMLInputElement, 'Breacher');
-    expect((onChange.mock.calls.at(-1)![0] as SaveDataV4).armory[0].name).toBe('Breacher');
+    expect((onChange.mock.calls.at(-1)![0] as SaveDataV5).armory[0].name).toBe('Breacher');
   });
 
   it('assigns the selected build to a loadout slot', () => {
     const { save, onChange } = open();
     const carryTwo = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Carry as 2');
     act(() => carryTwo?.click());
-    expect((onChange.mock.calls.at(-1)![0] as SaveDataV4).loadout).toEqual([save.armory[0].id, save.armory[0].id]);
+    expect((onChange.mock.calls.at(-1)![0] as SaveDataV5).loadout).toEqual([save.armory[0].id, save.armory[0].id]);
   });
 
   it('adds a build and refuses to empty the armory', () => {
     const { onChange } = open();
     const add = [...container.querySelectorAll('button')].find((button) => button.textContent === 'New build');
     act(() => add?.click());
-    expect((onChange.mock.calls.at(-1)![0] as SaveDataV4).armory).toHaveLength(3);
+    expect((onChange.mock.calls.at(-1)![0] as SaveDataV5).armory).toHaveLength(3);
 
     const single = saveFixture();
     const only = { ...single, armory: [single.armory[0]], loadout: [single.armory[0].id, single.armory[0].id] as const };

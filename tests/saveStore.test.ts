@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { defaultSave, runScoring } from '../src/content/config';
-import type { LegacySaveDataV1, SaveDataV4 } from '../src/contracts';
+import type { LegacySaveDataV1, SaveDataV5 } from '../src/contracts';
 import { loadSave, migrateSaveData, rankRun, recordRun, writeSave } from '../src/persistence/saveStore';
 
 describe('local run records', () => {
@@ -10,7 +10,7 @@ describe('local run records', () => {
     recordRun(defaultSave, 120, 500, 0);
     const second = recordRun(loadSave(), 140, 800, 2);
     const save = loadSave();
-    expect(save.schemaVersion).toBe(4);
+    expect(save.schemaVersion).toBe(5);
     // The higher-scoring run owns the record, and every stat on it is that run's.
     expect(save.bestRun).toMatchObject({ timeSeconds: 140, score: 800, deaths: 2 });
     // The faster run is still tracked, but it is not folded into the record.
@@ -58,7 +58,7 @@ describe('local run records', () => {
   });
 
   it('round-trips accessibility and graphics settings', () => {
-    const changed: SaveDataV4 = {
+    const changed: SaveDataV5 = {
       ...migrateSaveData(defaultSave),
       settings: {
         ...migrateSaveData(defaultSave).settings,
@@ -104,7 +104,7 @@ describe('local run records', () => {
 
     const migrated = loadSave();
     expect(migrated).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       bestTimeSeconds: 82.5,
       // A legacy save's three independent fields are reconstructed as one record,
       // which is the closest honest reading of data that never described one run.
@@ -146,7 +146,7 @@ describe('armory persistence', () => {
       schemaVersion: 1, settings: { fov: 100 }, bestTimeSeconds: 70, bestScore: 400, rank: 'B',
     }));
     const migrated = loadSave();
-    expect(migrated.schemaVersion).toBe(4);
+    expect(migrated.schemaVersion).toBe(5);
     expect(migrated.armory.length).toBeGreaterThanOrEqual(2);
     expect(migrated.bestTimeSeconds).toBe(70);
     expect(migrated.bestRun).toMatchObject({ score: 400, rank: 'B' });

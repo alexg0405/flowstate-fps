@@ -18,11 +18,14 @@ import {
   type SimulationSnapshot,
   type SpawnDefinition,
   type TraversalFlags,
+  type BladeStyleDefinition,
+  type BladeStyleId,
   type WeaponBuild,
   type WeaponDefinition,
   type Vec3,
 } from '../contracts';
-import { aimAssist, botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, melee, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
+import { aimAssist, botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
+import { bladeStyle } from '../content/blades';
 import { chassisMultiplier } from '../content/modifiers';
 import { defaultArmory, resolveWeaponStats } from '../content/weapons';
 import { NavigationService } from '../navigation/NavigationService';
@@ -194,14 +197,21 @@ export class FlowSimulation implements GameSimulation {
   private settings: SaveDataV1['settings'];
   private loadout: readonly WeaponBuild[];
   private readonly modifier: RunModifier | null;
+  /**
+   * The blade carried into this run. Every swing number and every chain rule comes from
+   * here rather than from a constant, which is what makes the bench a real choice.
+   */
+  private readonly blade: BladeStyleDefinition;
 
   constructor(
     settings?: Partial<SaveDataV1['settings']>,
     loadout?: readonly WeaponBuild[],
     modifier: RunModifier | null = null,
+    blade?: BladeStyleId,
   ) {
     this.loadout = loadout?.length ? loadout.slice(0, 2) : defaultArmory();
     this.modifier = modifier;
+    this.blade = bladeStyle(blade);
     this.settings = {
       sensitivity: 0.002,
       fov: 92,
@@ -284,7 +294,7 @@ export class FlowSimulation implements GameSimulation {
       fireCooldown: 0,
       reloadTimer: 0,
       meleeTimer: 0,
-      meleeDuration: melee.light.seconds,
+      meleeDuration: this.blade.light.seconds,
       invulnerableTimer: 0,
       dodgeCooldown: 0,
       score: 0,
@@ -1240,7 +1250,7 @@ export class FlowSimulation implements GameSimulation {
    */
   private swing(events: GameEvent[], kind: 'light' | 'heavy'): void {
     const player = this.player;
-    const profile = kind === 'heavy' ? melee.heavy : melee.light;
+    const profile = kind === 'heavy' ? this.blade.heavy : this.blade.light;
     player.action = 'melee';
     player.meleeTimer = profile.seconds;
     player.meleeDuration = profile.seconds;
@@ -1260,7 +1270,7 @@ export class FlowSimulation implements GameSimulation {
       this.damageBot(target, profile.damage, events, this.positionOf(target.body), {
         sourceEntityId: player.id,
         headshot: false,
-      }, kind === 'heavy' ? melee.heavy.shieldFloor : undefined);
+      }, kind === 'heavy' ? this.blade.heavy.shieldFloor : undefined);
     }
     // A swing that connected extends the chain, and the two swings are different link
     // kinds -- so the no-repeat rule means mashing one of them pays exactly once and
@@ -1512,7 +1522,7 @@ export class FlowSimulation implements GameSimulation {
         sourceEntityId: bot.id,
         targetEntityId: this.player.id,
       }));
-      this.addComboLink(events, 'dodge');
+      this.addComboLink(events, 'dodge', this.blade.chain.dodgeLinks);
       return;
     }
     this.player.health -= damage;
@@ -1726,7 +1736,8 @@ export class FlowSimulation implements GameSimulation {
         ...details,
         targetEntityId: bot.id,
       }));
-      this.addComboLink(events, 'kill', details.headshot ? 2 : 1);
+      // A style may pay more for a kill, and a headshot still doubles whatever that is.
+      this.addComboLink(events, 'kill', this.blade.chain.killLinks * (details.headshot ? 2 : 1));
     }
   }
 
@@ -1829,7 +1840,7 @@ export class FlowSimulation implements GameSimulation {
 
   private comboMultiplier(): number {
     const links = Math.min(this.player?.comboLinks ?? 0, comboScoring.maxLinks);
-    return 1 + links * comboScoring.linkStep;
+    return 1 + links * (comboScoring.linkStep + this.blade.chain.linkStepBonus);
   }
 
   /**
@@ -1853,9 +1864,14 @@ export class FlowSimulation implements GameSimulation {
       }
     }
     player.score += award;
-    player.comboTimer = comboScoring.linkWindowSeconds;
+    player.comboTimer = this.comboWindowSeconds();
     this.comboPeak = Math.max(this.comboPeak, player.comboLinks);
     events.push(this.event('comboLink', this.positionOf(player.body), player.id, player.comboLinks));
+  }
+
+  /** How long a chain survives on this blade. */
+  private comboWindowSeconds(): number {
+    return comboScoring.linkWindowSeconds + this.blade.chain.windowBonusSeconds;
   }
 
   private breakCombo(events: GameEvent[]): void {
@@ -1966,7 +1982,7 @@ export class FlowSimulation implements GameSimulation {
         combo: {
           links: this.player?.comboLinks ?? 0,
           multiplier: this.comboMultiplier(),
-          window: Math.min(1, (this.player?.comboTimer ?? 0) / comboScoring.linkWindowSeconds),
+          window: Math.min(1, (this.player?.comboTimer ?? 0) / this.comboWindowSeconds()),
           peakLinks: this.comboPeak,
         },
         deaths: this.deaths,

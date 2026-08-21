@@ -1,5 +1,6 @@
 import { defaultSave, runScoring } from '../content/config';
 import { getRunModifier } from '../content/modifiers';
+import { defaultBladeStyle, isBladeStyleId } from '../content/blades';
 import { defaultArmory, getWeaponChassis, getWeaponPart, weaponPartSlots } from '../content/weapons';
 import type {
   GhostTrack,
@@ -7,7 +8,7 @@ import type {
   RunRecord,
   RunSplit,
   SaveData,
-  SaveDataV4,
+  SaveDataV5,
   SaveSettingsV2,
   WeaponBuild,
   WeaponChassisId,
@@ -22,7 +23,7 @@ const RANKS: readonly RunRank[] = ['S', 'A', 'B', 'C'];
 
 const GRAPHICS_QUALITIES = new Set<SaveSettingsV2['graphicsQuality']>(['auto', 'low', 'medium', 'high']);
 
-export function loadSave(): SaveDataV4 {
+export function loadSave(): SaveDataV5 {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return saveDefaults();
@@ -32,10 +33,10 @@ export function loadSave(): SaveDataV4 {
   }
 }
 
-export function migrateSaveData(input: unknown): SaveDataV4 {
+export function migrateSaveData(input: unknown): SaveDataV5 {
   const defaults = saveDefaults();
   const version = isRecord(input) ? input.schemaVersion : undefined;
-  if (!isRecord(input) || version !== 1 && version !== 2 && version !== 3 && version !== 4) return defaults;
+  if (!isRecord(input) || typeof version !== 'number' || version < 1 || version > 5) return defaults;
 
   const settings = isRecord(input.settings) ? input.settings : {};
   const quality = GRAPHICS_QUALITIES.has(settings.graphicsQuality as SaveSettingsV2['graphicsQuality'])
@@ -45,9 +46,12 @@ export function migrateSaveData(input: unknown): SaveDataV4 {
   // V1 and V2 saves predate the armory, so they inherit the seeded builds.
   const armory = sanitizeArmory(input.armory) ?? defaults.armory;
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     armory,
     loadout: sanitizeLoadout(input.loadout, armory),
+    // Saves before V5 predate the blade being a choice, so they inherit the reference
+    // style rather than losing their run history to a field they could not have had.
+    blade: isBladeStyleId(input.blade) ? input.blade : defaultBladeStyle,
     bestRun: sanitizeRecord(input.bestRun) ?? legacyRecord(input),
     settings: {
       sensitivity: numberOr(settings.sensitivity, defaults.settings.sensitivity),
@@ -175,11 +179,11 @@ function sanitizeLoadout(value: unknown, armory: readonly WeaponBuild[]): readon
 }
 
 /** The two builds carried into a run, in slot order. */
-export function loadoutBuilds(save: SaveDataV4): WeaponBuild[] {
+export function loadoutBuilds(save: SaveDataV5): WeaponBuild[] {
   return save.loadout.map((id) => save.armory.find((build) => build.id === id) ?? save.armory[0]).filter(Boolean);
 }
 
-function saveDefaults(): SaveDataV4 {
+function saveDefaults(): SaveDataV5 {
   const legacy = structuredClone(defaultSave);
   const settings: SaveSettingsV2 = {
     ...legacy.settings,
@@ -189,12 +193,13 @@ function saveDefaults(): SaveDataV4 {
   if (typeof matchMedia === 'function') settings.reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const armory = defaultArmory();
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     settings,
     bestRun: null,
     bestTimeSeconds: legacy.bestTimeSeconds,
     armory,
     loadout: [armory[0].id, armory[1].id],
+    blade: defaultBladeStyle,
   };
 }
 
@@ -221,7 +226,7 @@ export function rankRun(elapsedSeconds: number, deaths: number, peakCombo = 0): 
 }
 
 export interface RecordedRun {
-  save: SaveDataV4;
+  save: SaveDataV5;
   run: RunRecord;
   /** The record this run was measured against, or null on a first clear. */
   previousBest: RunRecord | null;
@@ -256,7 +261,7 @@ export function recordRun(
   // tracked, but as the explicitly separate `bestTimeSeconds`.
   const isBestRun = previousBest === null || run.score > previousBest.score;
   const isFastest = current.bestTimeSeconds === null || elapsedSeconds < current.bestTimeSeconds;
-  const next: SaveDataV4 = {
+  const next: SaveDataV5 = {
     ...current,
     bestRun: isBestRun ? run : previousBest,
     bestTimeSeconds: isFastest ? elapsedSeconds : current.bestTimeSeconds,
