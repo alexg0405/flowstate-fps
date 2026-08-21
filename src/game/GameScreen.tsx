@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { RuntimeLevelV1, SaveDataV6, SaveSettingsV3 } from '../contracts';
 import { setInterfaceVolume } from '../audio/interfaceAudio';
 import { modifierForDate } from '../content/modifiers';
+import { observeTouchControls, prefersTouchControls } from '../input/touchControls';
 import { GameRuntime, type RuntimeUpdate } from '../runtime/GameRuntime';
 import { loadoutBuilds, loadSave, recordRun, writeSave, type RecordedRun } from '../persistence/saveStore';
 import { GameOverlay, type ScreenState } from './GameOverlay';
 import { Hud } from './Hud';
+import { TouchControls } from './TouchControls';
+import { useLandscape } from './useLandscape';
 
 interface GameScreenProps {
   level: RuntimeLevelV1;
@@ -22,6 +25,11 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [save, setSave] = useState(loadSave);
   const [result, setResult] = useState<RecordedRun | null>(null);
+  // Which scheme this device gets. Watched rather than read once: a tablet that gains a
+  // mouse, or a preview pane emulating a phone, changes the answer mid-session.
+  const [touch, setTouch] = useState(prefersTouchControls);
+  useEffect(() => observeTouchControls(setTouch), []);
+  const landscape = useLandscape();
   // Fixed for the lifetime of the screen, so a run cannot change rules at midnight.
   const modifierRef = useRef(modifierForDate(new Date()));
   const modifier = modifierRef.current;
@@ -88,7 +96,11 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
 
   const enter = async () => {
     try {
-      await runtimeRef.current?.startInput();
+      // Fullscreen and the orientation lock are asked for and never insisted on: iPhone
+      // Safari implements neither, and a run that refused to start without them would
+      // refuse to start on the most common touch device there is.
+      if (touch) await goFullscreenLandscape();
+      await runtimeRef.current?.startInput(touch);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
@@ -115,7 +127,7 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
           : 'standby';
 
   return (
-    <main className={`game-shell state-${screenState} ${save.settings.reducedMotion ? 'reduced-motion' : ''}`}>
+    <main className={`game-shell state-${screenState} ${save.settings.reducedMotion ? 'reduced-motion' : ''} ${touch ? 'is-touch' : ''}`}>
       <canvas ref={canvasRef} className="game-canvas" aria-label="Flow State FPS game canvas" />
       <div className="game-chrome" aria-hidden="true">
         <span className="chrome-corner chrome-corner-nw" />
@@ -125,7 +137,7 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
         <div className="scanline-field" />
         <div className="visor-noise" />
       </div>
-      {snapshot && <Hud snapshot={snapshot} hits={update?.hits} damage={update?.damage} ghost={update?.ghost} ovation={update?.ovation} dodge={update?.dodge} heal={update?.heal} modifier={modifier} />}
+      {snapshot && <Hud snapshot={snapshot} hits={update?.hits} damage={update?.damage} ghost={update?.ghost} ovation={update?.ovation} dodge={update?.dodge} heal={update?.heal} moment={update?.moment} modifier={modifier} />}
       {debug && update && <DebugPanel update={update} />}
       <div className="top-actions" role="toolbar" aria-label="Run controls">
         <span className="run-link-status" aria-hidden="true"><i />SIM/LINK</span>
@@ -134,6 +146,24 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
         </button>
         <button className="utility-action exit-action" onClick={onExit}><span aria-hidden="true">×</span>Exit</button>
       </div>
+      {touch && screenState === 'active' && snapshot && (
+        <TouchControls
+          input={runtimeRef.current!.touch}
+          grappling={snapshot.player.grapple.active}
+          gunInHand={snapshot.player.weapons.inHand === 'gun'}
+          onPause={() => runtimeRef.current?.releaseInput()}
+        />
+      )}
+      {/* The route is authored wide and read at speed; a portrait phone can show about a
+          third of it. Said plainly rather than letting the player start a run they cannot
+          see, and it sits over everything including the pause card. */}
+      {touch && !landscape && (
+        <div className="rotate-notice" role="alert">
+          <i aria-hidden="true">⟳</i>
+          <strong>Turn your device</strong>
+          <p>White Line is played in landscape.</p>
+        </div>
+      )}
       {screenState !== 'active' && (
         <GameOverlay
           screenState={screenState}
@@ -151,10 +181,31 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
           onSettingsChange={updateSettings}
           onEnter={enter}
           onExit={onExit}
+          touch={touch}
         />
       )}
     </main>
   );
+}
+
+/**
+ * Asks for the two things a phone needs and shrugs at both refusals. `requestFullscreen`
+ * is missing on iPhone Safari and `orientation.lock` is missing or rejects unless the
+ * page is already fullscreen, so every step here is independently optional.
+ */
+async function goFullscreenLandscape(): Promise<void> {
+  const root = document.documentElement;
+  try {
+    if (!document.fullscreenElement && typeof root.requestFullscreen === 'function') await root.requestFullscreen({ navigationUI: 'hide' });
+  } catch {
+    // A browser that will not go fullscreen still plays the game.
+  }
+  const orientation = screen.orientation as (ScreenOrientation & { lock?: (to: string) => Promise<void> }) | undefined;
+  try {
+    await orientation?.lock?.('landscape');
+  } catch {
+    // And one that will not lock still rotates.
+  }
 }
 
 function DebugPanel({ update }: { update: RuntimeUpdate }) {

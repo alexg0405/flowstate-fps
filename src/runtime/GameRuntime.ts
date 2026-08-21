@@ -1,8 +1,8 @@
-import type { BladeStyleId, BotProfile, GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveSettingsV3, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
-import { AudioManager } from '../audio/AudioManager';
+import type { BladeStyleId, GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveSettingsV3, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
+import { AudioManager, type AudioHostile } from '../audio/AudioManager';
 import { bladeStyle } from '../content/blades';
-import { chainEarnsFlourish } from '../content/config';
-import { InputController } from '../input/InputController';
+import { chainEarnsFlourish, openness } from '../content/config';
+import { InputController, type TouchInput } from '../input/InputController';
 import { GameRenderer, type RenderStats } from '../render/GameRenderer';
 import { FlowSimulation } from '../simulation/FlowSimulation';
 import { GhostPlayback, GhostRecorder } from './GhostRecorder';
@@ -106,6 +106,29 @@ export interface HealMark {
   amount: number;
 }
 
+/**
+ * A moment the frame stops being a play frame and becomes a panel.
+ *
+ * Three of them, and the count is the point: a graphic transition every few minutes is a
+ * signature and one every thirty seconds is a tic. They are the three moments in a run that
+ * are already the largest things that can happen -- a room refusing to be finished with
+ * you, a thirty-metre door opening, and going down -- and each already carries the mix's
+ * deepest punctuation on the same tick.
+ *
+ * `complete` is deliberately not among them. The results overlay mounts on the same frame
+ * the run finishes, at a higher stacking level, so a panel there would play its whole life
+ * underneath a card nobody can see past.
+ */
+export interface GraphicMoment {
+  id: number;
+  kind: 'wave' | 'down' | 'open';
+  /** What the panel says. Short: it is on screen for under a second. */
+  label: string;
+}
+
+/** How long each panel stays mounted. */
+const MOMENT_LIFETIME_MS: Record<GraphicMoment['kind'], number> = { wave: 900, down: 720, open: 1050 };
+
 /** How the run stands against the record path, for the HUD. */
 export interface GhostStanding {
   /** Negative means ahead of the record, positive means behind it. */
@@ -124,6 +147,8 @@ export interface RuntimeUpdate {
   dodge: DodgeMark | null;
   /** Null except in the brief window after a kill returned health. */
   heal: HealMark | null;
+  /** Null except during one of the three graphic moments. See `GraphicMoment`. */
+  moment: GraphicMoment | null;
   /** Null when no record path exists for this route yet. */
   ghost: GhostStanding | null;
 }
@@ -144,14 +169,15 @@ export class GameRuntime {
   private activeOvation: (ChainOvation & { expiresAt: number }) | null = null;
   private activeDodge: (DodgeMark & { expiresAt: number }) | null = null;
   private activeHeal: (HealMark & { expiresAt: number; bornAt: number }) | null = null;
+  private activeMoment: (GraphicMoment & { expiresAt: number }) | null = null;
   private running = false;
   private disposed = false;
   private lastUiUpdate = 0;
   private recorder: GhostRecorder | null = null;
   private playback: GhostPlayback | null = null;
   private readonly unsubscribeLock: () => void;
-  /** Reused between frames. See `audioProfiles`. */
-  private readonly profileRoster = new Map<number, BotProfile['kind']>();
+  /** Reused between frames. See `audioRoster`. */
+  private readonly audioHostiles = new Map<number, AudioHostile>();
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -206,20 +232,23 @@ export class GameRuntime {
   }
 
   /**
-   * What each live hostile is made of, for the mix.
+   * Every live hostile, for the mix.
    *
    * Rebuilt in place every frame rather than allocated: this runs at the display rate
    * alongside everything else in `loop`, and a fresh `Map` of twenty-eight entries per
-   * frame is garbage for no reason. The mix needs it because a slash into a brawler, a
-   * slash into a plate and a slash into a hunter are three different impacts and the
-   * simulation is the only thing that knows which one happened.
+   * frame is garbage for no reason. The mix needs two things from it. A slash into a
+   * brawler, a slash into a plate and a slash into a hunter are three different impacts,
+   * and the simulation is the only thing that knows which one happened. And a hostile
+   * pointed at the player is worth several decibels over one that happens to be nearby,
+   * which needs where it is standing and which way it is facing.
    */
-  private audioProfiles(): ReadonlyMap<number, BotProfile['kind']> {
-    this.profileRoster.clear();
+  private audioRoster(): ReadonlyMap<number, AudioHostile> {
+    this.audioHostiles.clear();
     for (const entity of this.snapshot.entities) {
-      if (entity.kind === 'bot' && entity.profile) this.profileRoster.set(entity.id, entity.profile);
+      if (entity.kind !== 'bot' || !entity.profile || entity.health <= 0) continue;
+      this.audioHostiles.set(entity.id, { kind: entity.profile, position: entity.position, facing: entity.rotationY });
     }
-    return this.profileRoster;
+    return this.audioHostiles;
   }
 
   /** The path this run took, for storing alongside a new record. */
@@ -227,9 +256,29 @@ export class GameRuntime {
     return this.recorder?.track() ?? null;
   }
 
-  async startInput(): Promise<void> {
+  /**
+   * Opens the audio context and takes input.
+   *
+   * `touch` decides which of the two schemes engages, and it is passed rather than
+   * detected here because the screen already knows -- it is drawing the overlay from the
+   * same answer, and two independent detections would eventually disagree. Either way the
+   * first thing that happens is `resume`: every browser requires a gesture before it will
+   * make a sound, and this is that gesture on both schemes.
+   */
+  async startInput(touch = false): Promise<void> {
     await this.audio.resume();
-    await this.input.requestLock();
+    if (touch) this.input.engageTouch();
+    else await this.input.requestLock();
+  }
+
+  /** Hands the run back without a keyboard, which is what a phone has to do. */
+  releaseInput(): void {
+    this.input.release();
+  }
+
+  /** What the on-screen controls drive. See `TouchInput`. */
+  get touch(): TouchInput {
+    return this.input.touch;
   }
 
   dispose(): void {
@@ -287,6 +336,14 @@ export class GameRuntime {
         } else {
           this.activeHeal = { id: event.id, amount, bornAt: now, expiresAt: now + HEAL_LIFETIME_MS };
         }
+        continue;
+      }
+      // The graphic layer, and it deliberately reads the same three events the mix
+      // reserves its deepest punctuation for.
+      if (event.kind === 'wave' || event.kind === 'death' || event.kind === 'gateOpen') {
+        const kind = event.kind === 'wave' ? 'wave' : event.kind === 'death' ? 'down' : 'open';
+        const label = kind === 'wave' ? `WAVE ${Math.max(1, this.snapshot.wave.current)}` : kind === 'down' ? 'DOWN' : 'WAY OPEN';
+        this.activeMoment = { id: event.id, kind, label, expiresAt: now + MOMENT_LIFETIME_MS[kind] };
         continue;
       }
       if (event.kind === 'enemyAttack') {
@@ -362,6 +419,11 @@ export class GameRuntime {
     return this.activeHeal && { id: this.activeHeal.id, amount: this.activeHeal.amount };
   }
 
+  private currentMoment(now: number): GraphicMoment | null {
+    if (this.activeMoment && this.activeMoment.expiresAt <= now) this.activeMoment = null;
+    return this.activeMoment && { id: this.activeMoment.id, kind: this.activeMoment.kind, label: this.activeMoment.label };
+  }
+
   private currentDodge(now: number): DodgeMark | null {
     if (this.activeDodge && this.activeDodge.expiresAt <= now) this.activeDodge = null;
     return this.activeDodge && { id: this.activeDodge.id, refused: this.activeDodge.refused };
@@ -415,11 +477,15 @@ export class GameRuntime {
       this.accumulator = 0;
     }
 
+    // Which gun is in hand, so the mechanical layer is the one this chassis has. Unlike
+    // the blade this changes inside a run, so it is pushed rather than set once.
+    const weapons = this.snapshot.player.weapons;
+    this.audio.setWeaponChassis(weapons.slots[weapons.activeSlot]?.chassisId);
     this.audio.consume(this.pendingEvents, {
       position: this.snapshot.camera.position,
       yaw: this.snapshot.camera.yaw,
       playerId: this.playerId() ?? 0,
-      profiles: this.audioProfiles(),
+      roster: this.audioRoster(),
     });
     // The continuous half of the mix, driven every frame rather than by events: the low
     // floor a live room sits on and the movement layer that opens with speed. Kept apart
@@ -429,6 +495,9 @@ export class GameRuntime {
       speed: this.snapshot.player.speed,
       threat: this.snapshot.entities.reduce((total, entity) => total + (entity.kind === 'bot' ? 1 : 0), 0),
       down: this.snapshot.player.awaitingRespawn,
+      // Which of the mix's two rooms the tail comes back from. The camera's own height,
+      // because on this route the climb *is* the exposure -- see `openness`.
+      space: openness(this.snapshot.camera.position[1]),
       // The style meter, driving the mix rather than being reported by it: the bed
       // climbs, a harmonic opens and the room gets wetter while a chain is live.
       chain: { links: this.snapshot.player.combo.links, window: this.snapshot.player.combo.window },
@@ -447,6 +516,7 @@ export class GameRuntime {
         ovation: this.currentOvation(now),
         dodge: this.currentDodge(now),
         heal: this.currentHeal(now),
+        moment: this.currentMoment(now),
         ghost: this.ghostStanding(),
       });
       this.lastUiUpdate = now;

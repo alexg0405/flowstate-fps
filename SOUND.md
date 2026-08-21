@@ -1,5 +1,13 @@
 # How shooters build their mixes, and what this one should steal
 
+**Status: implemented.** The seven-item table at the end landed in the pass AUDIT §17
+records, and the two items discussed above it but left out of the table -- the **tail**
+layer in §1 and the **round-robin variation** in §7 -- landed in §19. Nothing in this brief is
+outstanding. The one thing it could not have known -- that the mix measured about eight
+decibels under the industry target -- was found by the offline meter built for item 2 and
+fixed in §20: the mix now renders a fight at -23.7 LUFS with true peak at -4.4 dBFS.
+
+
 Research brief, written after the pass in AUDIT §16. The mix here is **entirely synthesised
 in the browser** -- no samples, no middleware, one `AudioContext`, and a hard rule that
 nothing is downloaded before the player can hear anything. That constraint rules out most of

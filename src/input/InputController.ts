@@ -43,6 +43,27 @@ interface InputSegment {
  */
 const MAX_SEGMENTS = 8;
 
+/**
+ * What the on-screen controls drive.
+ *
+ * Deliberately the same three verbs the mouse and keyboard produce -- a bit went down, a
+ * bit came up, the view moved -- rather than a second input path. Everything downstream
+ * of here, including the double-tap that becomes a dash and the edge queue that survives
+ * a throttled frame, is identical on a phone and on a desktop, which is the only way the
+ * two schemes can stay in agreement about what the game does.
+ */
+export interface TouchInput {
+  press(action: number): void;
+  release(action: number): void;
+  /** Sets the movement bits wholesale, which is what a thumbstick produces. */
+  move(actions: number): void;
+  /** A drag, in the same units a mouse reports: CSS pixels of travel. */
+  look(dx: number, dy: number): void;
+}
+
+/** Movement bits the stick owns, so setting them cannot disturb anything else. */
+const MOVEMENT_ACTIONS = Action.Forward | Action.Back | Action.Left | Action.Right | Action.Sprint;
+
 export class InputController {
   private held = 0;
   private segments: InputSegment[] = [];
@@ -86,6 +107,54 @@ export class InputController {
       }
     }
   }
+
+  /**
+   * Engages without Pointer Lock, for a device that has no pointer to lock.
+   *
+   * This is the same state the embedded-preview fallback already uses -- `softLocked` --
+   * reached deliberately rather than by catching a rejection. Touch devices mostly do not
+   * implement Pointer Lock at all, and the ones that do have nothing to hide.
+   */
+  engageTouch(): void {
+    if (this.locked) return;
+    this.softLocked = true;
+    this.locked = true;
+    for (const callback of this.onLockChangeCallbacks) callback(true);
+  }
+
+  /** Hands the run back, which on a touch device is a button rather than `Escape`. */
+  release(): void {
+    this.suspendInput();
+  }
+
+  /**
+   * The on-screen controls' way in. One object rather than three public methods so the
+   * component that renders the overlay is handed exactly what it may do and nothing else.
+   */
+  readonly touch: TouchInput = {
+    press: (action: number) => {
+      if (this.locked) this.recordPress(action);
+    },
+    release: (action: number) => {
+      if (this.locked) this.recordRelease(action);
+    },
+    move: (actions: number) => {
+      if (!this.locked) return;
+      const wanted = actions & MOVEMENT_ACTIONS;
+      const current = this.held & MOVEMENT_ACTIONS;
+      // Edges, not a mask. The queue exists so a press and a release in one frame both
+      // reach the simulation, and writing `held` directly would skip it.
+      const pressed = wanted & ~current;
+      const released = current & ~wanted;
+      if (pressed) this.recordPress(pressed);
+      if (released) this.recordRelease(released);
+    },
+    look: (dx: number, dy: number) => {
+      if (!this.locked) return;
+      this.lookX += dx;
+      this.lookY += dy;
+    },
+  };
 
   frame(tick: number): InputFrame {
     // Oldest sample first, so a press/release/press sequence reaches the simulation

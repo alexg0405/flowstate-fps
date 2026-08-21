@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import type { RunModifier, SimulationSnapshot } from '../contracts';
 import { bladeStyle } from '../content/blades';
 import { movementProfile, runScoring } from '../content/config';
-import type { ChainOvation, DamageFeedback, DodgeMark, GhostStanding, HealMark, HitFeedback } from '../runtime/GameRuntime';
+import type { ChainOvation, DamageFeedback, DodgeMark, GhostStanding, GraphicMoment, HealMark, HitFeedback } from '../runtime/GameRuntime';
 import { formatTime } from './format';
 
 /**
@@ -34,7 +34,7 @@ const DEATH_TIME_PENALTY_SECONDS = runScoring.deathTimePenaltySeconds;
  * speed as a value *and* a twelve-segment spectrum, and a five-chip chain rail
  * that reported availability the combo multiplier already implies.
  */
-export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = null, dodge = null, heal = null, modifier = null }: {
+export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = null, dodge = null, heal = null, moment = null, modifier = null }: {
   snapshot: SimulationSnapshot;
   hits?: readonly HitFeedback[];
   damage?: readonly DamageFeedback[];
@@ -45,6 +45,8 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
   dodge?: DodgeMark | null;
   /** Set only for the few hundred milliseconds after a kill returned health. */
   heal?: HealMark | null;
+  /** Set only during one of the three graphic moments. */
+  moment?: GraphicMoment | null;
   modifier?: RunModifier | null;
 }) {
   const grapple = snapshot.player.grapple;
@@ -144,6 +146,18 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
       {dodge && (
         <div className="perfect-dodge" key={dodge.id} aria-hidden="true">
           <b>PERFECT</b><em>DODGE</em><i>{dodge.refused}</i>
+        </div>
+      )}
+      {/* The graphic layer, in the world's own moments rather than only between screens.
+          Masked hollow through the middle like the chain flourish, so nothing it draws
+          lands inside the fifteen degrees the reticle cluster is budgeted -- and keyed on
+          the event, so a second wave replays the panel instead of extending the first. */}
+      {moment && (
+        <div className={`graphic-moment moment-${moment.kind}`} key={moment.id} aria-hidden="true">
+          <i className="moment-flash" />
+          <i className="moment-bar moment-bar-a" />
+          <i className="moment-bar moment-bar-b" />
+          <b className="moment-label">{moment.label}</b>
         </div>
       )}
       <div className="threat-compass" aria-hidden="true">

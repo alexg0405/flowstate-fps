@@ -1187,8 +1187,9 @@ export class FlowSimulation implements GameSimulation {
     const player = this.player;
     player.ads = Boolean(input.held & Action.Ads);
     // One click per trigger pull, whether the player pulled on an empty weapon or
-    // held through the last round.
-    if (input.released & Action.Fire) player.dryFireReported = false;
+    // held through the last round. Either button counts, because either can be the
+    // trigger -- see `gunInHand` below.
+    if (input.released & (Action.Fire | Action.Slash)) player.dryFireReported = false;
     this.updateWeaponSwitch(input);
     const slot = player.weapons[player.activeSlot];
     const weapon = slot.stats;
@@ -1196,19 +1197,42 @@ export class FlowSimulation implements GameSimulation {
     if ((input.pressed & Action.Reload) && player.action !== 'melee' && slot.ammo < weapon.magazineSize && slot.reserveAmmo > 0) {
       this.startReload(events);
     }
+    /**
+     * Whether the gun is what the player is currently holding.
+     *
+     * Read before `updateInHand` decays it, so this is the weapon the player can *see*
+     * in their hands on the frame they pressed the button -- which is the only reading
+     * of "what is in my hands" that a player can act on.
+     */
+    const gunInHand = player.gunHoldTimer > 0;
+
     // Held rather than pressed. The blade is the primary verb now, so holding the
     // button has to produce a rhythm at the recovery rate instead of one swing per
     // click -- clicking four times a second is not a control scheme. The heavy is
     // pressed rather than held, and it is checked first: it is the deliberate one, and
     // a player holding both should get the swing they went out of their way to ask for.
+    //
+    // The primary button only swings while the blade is actually up. It used to swing
+    // unconditionally, which meant a player who had deliberately drawn a gun -- with
+    // `1`, `2`, `Tab` or the sidearm button -- had it yanked back out of their hands by
+    // the button every shooter in the world puts the trigger on. The rule now is the one
+    // a player can state without reading anything: **the trigger uses whatever is in
+    // your hands**, and the ammo corner already says which that is.
+    //
+    // The blade is never locked behind this. The heavy on `E` swings regardless and
+    // clears the hold outright, so it doubles as the draw, and the gun puts itself away
+    // 0.95 s after the last shot.
     if (player.meleeTimer === 0) {
       if (input.pressed & Action.Melee) this.swing(events, 'heavy');
-      else if (input.held & Action.Slash) this.swing(events, 'light');
+      else if ((input.held & Action.Slash) && !gunInHand) this.swing(events, 'light');
     }
 
     const canFire = player.fireCooldown === 0 && player.weaponReadyTimer === 0
       && player.action !== 'reloading' && player.action !== 'melee';
-    if ((input.held & Action.Fire) && canFire) {
+    // The sidearm button always fires -- that is how the gun is drawn in the first place
+    // -- and the primary button joins it once the gun is what is in hand.
+    const triggerHeld = (input.held & Action.Fire) || (gunInHand && (input.held & Action.Slash));
+    if (triggerHeld && canFire) {
       if (slot.ammo <= 0) {
         if (slot.reserveAmmo > 0) this.startReload(events);
         else if (!player.dryFireReported) {

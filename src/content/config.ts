@@ -436,7 +436,34 @@ export const presentation = {
  * be -- a player who wants more has a slider, and a player who was surprised by a
  * game opening at full output has already turned the tab off.
  */
-export const audioMix = { defaultVolume: 0.8 } as const;
+export const audioMix = {
+  defaultVolume: 0.8,
+  /**
+   * Where the route stops having a ceiling.
+   *
+   * The mix carries two rooms now -- a short dark interior tail and a long bright exterior
+   * one -- and something has to say which one a sound comes back from. On White Line that
+   * something is **height**, and not as a proxy: the route is authored as a climb out of a
+   * bunker, and its three arenas are checkpointed at 3.1 m, 6.1 m and 11.1 m precisely
+   * because the Atrium is enclosed and the Roofline is an open deck between towers. The
+   * player's own eye height is therefore the most direct reading of exposure available,
+   * and it is continuous -- walking up the ramp opens the space rather than switching it.
+   *
+   * The limitation is worth stating plainly: a level that put an open courtyard at ground
+   * level would read as enclosed. The honest fix for that is an authored volume per room,
+   * which is a level-schema change and a migration; this is the reading the level as it
+   * stands actually supports.
+   */
+  enclosedHeight: 3.4,
+  openHeight: 10.5,
+} as const;
+
+/** How exposed a point at this height is: 0 under a ceiling, 1 out on the deck. */
+export function openness(height: number): number {
+  const span = audioMix.openHeight - audioMix.enclosedHeight;
+  if (span <= 0) return 0;
+  return Math.min(1, Math.max(0, (height - audioMix.enclosedHeight) / span));
+}
 
 export const defaultSave: SaveDataV1 = {
   schemaVersion: 1,

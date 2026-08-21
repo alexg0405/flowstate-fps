@@ -4,7 +4,8 @@ import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.j
 import type { BotProfile, EntitySnapshot, GameEvent, SaveDataV1, SimulationSnapshot } from '../../contracts';
 import { botColliderBottom } from '../../content/config';
 import { hostileAccent } from '../palette';
-import { MaterialLibrary } from './MaterialLibrary';
+import { MaterialLibrary, rebindGraphicShading } from './MaterialLibrary';
+import { stepAdvance, steppedTime } from './animationStepping';
 
 interface HunterInstance {
   root: THREE.Group;
@@ -33,6 +34,8 @@ interface HunterInstance {
   hitUntilTick: number;
   landUntilTick: number;
   wasGrounded: boolean;
+  /** Seconds of animation owed but not yet worth a pose. See `animationStepping`. */
+  poseDebt: number;
   external: boolean;
   mixer: THREE.AnimationMixer | null;
   actions: Map<string, THREE.AnimationAction>;
@@ -115,7 +118,20 @@ export class CharacterPresenter {
     this.templates.set('aggressive', this.createTemplate('aggressive'));
   }
 
+  /**
+   * Whether poses step. Off under reduced motion: stepping is a deliberate stylisation
+   * rather than an accessibility measure, and a player who has asked for less motion
+   * should not be handed a figure that moves in jumps.
+   */
+  private get stepping(): boolean {
+    return this.stepPoses;
+  }
+
+  /** Set from the save on every settings change; see `stepping`. */
+  private stepPoses = true;
+
   updateSettings(settings: SaveDataV1['settings']): void {
+    this.stepPoses = !settings.reducedMotion;
     const outlinesVisible = !('graphicsQuality' in settings) || settings.graphicsQuality !== 'low';
     const update = (root: THREE.Object3D) => root.traverse((object) => {
       if (object.userData.characterOutline) object.visible = outlinesVisible;
@@ -294,6 +310,7 @@ export class CharacterPresenter {
       hitUntilTick: 0,
       landUntilTick: 0,
       wasGrounded: entity.grounded,
+      poseDebt: 0,
       external: Boolean(external),
       mixer,
       actions,
@@ -335,7 +352,14 @@ export class CharacterPresenter {
     const horizontalSpeed = Math.hypot(entity.velocity[0], entity.velocity[2]);
     const move = THREE.MathUtils.clamp(horizontalSpeed / 5.5, 0, 1);
     if (hunter.external) {
-      hunter.mixer?.update(deltaSeconds);
+      // On twos. The clip advances in whole twelfths of a second and the remainder is
+      // carried, so a hostile *poses* like an animated figure while its position, its
+      // facing and everything the player aims at stay continuous. See
+      // `animationStepping` for why the split falls exactly there.
+      hunter.poseDebt += deltaSeconds;
+      const stepped = this.stepping ? stepAdvance(hunter.poseDebt) : { advance: hunter.poseDebt, pending: 0 };
+      hunter.poseDebt = stepped.pending;
+      hunter.mixer?.update(stepped.advance);
       if (!hunter.wasGrounded && entity.grounded) hunter.landUntilTick = tick + LAND_TICKS;
       hunter.wasGrounded = entity.grounded;
       const clip = this.resolveMovementClip(hunter, entity, tick, move);
@@ -344,9 +368,12 @@ export class CharacterPresenter {
       return;
     }
     const frequency = hunter.profile === 'aggressive' ? 10.2 : 8.2;
-    const phase = time * frequency + entity.id * 0.73;
+    // The diagnostic fallback figure steps on the same grid, off a quantised clock
+    // rather than a quantised delta -- its pose is a function of absolute time.
+    const posed = this.stepping ? steppedTime(time) : time;
+    const phase = posed * frequency + entity.id * 0.73;
     const stride = Math.sin(phase) * 0.78 * move;
-    const settle = Math.sin(time * 2.1 + entity.id) * 0.012;
+    const settle = Math.sin(posed * 2.1 + entity.id) * 0.012;
     hunter.leftLeg.rotation.x = THREE.MathUtils.damp(hunter.leftLeg.rotation.x, stride, 18, deltaSeconds);
     hunter.rightLeg.rotation.x = THREE.MathUtils.damp(hunter.rightLeg.rotation.x, -stride, 18, deltaSeconds);
     hunter.leftArm.rotation.x = THREE.MathUtils.damp(hunter.leftArm.rotation.x, -stride * 0.55 - 0.55, 16, deltaSeconds);
@@ -408,7 +435,7 @@ export class CharacterPresenter {
     const accent = new THREE.Color(profileAccent(hunter.profile));
     for (const material of hunter.deathMaterials) {
       if (!('emissive' in material)) continue;
-      const standard = material as THREE.MeshStandardMaterial;
+      const standard = material as THREE.MeshStandardMaterial | THREE.MeshToonMaterial;
       if (!ACCENT_MATERIAL.test(standard.name)) {
         standard.emissive.setRGB(0, 0, 0);
         continue;
@@ -444,8 +471,8 @@ export class CharacterPresenter {
     // Named to match the accent pass, and deliberately *not* flagged as a readout:
     // unlike the health bar the plate is part of the figure, so it falls and fades
     // with the body instead of hanging in the air after a kill.
-    const face = new THREE.MeshStandardMaterial({
-      name: 'signal-shield-plate', color: '#141b22', emissive: accent, emissiveIntensity: 0.16, metalness: 0.78, roughness: 0.38,
+    const face = this.materials.build('character', {
+      name: 'signal-shield-plate', color: '#1c2530', emissive: accent, emissiveIntensity: 0.16,
     });
     const mesh = new THREE.Mesh(geometry, face);
     mesh.position.set(0, 0.95, SHIELD_PLATE.offset);
@@ -473,7 +500,9 @@ export class CharacterPresenter {
       const isolated = source.map((material) => {
         const existing = clones.get(material);
         if (existing) return existing;
-        const created: THREE.Material = material.clone();
+        // Rebound, because a cloned toon material loses the shading edits that make a
+        // hostile legible against a world of flat masses. See `rebindGraphicShading`.
+        const created: THREE.Material = rebindGraphicShading(material.clone());
         clones.set(material, created);
         hunter.deathMaterials.push(created);
         return created;

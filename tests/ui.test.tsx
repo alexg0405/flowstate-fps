@@ -268,6 +268,26 @@ describe('HUD grapple presentation', () => {
   });
 });
 
+describe('the graphic layer in the play frame', () => {
+  it('turns the frame into a panel on the three moments that earn it', () => {
+    render(<Hud snapshot={snapshotFixture()} moment={{ id: 9, kind: 'wave', label: 'WAVE 2' }} />);
+    const panel = container.querySelector('.graphic-moment');
+    expect(panel).not.toBeNull();
+    expect(panel?.classList.contains('moment-wave')).toBe(true);
+    expect(container.querySelector('.moment-label')?.textContent).toBe('WAVE 2');
+    // Decorative in the strict sense: it is not in the accessibility tree at all, the
+    // way the chain flourish and the dodge mark are not.
+    expect(panel?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('draws nothing at all the rest of the time', () => {
+    // The count is the design. A graphic transition every few minutes is a signature;
+    // one every thirty seconds is a tic.
+    render(<Hud snapshot={snapshotFixture()} />);
+    expect(container.querySelector('.graphic-moment')).toBeNull();
+  });
+});
+
 describe('hit feedback', () => {
   const hit = (overrides: Partial<{ id: number; screen: readonly [number, number]; amount: number; headshot: boolean; kill: boolean; deflected: boolean }> = {}) => ({
     id: 1, screen: [400, 300] as const, amount: 34, headshot: false, kill: false, deflected: false, ...overrides,
