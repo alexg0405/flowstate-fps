@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import type { RunModifier, SimulationSnapshot } from '../contracts';
 import { bladeStyle } from '../content/blades';
 import { movementProfile, runScoring } from '../content/config';
-import type { ChainOvation, DamageFeedback, DodgeMark, GhostStanding, HitFeedback } from '../runtime/GameRuntime';
+import type { ChainOvation, DamageFeedback, DodgeMark, GhostStanding, HealMark, HitFeedback } from '../runtime/GameRuntime';
 import { formatTime } from './format';
 
 /**
@@ -34,7 +34,7 @@ const DEATH_TIME_PENALTY_SECONDS = runScoring.deathTimePenaltySeconds;
  * speed as a value *and* a twelve-segment spectrum, and a five-chip chain rail
  * that reported availability the combo multiplier already implies.
  */
-export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = null, dodge = null, modifier = null }: {
+export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = null, dodge = null, heal = null, modifier = null }: {
   snapshot: SimulationSnapshot;
   hits?: readonly HitFeedback[];
   damage?: readonly DamageFeedback[];
@@ -43,6 +43,8 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
   ovation?: ChainOvation | null;
   /** Set only for the few hundred milliseconds after a telegraphed shot was dodged. */
   dodge?: DodgeMark | null;
+  /** Set only for the few hundred milliseconds after a kill returned health. */
+  heal?: HealMark | null;
   modifier?: RunModifier | null;
 }) {
   const grapple = snapshot.player.grapple;
@@ -187,8 +189,13 @@ export function Hud({ snapshot, hits = [], damage = [], ghost = null, ovation = 
           </div>
         </div>
       </div>
-      <div className="hud-health">
+      {/* The health corner, and the one thing added to it: what a kill just paid back.
+          Inside the readout it belongs to rather than beside it, keyed on the event so a
+          second kill replays the mark instead of extending the first, and it is the same
+          number the mix is playing at the same moment. */}
+      <div className={`hud-health ${heal ? 'is-healing' : ''}`}>
         <div className="health-value" aria-label={`Health ${health} of ${maxHealth}`}><strong>{health}</strong><span>HP</span></div>
+        {heal && <b className="heal-mark" key={heal.id} aria-label={`${heal.amount} health returned`}>+{heal.amount}</b>}
         {healthState !== 'nominal' && <b className="corner-flag">{healthState.toUpperCase()}</b>}
       </div>
       {/* One corner, two things it can be about. The blade has no magazine, so it says

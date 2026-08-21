@@ -32,6 +32,13 @@ const OVATION_LIFETIME_MS = 900;
  * anything that outlasts the threat is covering the frame they need to read.
  */
 const DODGE_LIFETIME_MS = 620;
+/**
+ * How long the heal mark sits in the health corner, and how long a second kill has to
+ * arrive to be added to it rather than replacing it. The merge window is the width of a
+ * heavy's sweep plus a light's recovery, so a chain of kills reads as one climbing number.
+ */
+const HEAL_LIFETIME_MS = 760;
+const HEAL_MERGE_MS = 420;
 
 /** A confirmed hit on an enemy, already projected to canvas pixels for the HUD. */
 export interface HitFeedback {
@@ -90,6 +97,15 @@ export interface DodgeMark {
   refused: number;
 }
 
+/**
+ * Health a kill just returned. Merged over a short window, so a heavy that finishes three
+ * hostiles reads as one number rather than three marks stacking in the same corner.
+ */
+export interface HealMark {
+  id: number;
+  amount: number;
+}
+
 /** How the run stands against the record path, for the HUD. */
 export interface GhostStanding {
   /** Negative means ahead of the record, positive means behind it. */
@@ -106,6 +122,8 @@ export interface RuntimeUpdate {
   ovation: ChainOvation | null;
   /** Null except in the brief window after a telegraphed shot was dodged. */
   dodge: DodgeMark | null;
+  /** Null except in the brief window after a kill returned health. */
+  heal: HealMark | null;
   /** Null when no record path exists for this route yet. */
   ghost: GhostStanding | null;
 }
@@ -125,6 +143,7 @@ export class GameRuntime {
   private activeDamage: ActiveDamage[] = [];
   private activeOvation: (ChainOvation & { expiresAt: number }) | null = null;
   private activeDodge: (DodgeMark & { expiresAt: number }) | null = null;
+  private activeHeal: (HealMark & { expiresAt: number; bornAt: number }) | null = null;
   private running = false;
   private disposed = false;
   private lastUiUpdate = 0;
@@ -258,6 +277,18 @@ export class GameRuntime {
         this.activeDodge = { id: event.id, refused: Math.round(event.value ?? 0), expiresAt: now + DODGE_LIFETIME_MS };
         continue;
       }
+      if (event.kind === 'heal') {
+        const amount = Math.round(event.value ?? 0);
+        // Merged the same way a burst of hits on one target is: a heavy can finish three
+        // hostiles on one tick, and three marks in one corner is a stack, not a readout.
+        if (this.activeHeal && now - this.activeHeal.bornAt < HEAL_MERGE_MS) {
+          this.activeHeal.amount += amount;
+          this.activeHeal.expiresAt = now + HEAL_LIFETIME_MS;
+        } else {
+          this.activeHeal = { id: event.id, amount, bornAt: now, expiresAt: now + HEAL_LIFETIME_MS };
+        }
+        continue;
+      }
       if (event.kind === 'enemyAttack') {
         // A miss still reports, with zero damage; only landed shots get a wedge.
         if ((event.value ?? 0) <= 0) continue;
@@ -324,6 +355,11 @@ export class GameRuntime {
   private currentOvation(now: number): ChainOvation | null {
     if (this.activeOvation && this.activeOvation.expiresAt <= now) this.activeOvation = null;
     return this.activeOvation && { id: this.activeOvation.id, links: this.activeOvation.links };
+  }
+
+  private currentHeal(now: number): HealMark | null {
+    if (this.activeHeal && this.activeHeal.expiresAt <= now) this.activeHeal = null;
+    return this.activeHeal && { id: this.activeHeal.id, amount: this.activeHeal.amount };
   }
 
   private currentDodge(now: number): DodgeMark | null {
@@ -410,6 +446,7 @@ export class GameRuntime {
         damage: this.activeDamageWedges(now),
         ovation: this.currentOvation(now),
         dodge: this.currentDodge(now),
+        heal: this.currentHeal(now),
         ghost: this.ghostStanding(),
       });
       this.lastUiUpdate = now;

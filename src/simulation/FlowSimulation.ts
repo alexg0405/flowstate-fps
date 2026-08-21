@@ -24,7 +24,7 @@ import {
   type WeaponDefinition,
   type Vec3,
 } from '../contracts';
-import { aimAssist, botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
+import { aimAssist, botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, lifestealForKill, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
 import { bladeStyle } from '../content/blades';
 import { chassisMultiplier } from '../content/modifiers';
 import { defaultArmory, gunHoldSeconds, resolveWeaponStats } from '../content/weapons';
@@ -1768,9 +1768,31 @@ export class FlowSimulation implements GameSimulation {
         ...details,
         targetEntityId: bot.id,
       }));
+      // Life from damage, and the only healing in the game -- see `lifesteal`. Paid at the
+      // same multiplier the score was, before the kill's own link lands, so the two agree
+      // about what the chain was worth at the moment the body went down.
+      const healed = this.heal(lifestealForKill(this.comboMultiplier()));
+      if (healed > 0) {
+        events.push(this.event('heal', this.cameraPosition(), this.player.id, healed, {
+          sourceEntityId: bot.id,
+        }));
+      }
       // A style may pay more for a kill, and a headshot still doubles whatever that is.
       this.addComboLink(events, 'kill', this.blade.chain.killLinks * (details.headshot ? 2 : 1));
     }
+  }
+
+  /**
+   * Returns health to the player, bounded by what is missing. Returns what was actually
+   * given, so a kill at full health reports nothing rather than an event with a zero on
+   * it -- presentation should not flash a heal that did not happen.
+   */
+  private heal(amount: number): number {
+    const player = this.player;
+    const healed = Math.min(amount, PLAYER_MAX_HEALTH - player.health);
+    if (healed <= 0) return 0;
+    player.health += healed;
+    return healed;
   }
 
   private findWall(position: RAPIER.Vector, yaw: number): { side: number; normal: RAPIER.Vector; collider: Collider } | null {

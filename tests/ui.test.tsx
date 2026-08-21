@@ -470,6 +470,24 @@ describe('hit feedback', () => {
   });
 });
 
+describe('the health corner says what a kill paid back', () => {
+  it('shows the amount returned, in the corner it belongs to', () => {
+    render(<Hud snapshot={snapshotFixture({ health: 96 })} heal={{ id: 4, amount: 14 }} />);
+    // Inside the readout rather than beside it: the play frame is six readouts in four
+    // zones and lifesteal is not a seventh.
+    expect(query('.hud-health .heal-mark').textContent).toBe('+14');
+    expect(query('.hud-health .heal-mark').getAttribute('aria-label')).toBe('14 health returned');
+    expect(query('.hud-health').className).toContain('is-healing');
+    expect(query('.health-value strong').textContent).toBe('96');
+  });
+
+  it('says nothing at all when no kill has paid one', () => {
+    render(<Hud snapshot={snapshotFixture()} />);
+    expect(container.querySelector('.heal-mark')).toBeNull();
+    expect(query('.hud-health').className).not.toContain('is-healing');
+  });
+});
+
 describe('the ammo corner says what is in hand', () => {
   it('names the blade and offers no magazine while the blade is up', () => {
     render(<Hud snapshot={snapshotFixture({ weapons: weaponsFixture('blade') })} />);

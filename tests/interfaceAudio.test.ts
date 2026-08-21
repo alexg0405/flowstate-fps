@@ -614,6 +614,45 @@ describe('the bed under the run', () => {
   });
 });
 
+describe('the mix pays the player for aggression', () => {
+  it('rises where damage taken falls, and never as loudly', async () => {
+    const healed = recordingContext();
+    const healBus = await busWith(healed);
+    healBus.consume([{ id: 1, tick: 1, kind: 'heal', entityId: 1, value: 18 }], listener);
+
+    const hurt = recordingContext();
+    const hurtBus = await busWith(hurt);
+    hurtBus.consume([{ id: 1, tick: 1, kind: 'hit', targetEntityId: 1, value: 22 }], listener);
+
+    // The direction is the whole cue: a heal is the only thing in the mix that gives
+    // something back, so it rises, and it sits on the fifth the bed is built from where
+    // damage taken sits on the flat second that beats against it.
+    expect(healed.voices.length).toBeGreaterThan(0);
+    expect(Math.max(...healed.voices.map((voice) => voice.gain)))
+      .toBeLessThan(Math.max(...hurt.voices.map((voice) => voice.gain)));
+    // And it does not duck. The kill that caused it ducked on the same tick, and two
+    // punctuation marks on one event is pumping rather than emphasis.
+    expect(healed.ducks).toHaveLength(0);
+  });
+
+  it('gets louder with the size of the heal, without leaving the floor of the mix', async () => {
+    const level = async (amount: number) => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([{ id: 1, tick: 1, kind: 'heal', entityId: 1, value: amount }], listener);
+      return Math.max(...recorder.voices.map((voice) => voice.gain));
+    };
+    const small = await level(6);
+    const large = await level(18);
+    expect(large).toBeGreaterThan(small);
+    // A cue that pays the player must not be the loudest thing they hear.
+    const kill = recordingContext();
+    const killBus = await busWith(kill);
+    killBus.consume([{ id: 2, tick: 1, kind: 'kill', targetEntityId: 7 }], listener);
+    expect(large).toBeLessThan(Math.max(...kill.voices.map((voice) => voice.gain)));
+  });
+});
+
 describe("the player's own level", () => {
   it('applies a level set before a gesture ever opened the context', async () => {
     const recorder = recordingContext();
@@ -664,6 +703,7 @@ const runCues: readonly GameEvent[] = [
   { id: 6, tick: 1, kind: 'hit', targetEntityId: 7, value: 11, deflected: true },
   { id: 7, tick: 1, kind: 'hit', targetEntityId: 1, value: 14 },
   { id: 8, tick: 1, kind: 'kill', targetEntityId: 7 },
+  { id: 31, tick: 1, kind: 'heal', entityId: 1, value: 12 },
   { id: 9, tick: 1, kind: 'melee', sourceEntityId: 1 },
   { id: 10, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 },
   { id: 28, tick: 1, kind: 'melee', sourceEntityId: 1, value: 0, heavy: true },

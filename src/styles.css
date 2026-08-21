@@ -1033,6 +1033,22 @@ kbd{ min-width: 50px; color: var(--cyber-ink); background: var(--cyber-yellow); 
 .blade-value span{ color: var(--cyber-yellow); font-size: .8rem; }
 .ammo-weapon{ display: flex; gap: .45rem; align-items: baseline; }
 .ammo-weapon span{ color: #7b8c92; font: 700 .44rem ui-monospace,monospace; letter-spacing: .14em; text-transform: uppercase; text-shadow: 0 2px 5px rgba(0,0,0,.9); }
+/* What a kill just paid back. It sits in the health corner, in the player's own yellow
+   rather than the cyan the health number owns, so a heal is legible as something earned
+   rather than as the bar simply moving. Rises and fades, and holds still under reduced
+   motion -- where it still says the number, because that is the information. */
+.heal-mark{ color: var(--cyber-yellow); font: 900 .78rem Impact,'Arial Narrow',sans-serif; letter-spacing: .04em; text-shadow: 0 2px 6px rgba(0,0,0,.9); }
+@media (prefers-reduced-motion: no-preference){
+  .heal-mark{ animation: heal-rise .76s ease-out 1 both; }
+}
+.reduced-motion .heal-mark{ animation: none !important; }
+@keyframes heal-rise{
+  0%{ opacity: 0; transform: translateY(.5rem) scale(.9); }
+  22%{ opacity: 1; transform: translateY(0) scale(1.08); }
+  70%{ opacity: 1; transform: translateY(-.1rem) scale(1); }
+  100%{ opacity: 0; transform: translateY(-.5rem) scale(1); }
+}
+.hud-health.is-healing{ border-left-color: var(--cyber-yellow); }
 .corner-flag{ padding: .06rem .28rem; color: var(--cyber-ink); background: var(--cyber-yellow); font: 900 .42rem ui-monospace,monospace; letter-spacing: .1em; }
 .hud.health-warning .hud-health{ border-left-color: var(--cyber-yellow); }
 .hud.health-critical .hud-health{ border-left-color: var(--cyber-red); }

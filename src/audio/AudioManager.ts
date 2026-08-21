@@ -1,4 +1,8 @@
 import type { BladeStyleId, BotProfile, GameEvent, Vec3 } from '../contracts';
+// The one run number the mix reads. A heal's level is a fraction of the largest heal the
+// game can pay, and keeping a second copy of that ceiling here is exactly the two-sources
+// -of-truth problem the tuning rules exist to prevent.
+import { lifesteal } from '../content/config';
 
 /**
  * What the run sounds like *between* events.
@@ -543,6 +547,18 @@ export class AudioManager {
           this.boom(material.bodyHz * 0.68, 0.4, 0.09, 0, 'far');
           // Steel going down on a deck keeps sounding after the body has stopped.
           if (material.ring) this.ring(0, 'far');
+          break;
+        }
+        case 'heal': {
+          // The only cue in the game that gives something back, and deliberately the
+          // quietest thing the player can earn. It rises where damage taken falls, it is
+          // the fifth -- the consonance the bed is built from, because being paid for
+          // aggression is the mix agreeing with the player -- and it does not duck: the
+          // kill that caused it ducked on the same tick, and two punctuation marks on one
+          // event is pumping rather than emphasis.
+          const share = Math.min(1, Math.max(0.2, (event.value ?? 0) / lifesteal.maxPerKill));
+          this.sub(note('fifth', 0), 0.28, 0.045 * share, 2, 0, 'near');
+          this.tone({ frequency: note('fifth', 1), duration: 0.22, gain: 0.03 * share, type: 'triangle', bend: 1.5, lowpass: 340 }, 0.02, 0, 'near');
           break;
         }
         case 'melee': {

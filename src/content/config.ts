@@ -320,6 +320,53 @@ export const dodge = {
 } as const;
 
 /**
+ * Life from damage, and it is the only healing in the game.
+ *
+ * The health pool was retuned for crowds -- 100 to 140 when the counts went from nine
+ * hostiles to twenty-eight -- and the answer to being hurt has to be to fight *better*,
+ * not to disengage. So there is no regeneration at all: nothing ticks back while the
+ * player hides behind a pillar, and a room does not become survivable by waiting. A
+ * regen that rewards retreating fights everything the pivot built.
+ *
+ * What is left is a kill, scaled by the chain. The chain is already the game's measure of
+ * playing well, so tying the health economy to it makes the style meter matter in a second
+ * dimension: a player holding a chain together is *also* the player who can afford to be
+ * in the middle of a crowd. A player who drops it is on the pool they have.
+ *
+ * The two numbers, and what they were measured against. Five brawlers on top of the player
+ * is about 92 damage a second, and a heavy one-shots a brawler and sweeps three of them:
+ *
+ * - **`perKill`** at 6 is a fifteenth of the pool, which is deliberately not much on its
+ *   own. A kill has to be worth taking a hit for, not worth trading four.
+ * - **`maxPerKill`** at 18 is what the ceiling of the chain buys -- the multiplier tops
+ *   out at 3.0 on the reference blade, so the cap and the ceiling land on the same number
+ *   rather than the cap quietly overriding the curve. Riposte reaches 4.0 and is capped,
+ *   which is the point of a cap: the defensive blade may not also be the sustain blade.
+ *
+ * No per-style field. Cleave already pays two links a kill, so its chain -- and therefore
+ * its healing -- grows twice as fast per body: measured over five kills, Tempo heals 9 a
+ * kill where Cleave heals 12. The variation the styles argue for is already there, and a
+ * field would be saying the same thing twice.
+ */
+export const lifesteal = {
+  /** Health a kill returns at a chain multiplier of one. */
+  perKill: 6,
+  /** Ceiling per kill, whatever the chain says. */
+  maxPerKill: 18,
+} as const;
+
+/**
+ * What one kill is worth in health at this multiplier.
+ *
+ * A pure function next to the numbers rather than an expression at the call site, because
+ * it is the shape of the whole mechanic -- linear in the chain, hard-capped -- and the
+ * tests that measure the crowd read it rather than restating it.
+ */
+export function lifestealForKill(comboMultiplier: number): number {
+  return Math.min(lifesteal.maxPerKill, lifesteal.perKill * Math.max(0, comboMultiplier));
+}
+
+/**
  * Hitstop: how long the presentation clock stops on a landed blow.
  *
  * This is the genre's signature feedback and it is **presentation only**. The

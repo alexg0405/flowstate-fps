@@ -189,7 +189,14 @@ export interface SimulationSnapshot {
 export interface GameEvent {
   id: number;
   tick: number;
-  kind: 'shot' | 'impact' | 'hit' | 'kill' | 'melee' | 'checkpoint' | 'death' | 'complete' | 'grappleAttach' | 'grapplePull' | 'grappleRelease' | 'grappleFail' | 'reloadStart' | 'reloadComplete' | 'enemyTelegraph' | 'enemyAttack' | 'gateOpen' | 'dryFire' | 'respawn' | 'split' | 'comboLink' | 'comboBreak' | 'dodge' | 'wave';
+  /**
+   * `heal` is the only one of these the player cannot cause directly: it is what a kill
+   * returns, at the chain multiplier the kill was paid at. It is an event rather than
+   * something presentation derives from the health number moving, because the mix and the
+   * HUD both want the *amount*, and a health value that went up is not the same statement
+   * as sixteen points of life taken back out of a body.
+   */
+  kind: 'shot' | 'impact' | 'hit' | 'kill' | 'heal' | 'melee' | 'checkpoint' | 'death' | 'complete' | 'grappleAttach' | 'grapplePull' | 'grappleRelease' | 'grappleFail' | 'reloadStart' | 'reloadComplete' | 'enemyTelegraph' | 'enemyAttack' | 'gateOpen' | 'dryFire' | 'respawn' | 'split' | 'comboLink' | 'comboBreak' | 'dodge' | 'wave';
   position?: Vec3;
   /**
    * Start of the segment an event describes, when `position` is its end. Set on
