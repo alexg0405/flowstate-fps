@@ -1,4 +1,4 @@
-import type { BladeStyleId, GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveDataV1, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
+import type { BladeStyleId, GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveSettingsV3, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
 import { AudioManager } from '../audio/AudioManager';
 import { bladeStyle } from '../content/blades';
 import { chainEarnsFlourish } from '../content/config';
@@ -136,7 +136,7 @@ export class GameRuntime {
     canvas: HTMLCanvasElement,
     private readonly onUpdate: (update: RuntimeUpdate) => void,
     private readonly onLockChange: (locked: boolean) => void,
-    settings: SaveDataV1['settings'],
+    settings: SaveSettingsV3,
     loadout?: readonly WeaponBuild[],
     private readonly recordGhost?: GhostTrack,
     modifier: RunModifier | null = null,
@@ -144,6 +144,9 @@ export class GameRuntime {
   ) {
     this.simulation = new FlowSimulation(settings, loadout, modifier, blade);
     this.renderer = new GameRenderer(canvas, settings);
+    // Set before the context exists: `AudioManager` holds the level and applies it when
+    // the first gesture builds the graph.
+    this.audio.setVolume(settings.volume);
     this.renderer.setBladeAccent(bladeStyle(blade).accent);
     this.input = new InputController(canvas);
     this.unsubscribeLock = this.input.onLockChange((locked) => {
@@ -154,9 +157,10 @@ export class GameRuntime {
     });
   }
 
-  updateSettings(settings: SaveDataV1['settings']): void {
+  updateSettings(settings: SaveSettingsV3): void {
     this.simulation.updateSettings(settings);
     this.renderer.updateSettings(settings);
+    this.audio.setVolume(settings.volume);
   }
 
   async initialize(level: RuntimeLevelV1): Promise<void> {

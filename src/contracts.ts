@@ -699,6 +699,16 @@ export interface SaveSettingsV2 extends SaveSettingsV1 {
   dynamicResolution: boolean;
 }
 
+export interface SaveSettingsV3 extends SaveSettingsV2 {
+  /**
+   * Output level of the whole mix, 0 to 1, applied as a gain after the bus the duck
+   * automates. Added because the mix stopped being a set of transients: with a held
+   * floor under every room and a movement layer that opens with speed, there is now
+   * something sounding at all times and no way to turn it down. Zero is silence.
+   */
+  volume: number;
+}
+
 export interface LegacySaveDataV1 {
   schemaVersion: 1;
   settings: SaveSettingsV1;
@@ -758,7 +768,23 @@ export interface SaveDataV5 {
   blade: BladeStyleId;
 }
 
-export type SaveData = LegacySaveDataV1 | SaveDataV2 | SaveDataV3 | SaveDataV4 | SaveDataV5;
+export interface SaveDataV6 {
+  schemaVersion: 6;
+  /** V6 is V5 plus `volume`, which is the first setting the mix itself reads. */
+  settings: SaveSettingsV3;
+  /** Best attempt by score. Every stat on it comes from that one run. */
+  bestRun: RunRecord | null;
+  /** Fastest clear, which may well be a different attempt, so it is labelled apart. */
+  bestTimeSeconds: number | null;
+  /** Every weapon build the player has assembled. */
+  armory: WeaponBuild[];
+  /** Ids of the two builds carried into a run, in slot order. */
+  loadout: readonly [string, string];
+  /** The blade style carried into a run. */
+  blade: BladeStyleId;
+}
+
+export type SaveData = LegacySaveDataV1 | SaveDataV2 | SaveDataV3 | SaveDataV4 | SaveDataV5 | SaveDataV6;
 
 /** @deprecated Compatibility alias for consumers that still use the V1 name. */
 export type SaveDataV1 = SaveData;

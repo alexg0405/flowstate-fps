@@ -381,6 +381,16 @@ export const presentation = {
   wipeSeconds: 0.52,
 } as const;
 
+/**
+ * What the mix is set to before anyone touches it.
+ *
+ * Below unity on purpose. The mix leads with a driven low end and now holds a floor
+ * under every room, so the honest default is a little under the loudest the bus can
+ * be -- a player who wants more has a slider, and a player who was surprised by a
+ * game opening at full output has already turned the tab off.
+ */
+export const audioMix = { defaultVolume: 0.8 } as const;
+
 export const defaultSave: SaveDataV1 = {
   schemaVersion: 1,
   settings: { sensitivity: 0.002, fov: 92, cameraRoll: 0.65, headBob: 0.35, shake: 0.5, renderScale: 1, debug: false, reducedMotion: false },

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeLevelV1, SaveDataV5, SaveSettingsV2 } from '../contracts';
+import type { RuntimeLevelV1, SaveDataV6, SaveSettingsV3 } from '../contracts';
+import { setInterfaceVolume } from '../audio/interfaceAudio';
 import { modifierForDate } from '../content/modifiers';
 import { GameRuntime, type RuntimeUpdate } from '../runtime/GameRuntime';
 import { loadoutBuilds, loadSave, recordRun, writeSave, type RecordedRun } from '../persistence/saveStore';
@@ -93,11 +94,14 @@ export function GameScreen({ level, onExit }: GameScreenProps) {
     }
   };
 
-  const updateSettings = (patch: Partial<SaveSettingsV2>) => {
-    const next: SaveDataV5 = { ...save, settings: { ...save.settings, ...patch } };
+  const updateSettings = (patch: Partial<SaveSettingsV3>) => {
+    const next: SaveDataV6 = { ...save, settings: { ...save.settings, ...patch } };
     setSave(next);
     writeSave(next);
     runtimeRef.current?.updateSettings(next.settings);
+    // The interface keeps its own bus, so the pause card's slider has to reach both or
+    // the menu the player backs out to is still at the old level.
+    setInterfaceVolume(next.settings.volume);
   };
 
   const screenState: ScreenState = error

@@ -1,7 +1,7 @@
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SaveDataV5, SaveSettingsV2, SimulationSnapshot } from '../src/contracts';
+import type { SaveDataV6, SaveSettingsV3, SimulationSnapshot } from '../src/contracts';
 import { cookLevel, defaultLevel } from '../src/content/defaultLevel';
 import { bladeStyles } from '../src/content/blades';
 import { defaultArmory } from '../src/content/weapons';
@@ -105,10 +105,10 @@ function snapshotFixture(overrides: Partial<SimulationSnapshot['player']> = {}, 
   };
 }
 
-function saveFixture(): SaveDataV5 {
+function saveFixture(): SaveDataV6 {
   const armory = defaultArmory();
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     settings: settingsFixture,
     bestRun: null,
     bestTimeSeconds: null,
@@ -118,7 +118,7 @@ function saveFixture(): SaveDataV5 {
   };
 }
 
-const settingsFixture: SaveSettingsV2 = {
+const settingsFixture: SaveSettingsV3 = {
   sensitivity: 0.002,
   fov: 92,
   cameraRoll: 0.65,
@@ -129,6 +129,7 @@ const settingsFixture: SaveSettingsV2 = {
   reducedMotion: false,
   graphicsQuality: 'auto',
   dynamicResolution: true,
+  volume: 0.8,
 };
 
 describe('HUD grapple presentation', () => {
@@ -702,6 +703,19 @@ describe('settings panel accessibility controls', () => {
     expect(onChange).toHaveBeenCalledWith({ headBob: 0, cameraRoll: 0, shake: 0, reducedMotion: true });
   });
 
+  it('gives the mix a level, and says so when it is muted', () => {
+    const onChange = vi.fn();
+    render(<SettingsPanel settings={settingsFixture} onChange={onChange} />);
+    const slider = query('input[aria-label="Volume"]') as HTMLInputElement;
+    // The mix holds a floor under every room, so this is the row that lets a player
+    // live with it. It has a labelled control, and zero reads as a state rather than
+    // as a number.
+    expect(slider.value).toBe('0.8');
+    expect(query('.setting-control').textContent).toContain('80%');
+    render(<SettingsPanel settings={{ ...settingsFixture, volume: 0 }} onChange={onChange} />);
+    expect(query('.setting-control').textContent).toContain('MUTE');
+  });
+
   it('marks the enabled state on the toggle row when reduced motion is on', () => {
     render(<SettingsPanel settings={{ ...settingsFixture, reducedMotion: true }} onChange={() => {}} />);
     const rows = [...container.querySelectorAll('.toggle-row')];
@@ -759,7 +773,7 @@ describe('save migration', () => {
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('prefers-reduced-motion') }));
     try {
       const migrated = migrateSaveData({ schemaVersion: 1, settings: { fov: 100 }, bestTimeSeconds: null, bestScore: 0, rank: null });
-      expect(migrated.schemaVersion).toBe(5);
+      expect(migrated.schemaVersion).toBe(6);
       expect(migrated.settings.reducedMotion).toBe(true);
       expect(migrated.settings.fov).toBe(100);
     } finally {
@@ -804,7 +818,7 @@ describe('interface primitives', () => {
 });
 
 describe('weapon builder', () => {
-  function open(overrides: Partial<SaveDataV5> = {}) {
+  function open(overrides: Partial<SaveDataV6> = {}) {
     const save = { ...saveFixture(), ...overrides };
     const onChange = vi.fn();
     render(<WeaponBuilder save={save} onChange={onChange} onClose={() => {}} />);
@@ -831,7 +845,7 @@ describe('weapon builder', () => {
     const { onChange } = open();
     const drum = openSlot('Magazine').find((card) => card.textContent?.includes('Drum'));
     act(() => drum!.click());
-    const next = onChange.mock.calls.at(-1)![0] as SaveDataV5;
+    const next = onChange.mock.calls.at(-1)![0] as SaveDataV6;
     expect(next.armory[0].parts.magazine).toBe('magazine.drum');
     // The drum should genuinely raise capacity once resolved.
     expect(resolveWeaponStats(next.armory[0]).magazineSize).toBeGreaterThan(resolveWeaponStats(saveFixture().armory[0]).magazineSize);
@@ -885,7 +899,7 @@ describe('weapon builder', () => {
     const { onChange } = open();
     const shotgunTab = [...container.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent === 'Shotgun');
     act(() => (shotgunTab as HTMLButtonElement).click());
-    const next = onChange.mock.calls.at(-1)![0] as SaveDataV5;
+    const next = onChange.mock.calls.at(-1)![0] as SaveDataV6;
     expect(next.armory[0].chassisId).toBe('shotgun');
     expect(next.armory[0].parts).toEqual({});
   });
@@ -893,21 +907,21 @@ describe('weapon builder', () => {
   it('renames a build', () => {
     const { onChange } = open();
     setFieldValue(query('input[aria-label="Build name"]') as HTMLInputElement, 'Breacher');
-    expect((onChange.mock.calls.at(-1)![0] as SaveDataV5).armory[0].name).toBe('Breacher');
+    expect((onChange.mock.calls.at(-1)![0] as SaveDataV6).armory[0].name).toBe('Breacher');
   });
 
   it('assigns the selected build to a loadout slot', () => {
     const { save, onChange } = open();
     const carryTwo = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Carry as 2');
     act(() => carryTwo?.click());
-    expect((onChange.mock.calls.at(-1)![0] as SaveDataV5).loadout).toEqual([save.armory[0].id, save.armory[0].id]);
+    expect((onChange.mock.calls.at(-1)![0] as SaveDataV6).loadout).toEqual([save.armory[0].id, save.armory[0].id]);
   });
 
   it('adds a build and refuses to empty the armory', () => {
     const { onChange } = open();
     const add = [...container.querySelectorAll('button')].find((button) => button.textContent === 'New build');
     act(() => add?.click());
-    expect((onChange.mock.calls.at(-1)![0] as SaveDataV5).armory).toHaveLength(3);
+    expect((onChange.mock.calls.at(-1)![0] as SaveDataV6).armory).toHaveLength(3);
 
     const single = saveFixture();
     const only = { ...single, armory: [single.armory[0]], loadout: [single.armory[0].id, single.armory[0].id] as const };

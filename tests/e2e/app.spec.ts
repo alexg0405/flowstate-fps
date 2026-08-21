@@ -1,5 +1,6 @@
 import { type Page } from '@playwright/test';
 import { playerHealth } from '../../src/content/config';
+import { migrateSaveData } from '../../src/persistence/saveStore';
 import { expect, test } from './test';
 
 /**
@@ -26,6 +27,13 @@ const WALK_IN_TIMEOUT = 120_000;
  * over the moment the machine had anything else to do.
  */
 const RUNTIME_READY_TIMEOUT = 45_000;
+
+/**
+ * The version a save written by this build carries. Named once, because two cases assert
+ * it and the last schema bump left one of them behind on the previous number -- which is
+ * a failure that reads exactly like a broken migration.
+ */
+const SAVE_SCHEMA_VERSION = migrateSaveData({}).schemaVersion;
 
 test('opens the menu and gameplay editor', async ({ page }) => {
   await page.goto('/');
@@ -249,7 +257,7 @@ test('presents the completion panel and records the run', async ({ page }) => {
   await expect(page.locator('.grade-letter')).toHaveText(/^[SABC]$/);
   await expect(page.locator('.grade-delta')).toContainText(/first clear|vs best/i);
   const save = await page.evaluate(() => JSON.parse(localStorage.getItem('flowstate-fps-save-v1') ?? '{}'));
-  expect(save.schemaVersion).toBe(4);
+  expect(save.schemaVersion).toBe(SAVE_SCHEMA_VERSION);
   // One coherent record rather than three fields from three different attempts.
   expect(save.bestRun).toMatchObject({ rank: expect.stringMatching(/^[SABC]$/) });
   expect(save.bestRun.timeSeconds).toEqual(expect.any(Number));
@@ -580,7 +588,7 @@ test('builds a weapon in the armory and carries it into a run', async ({ page })
   await page.getByRole('button', { name: 'Carry as 1' }).click();
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('flowstate-fps-save-v1') ?? '{}'));
-  expect(saved.schemaVersion).toBe(5);
+  expect(saved.schemaVersion).toBe(SAVE_SCHEMA_VERSION);
   // V5 added the blade, and a save written by the bench has to carry one.
   expect(saved.blade).toBe('tempo');
   const carried = saved.armory.find((build: { id: string }) => build.id === saved.loadout[0]);

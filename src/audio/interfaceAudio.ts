@@ -29,6 +29,18 @@ export function playUiCue(kind: UiCue): void {
 }
 
 /**
+ * The player's level, for the bus the interface shares.
+ *
+ * The run's own `AudioManager` is set from the same save field by `GameRuntime`; this
+ * one has to be told separately because it deliberately outlives every run. Called on
+ * mount and on every settings change, so a slider dragged on the pause card also
+ * quietens the menu the player backs out to.
+ */
+export function setInterfaceVolume(volume: number): void {
+  ensure().setVolume(volume);
+}
+
+/**
  * Wires the whole interface to the mix in one place.
  *
  * Delegated from the document rather than threaded through every component, because

@@ -1,4 +1,4 @@
-import { defaultSave, runScoring } from '../content/config';
+import { audioMix, defaultSave, runScoring } from '../content/config';
 import { getRunModifier } from '../content/modifiers';
 import { defaultBladeStyle, isBladeStyleId } from '../content/blades';
 import { defaultArmory, getWeaponChassis, getWeaponPart, weaponPartSlots } from '../content/weapons';
@@ -8,22 +8,23 @@ import type {
   RunRecord,
   RunSplit,
   SaveData,
-  SaveDataV5,
+  SaveDataV6,
   SaveSettingsV2,
+  SaveSettingsV3,
   WeaponBuild,
   WeaponChassisId,
   WeaponPartSlot,
 } from '../contracts';
 
 // Keep the established storage namespace so existing installations and browser
-// tests find their data. The serialized payload itself is now schemaVersion 4.
+// tests find their data. The serialized payload itself is now schemaVersion 6.
 const SAVE_KEY = 'flowstate-fps-save-v1';
 
 const RANKS: readonly RunRank[] = ['S', 'A', 'B', 'C'];
 
 const GRAPHICS_QUALITIES = new Set<SaveSettingsV2['graphicsQuality']>(['auto', 'low', 'medium', 'high']);
 
-export function loadSave(): SaveDataV5 {
+export function loadSave(): SaveDataV6 {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return saveDefaults();
@@ -33,10 +34,10 @@ export function loadSave(): SaveDataV5 {
   }
 }
 
-export function migrateSaveData(input: unknown): SaveDataV5 {
+export function migrateSaveData(input: unknown): SaveDataV6 {
   const defaults = saveDefaults();
   const version = isRecord(input) ? input.schemaVersion : undefined;
-  if (!isRecord(input) || typeof version !== 'number' || version < 1 || version > 5) return defaults;
+  if (!isRecord(input) || typeof version !== 'number' || version < 1 || version > 6) return defaults;
 
   const settings = isRecord(input.settings) ? input.settings : {};
   const quality = GRAPHICS_QUALITIES.has(settings.graphicsQuality as SaveSettingsV2['graphicsQuality'])
@@ -46,7 +47,7 @@ export function migrateSaveData(input: unknown): SaveDataV5 {
   // V1 and V2 saves predate the armory, so they inherit the seeded builds.
   const armory = sanitizeArmory(input.armory) ?? defaults.armory;
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     armory,
     loadout: sanitizeLoadout(input.loadout, armory),
     // Saves before V5 predate the blade being a choice, so they inherit the reference
@@ -64,6 +65,9 @@ export function migrateSaveData(input: unknown): SaveDataV5 {
       reducedMotion: booleanOr(settings.reducedMotion, defaults.settings.reducedMotion),
       graphicsQuality: quality,
       dynamicResolution: booleanOr(settings.dynamicResolution, defaults.settings.dynamicResolution),
+      // Clamped rather than trusted: a hand-edited save with a volume of 40 would
+      // hand the bus a gain of 40, and the limiter is glue, not protection.
+      volume: clamp01(numberOr(settings.volume, defaults.settings.volume)),
     },
     bestTimeSeconds: typeof input.bestTimeSeconds === 'number' && Number.isFinite(input.bestTimeSeconds)
       ? input.bestTimeSeconds
@@ -179,21 +183,22 @@ function sanitizeLoadout(value: unknown, armory: readonly WeaponBuild[]): readon
 }
 
 /** The two builds carried into a run, in slot order. */
-export function loadoutBuilds(save: SaveDataV5): WeaponBuild[] {
+export function loadoutBuilds(save: SaveDataV6): WeaponBuild[] {
   return save.loadout.map((id) => save.armory.find((build) => build.id === id) ?? save.armory[0]).filter(Boolean);
 }
 
-function saveDefaults(): SaveDataV5 {
+function saveDefaults(): SaveDataV6 {
   const legacy = structuredClone(defaultSave);
-  const settings: SaveSettingsV2 = {
+  const settings: SaveSettingsV3 = {
     ...legacy.settings,
     graphicsQuality: 'auto',
     dynamicResolution: true,
+    volume: audioMix.defaultVolume,
   };
   if (typeof matchMedia === 'function') settings.reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const armory = defaultArmory();
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     settings,
     bestRun: null,
     bestTimeSeconds: legacy.bestTimeSeconds,
@@ -226,7 +231,7 @@ export function rankRun(elapsedSeconds: number, deaths: number, peakCombo = 0): 
 }
 
 export interface RecordedRun {
-  save: SaveDataV5;
+  save: SaveDataV6;
   run: RunRecord;
   /** The record this run was measured against, or null on a first clear. */
   previousBest: RunRecord | null;
@@ -261,7 +266,7 @@ export function recordRun(
   // tracked, but as the explicitly separate `bestTimeSeconds`.
   const isBestRun = previousBest === null || run.score > previousBest.score;
   const isFastest = current.bestTimeSeconds === null || elapsedSeconds < current.bestTimeSeconds;
-  const next: SaveDataV5 = {
+  const next: SaveDataV6 = {
     ...current,
     bestRun: isBestRun ? run : previousBest,
     bestTimeSeconds: isFastest ? elapsedSeconds : current.bestTimeSeconds,
@@ -280,4 +285,8 @@ function numberOr(value: unknown, fallback: number): number {
 
 function booleanOr(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
 }

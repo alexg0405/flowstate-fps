@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import type { RunModifier, RuntimeLevelV1, SaveDataV5, SaveSettingsV2, SimulationSnapshot } from '../contracts';
+import type { RunModifier, RuntimeLevelV1, SaveDataV6, SaveSettingsV2, SaveSettingsV3, SimulationSnapshot } from '../contracts';
 import { playUiCue } from '../audio/interfaceAudio';
 import type { RecordedRun } from '../persistence/saveStore';
 import { presentation } from '../content/config';
@@ -15,14 +15,14 @@ interface GameOverlayProps {
   error: string | null;
   snapshot: SimulationSnapshot | undefined;
   level: RuntimeLevelV1;
-  settings: SaveSettingsV2;
-  save: SaveDataV5;
+  settings: SaveSettingsV3;
+  save: SaveDataV6;
   /** Set once the finished run has been graded and persisted. */
   result?: RecordedRun | null;
   /** The day's rules, or null outside a daily. */
   modifier?: RunModifier | null;
-  onSaveChange: (next: SaveDataV5) => void;
-  onSettingsChange: (patch: Partial<SaveSettingsV2>) => void;
+  onSaveChange: (next: SaveDataV6) => void;
+  onSettingsChange: (patch: Partial<SaveSettingsV3>) => void;
   onEnter: () => void;
   onExit: () => void;
 }
@@ -292,11 +292,15 @@ function formatDelta(value: number | null, format: (magnitude: number) => string
   return `${sign}${format(Math.abs(value))}`;
 }
 
-export function SettingsPanel({ settings, onChange }: { settings: SaveSettingsV2; onChange: (patch: Partial<SaveSettingsV2>) => void }) {
+export function SettingsPanel({ settings, onChange }: { settings: SaveSettingsV3; onChange: (patch: Partial<SaveSettingsV3>) => void }) {
   return (
     <details className="settings-panel">
-      <summary><span><i aria-hidden="true">＋</i>Camera &amp; accessibility</span></summary>
+      <summary><span><i aria-hidden="true">＋</i>Camera, sound &amp; accessibility</span></summary>
       <div className="settings-grid">
+        {/* First in the grid on purpose. The mix holds a floor under every room and
+            opens a movement layer with speed, so there is always something sounding --
+            and until this row existed there was no way at all to turn it down. */}
+        <Range label="Volume" value={settings.volume} min={0} max={1} step={0.05} display={settings.volume === 0 ? 'MUTE' : `${Math.round(settings.volume * 100)}%`} onChange={(volume) => onChange({ volume })} />
         <Range label="Sensitivity" value={settings.sensitivity} min={0.0005} max={0.006} step={0.0001} display={settings.sensitivity.toFixed(4)} onChange={(sensitivity) => onChange({ sensitivity })} />
         <Range label="Field of view" value={settings.fov} min={75} max={110} step={1} display={`${settings.fov}°`} onChange={(fov) => onChange({ fov })} />
         <Range label="Head bob" value={settings.headBob} min={0} max={1} step={0.05} display={`${Math.round(settings.headBob * 100)}%`} onChange={(headBob) => onChange({ headBob })} />

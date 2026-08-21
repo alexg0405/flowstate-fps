@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { defaultSave, runScoring } from '../src/content/config';
-import type { LegacySaveDataV1, SaveDataV5 } from '../src/contracts';
+import { audioMix, defaultSave, runScoring } from '../src/content/config';
+import type { LegacySaveDataV1, SaveDataV6 } from '../src/contracts';
 import { loadSave, migrateSaveData, rankRun, recordRun, writeSave } from '../src/persistence/saveStore';
 
 describe('local run records', () => {
@@ -10,7 +10,7 @@ describe('local run records', () => {
     recordRun(defaultSave, 120, 500, 0);
     const second = recordRun(loadSave(), 140, 800, 2);
     const save = loadSave();
-    expect(save.schemaVersion).toBe(5);
+    expect(save.schemaVersion).toBe(6);
     // The higher-scoring run owns the record, and every stat on it is that run's.
     expect(save.bestRun).toMatchObject({ timeSeconds: 140, score: 800, deaths: 2 });
     // The faster run is still tracked, but it is not folded into the record.
@@ -57,8 +57,22 @@ describe('local run records', () => {
     expect(loadSave().bestRun?.peakCombo).toBe(14);
   });
 
+  it('gives a save a mix level, and refuses one that would blow the bus up', () => {
+    // The default is what a fresh install hears; the clamp is the guard on a
+    // hand-edited or corrupted save, because the limiter downstream is glue and not
+    // protection.
+    expect(migrateSaveData(defaultSave).settings.volume).toBe(audioMix.defaultVolume);
+    expect(migrateSaveData({ ...migrateSaveData(defaultSave), settings: { ...migrateSaveData(defaultSave).settings, volume: 40 } }).settings.volume).toBe(1);
+    expect(migrateSaveData({ ...migrateSaveData(defaultSave), settings: { ...migrateSaveData(defaultSave).settings, volume: -3 } }).settings.volume).toBe(0);
+    // Muted is a legitimate value and must survive a round trip, not be read as
+    // missing and replaced by the default.
+    const muted = migrateSaveData({ ...migrateSaveData(defaultSave), settings: { ...migrateSaveData(defaultSave).settings, volume: 0 } });
+    writeSave(muted);
+    expect(loadSave().settings.volume).toBe(0);
+  });
+
   it('round-trips accessibility and graphics settings', () => {
-    const changed: SaveDataV5 = {
+    const changed: SaveDataV6 = {
       ...migrateSaveData(defaultSave),
       settings: {
         ...migrateSaveData(defaultSave).settings,
@@ -104,7 +118,7 @@ describe('local run records', () => {
 
     const migrated = loadSave();
     expect(migrated).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       bestTimeSeconds: 82.5,
       // A legacy save's three independent fields are reconstructed as one record,
       // which is the closest honest reading of data that never described one run.
@@ -146,7 +160,7 @@ describe('armory persistence', () => {
       schemaVersion: 1, settings: { fov: 100 }, bestTimeSeconds: 70, bestScore: 400, rank: 'B',
     }));
     const migrated = loadSave();
-    expect(migrated.schemaVersion).toBe(5);
+    expect(migrated.schemaVersion).toBe(6);
     expect(migrated.armory.length).toBeGreaterThanOrEqual(2);
     expect(migrated.bestTimeSeconds).toBe(70);
     expect(migrated.bestRun).toMatchObject({ score: 400, rank: 'B' });

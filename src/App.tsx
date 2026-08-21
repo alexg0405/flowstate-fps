@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import type { RuntimeLevelV1, SaveDataV5, SpawnDefinition } from './contracts';
-import { installInterfaceAudio } from './audio/interfaceAudio';
+import type { RuntimeLevelV1, SaveDataV6, SpawnDefinition } from './contracts';
+import { installInterfaceAudio, setInterfaceVolume } from './audio/interfaceAudio';
 import { cookLevel, defaultLevel } from './content/defaultLevel';
 import { modifierForDate } from './content/modifiers';
 import { formatTime } from './game/format';
@@ -27,6 +27,11 @@ export function App() {
   // Installed once for the whole interface: hover, confirm, cancel and select are
   // delegated from the document rather than threaded through every screen.
   useEffect(installInterfaceAudio, []);
+
+  // The interface bus outlives every run, so it is told the level here as well as by
+  // `GameRuntime`. Re-read on each move for the same reason `reducedMotion` is: the
+  // pause card can change it while a run is open.
+  useEffect(() => { setInterfaceVolume(loadSave().settings.volume); }, [mode]);
 
   useEffect(() => {
     // `game-shell` already carries this while a run is open, but the menu, the bench
@@ -102,7 +107,7 @@ function BuilderRoute({ onClose }: { onClose: () => void }) {
   return (
     <WeaponBuilder
       save={save}
-      onChange={(next: SaveDataV5) => {
+      onChange={(next: SaveDataV6) => {
         setSave(next);
         writeSave(next);
       }}

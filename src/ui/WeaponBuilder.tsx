@@ -1,13 +1,13 @@
 import { useMemo, useState } from 'react';
-import type { SaveDataV5, WeaponBuild, WeaponChassisId, WeaponDefinition, WeaponPartDefinition, WeaponPartSlot } from '../contracts';
+import type { SaveDataV6, WeaponBuild, WeaponChassisId, WeaponDefinition, WeaponPartDefinition, WeaponPartSlot } from '../contracts';
 import { bladeStyles } from '../content/blades';
 import { getWeaponChassis, partsForSlot, resolveWeaponStats, weaponChassis, weaponPartSlots } from '../content/weapons';
 import { Section, Tabs, UiButton } from './Primitives';
 import { WeaponPreview } from './WeaponPreview';
 
 interface WeaponBuilderProps {
-  save: SaveDataV5;
-  onChange: (next: SaveDataV5) => void;
+  save: SaveDataV6;
+  onChange: (next: SaveDataV6) => void;
   onClose: () => void;
   /** Shown when the builder is open mid-run, where changes wait for a respawn. */
   deferredNotice?: boolean;

@@ -37,8 +37,10 @@ function recordingContext() {
   // The bed's two per-oscillator balance gains are not in this list on purpose: they are
   // created straight after an oscillator, so they are attributed to it as voices. What is
   // left source-less is the bus, the two sends, and the bed's two output gains.
-  const shared: string[] = ['bus', 'wetNear', 'wetFar', 'floor', 'drive'];
+  const shared: string[] = ['bus', 'master', 'wetNear', 'wetFar', 'floor', 'drive'];
   const bedAutomation: { node: string; value: number }[] = [];
+  /** Every level written to the player's own gain, which sits after the ducked bus. */
+  const volumes: number[] = [];
   let sharedCount = 0;
 
   class Param {
@@ -89,16 +91,23 @@ function recordingContext() {
         sharedCount += 1;
         const label = node.label;
         const record = label === 'bus' ? ducks : null;
+        // The master is kept out of `bedAutomation` deliberately: it is the player's
+        // level, not a layer of the mix, and tests that assert the bed went silent
+        // would otherwise be reading a volume slider.
+        const push = (value: number) => {
+          if (label === 'master') volumes.push(value);
+          else bedAutomation.push({ node: label ?? '?', value });
+        };
         const param = new Param((value, at) => {
           if (record) record.push({ value, at });
-          else bedAutomation.push({ node: label ?? '?', value });
+          else push(value);
         });
         param.exponentialRampToValueAtTime = (value: number, at: number) => {
           if (record) record.push({ value, at });
           return param;
         };
         param.setTargetAtTime = (value: number) => {
-          if (!record) bedAutomation.push({ node: label ?? '?', value });
+          if (!record) push(value);
           return param;
         };
         node.gain = param;
@@ -167,7 +176,7 @@ function recordingContext() {
     },
     close() {},
   };
-  return { context, voices, noises, ducks, sends, bedAutomation, filterCutoffs };
+  return { context, voices, noises, ducks, sends, bedAutomation, filterCutoffs, volumes };
 }
 
 async function busWith(recorder: ReturnType<typeof recordingContext>): Promise<AudioManager> {
@@ -564,6 +573,41 @@ describe('the bed under the run', () => {
     expect(recorder.sends.filter((send) => send === 'bus').length).toBeGreaterThan(0);
     expect(recorder.ducks.length).toBeGreaterThan(0);
     expect(Math.min(...recorder.ducks.map((duck) => duck.value))).toBeLessThan(recorder.ducks[0].value);
+  });
+});
+
+describe("the player's own level", () => {
+  it('applies a level set before a gesture ever opened the context', async () => {
+    const recorder = recordingContext();
+    vi.stubGlobal('AudioContext', function AudioContextStub(this: unknown) { return recorder.context; } as unknown as typeof AudioContext);
+    const bus = new AudioManager();
+    // Every page starts here: the save is read long before a click is legally allowed
+    // to start an `AudioContext`, so the level has to survive the wait.
+    bus.setVolume(0.35);
+    await bus.resume();
+    expect(recorder.volumes.at(-1) ?? 1).toBeCloseTo(0.35, 6);
+  });
+
+  it('clamps what it is handed, and mutes at zero', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.setVolume(4);
+    expect(recorder.volumes.at(-1)).toBe(1);
+    bus.setVolume(-1);
+    expect(recorder.volumes.at(-1)).toBe(0);
+  });
+
+  it('keeps the duck off the volume node, and the volume out of the duck', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.setVolume(0.4);
+    const beforeKill = recorder.volumes.length;
+    bus.consume([{ id: 1, tick: 1, kind: 'kill', targetEntityId: 7 }]);
+    // Two separate nodes on purpose. The duck writes absolute values to the bus, so a
+    // volume applied there would be overwritten by the next kill -- and a duck that
+    // had to fold the player's level into every ramp is a duck that gets it wrong once.
+    expect(recorder.volumes).toHaveLength(beforeKill);
+    expect(recorder.ducks.at(-1)?.value).toBeCloseTo(recorder.ducks[0].value, 6);
   });
 });
 

@@ -72,6 +72,8 @@ const MAX_IMPACTS_PER_BATCH = 2;
 
 /** Resting level of the bus everything passes through, and the level a duck returns to. */
 const BUS_LEVEL = 0.75;
+/** How quickly the player's own level follows the slider. Short: this is a de-click. */
+const VOLUME_FOLLOW_SECONDS = 0.05;
 /**
  * The duck. This is the mix's punctuation: on the few events that matter, everything
  * else is pulled down hard, held, and let back up. What it buys is not quiet -- it is
@@ -171,6 +173,15 @@ export class AudioManager {
    * of the limiter so ducking cannot be undone by makeup gain.
    */
   private bus: GainNode | null = null;
+  /**
+   * The player's own level, and it sits *after* the bus rather than on it. The duck
+   * writes absolute values to the bus gain, so a volume applied there would either be
+   * overwritten by the next duck or have to be folded into every ramp the duck
+   * schedules. One node further down the chain, the two never meet.
+   */
+  private master: GainNode | null = null;
+  /** Kept so a volume set before the graph exists is not lost. */
+  private volume = 1;
   private wetNear: GainNode | null = null;
   private wetFar: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
@@ -446,10 +457,26 @@ export class AudioManager {
     }
   }
 
+  /**
+   * The player's level, 0 to 1. Ramped rather than set, because a slider drags through
+   * every value between where it was and where it lands, and stepping a gain node per
+   * pointer move is a click per step.
+   *
+   * Safe to call before a gesture has opened the context: the value is held and applied
+   * when the graph is built.
+   */
+  setVolume(volume: number): void {
+    this.volume = Math.min(1, Math.max(0, volume));
+    const context = this.context;
+    if (!context || !this.master) return;
+    this.master.gain.setTargetAtTime?.(this.volume, context.currentTime, VOLUME_FOLLOW_SECONDS);
+  }
+
   dispose(): void {
     void this.context?.close();
     this.context = null;
     this.bus = null;
+    this.master = null;
     this.wetNear = null;
     this.wetFar = null;
     this.noiseBuffer = null;
@@ -547,10 +574,19 @@ export class AudioManager {
   private buildGraph(context: AudioContext): void {
     const bus = context.createGain();
     bus.gain.value = BUS_LEVEL;
+    const master = context.createGain();
+    // Scheduled rather than assigned, because unlike every other level in the graph
+    // this one is state the player owns: it may already have been set from the save
+    // before a gesture existed to open the context, and it has to land here exactly.
+    master.gain.setValueAtTime(this.volume, context.currentTime);
     const limiter = typeof context.createDynamicsCompressor === 'function' ? this.createLimiter(context) : null;
-    if (limiter) bus.connect(limiter).connect(context.destination);
-    else bus.connect(context.destination);
+    // Volume ahead of the limiter, so turning the mix down turns down what the limiter
+    // is given rather than what it produced -- a quiet mix should be less compressed,
+    // not the same compression at a lower level.
+    if (limiter) bus.connect(master).connect(limiter).connect(context.destination);
+    else bus.connect(master).connect(context.destination);
     this.bus = bus;
+    this.master = master;
 
     if (typeof context.createConvolver !== 'function') return;
     const reverb = context.createConvolver();
