@@ -893,6 +893,33 @@ describe('a live chain drives the mix', () => {
     expect(ratios[0]).toBeCloseTo(mixKey.intervals.fifth, 6);
   });
 
+  it('fades the colour note as the chain runs out of window', async () => {
+    const harmonic = async (window: number) => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.sustain({ speed: 8, threat: 3, down: false, chain: { links: 8, window } });
+      return recorder.bedAutomation.filter((entry) => entry.node === 'harmonic').at(-1)?.value ?? -1;
+    };
+    const open = await harmonic(1);
+    const closing = await harmonic(0.2);
+    const gone = await harmonic(0);
+    // A chain about to lapse is audible as the thing the player is about to lose dimming,
+    // rather than as a warning arriving on top of the fight. The threshold is the same
+    // 0.34 the HUD's combo readout calls `lapsing`.
+    expect(closing).toBeLessThan(open);
+    expect(gone).toBe(0);
+    // And the floor it climbed to does not fade with it: losing the chain is what takes
+    // that away, so the drop is what lands.
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.sustain({ speed: 8, threat: 3, down: false, chain: { links: 8, window: 0.05 } });
+    const floor = recorder.bedAutomation.filter((entry) => entry.node === 'floor').at(-1)?.value ?? 0;
+    const cold = recordingContext();
+    const coldBus = await busWith(cold);
+    coldBus.sustain({ speed: 8, threat: 3, down: false, chain: { links: 0, window: 0 } });
+    expect(floor).toBeGreaterThan(cold.bedAutomation.filter((entry) => entry.node === 'floor').at(-1)!.value);
+  });
+
   it('says nothing new per frame, however long the chain is', async () => {
     const recorder = recordingContext();
     const bus = await busWith(recorder);

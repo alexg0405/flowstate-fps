@@ -1561,3 +1561,199 @@ from `af5f9d7` onward.**
 - The save is at **V5**. It added `blade`; V1-V4 saves inherit the reference style.
 - **There is no volume control anywhere in the game.** That was theoretical while every
   sound was a transient. With a continuous bed it is a real gap.
+
+## 16. An interactive mix, an honest corner, and life from damage
+
+Five commits, `f35050b..0c6dffc`. The brief was `PROMPT.md`: make the mix react and
+combine, fix the HUD corner that claimed `CARBINE` over a blade, keep the gun bench
+working, and pay the player for aggression. Four jobs, all four landed, plus the volume
+control the handoff listed as trap 11 and suggested doing first -- which was the right
+order, because everything else in job 1 makes the mix louder and busier.
+
+Verified at the end: `npm test` **470 passing / 38 files**, `npm run typecheck` clean,
+`npm run build` clean, `npm run art:validate` clean at 1.93 MiB of 25.00 MiB, and the 3
+Chromium visual baselines passing **untouched** -- which is the expected result and worth
+stating, because trap 7 says pure UI and pure audio cannot move them and this pass is
+both.
+
+### The volume control, first because the bed made it real
+
+A save field (`SaveSettingsV3`, schema **V6**), a row at the top of the settings grid, and
+one gain node. Zero reads as `MUTE` rather than as `0%`.
+
+The node's position is the only interesting decision. The duck writes *absolute* values to
+the bus gain -- down, hold, back to `BUS_LEVEL` -- so a volume applied there would be
+overwritten by the next kill, or would have to be folded into every ramp the duck
+schedules. The master sits one node further down, and ahead of the limiter so a quiet mix
+is a *less compressed* one rather than the same compression turned down. A case holds it:
+after `setVolume`, a kill's duck still returns to exactly the level it left.
+
+The interface keeps its own `AudioManager` -- it outlives every run by design -- so it is
+told the level separately, on mount and on every settings change. `migrateSaveData` clamps
+what it reads, because a hand-edited save with a volume of 40 would hand the bus a gain of
+40 and the limiter downstream is glue, not protection.
+
+### Job 1, and the change that mattered was the key
+
+Every pitch in `AudioManager` was an arbitrary number that sounded right on its own, which
+is exactly why two cues landing together sounded like two cues landing together: a kill at
+104 Hz over a chain tone at 68 is a minor sixth *and a bit*, and the bit is what the ear
+hears. There is now a root -- **34 Hz, the bed's own floor**, because the floor is the only
+thing always sounding and therefore the only honest place for a tonic -- and every tonal
+layer in the game is a just interval over it. Just rather than tempered: at this register
+the player hears the harmonics the drive stage generates rather than the fundamentals, and
+small integer ratios stack those series instead of beating them two cents apart.
+
+One rule inside the table, and it is the design: **the flat second is reserved for things
+that happen *to* the player.** The telegraph, damage taken, a wave arriving, a chain
+breaking. Everything the player does is consonant -- the hit confirm on the minor third,
+the kill on the fifth the bed is built from, the dodge travelling two octaves from fifth to
+fifth. The mix now says which direction a transaction went before it says anything else
+about it.
+
+The per-event variation had to be split to make that true. At 5.5 per cent a detune is 93
+cents, which is wider than the smallest interval in the table -- so a "varied" root was
+sometimes an audibly flat second. Tonal layers get 2 per cent; noise keeps 5.5, having no
+pitch to be wrong about.
+
+**The chain drives the mix.** It is the style meter and the mix said one thing about it: a
+tone per link. Now the floor climbs a scale degree every three links, a colour note opens
+over it, both reverb sends rise and the movement layer brightens -- all of it saturating at
+eight links, which is the S-rank gate. None of it is a new cue. They are targets on nodes
+that already exist, followed over `BED.followSeconds`, because the lesson behind
+`comboScoring.flourishFromLink` is worse in sound than in pixels: a player can look away
+from a flourish. A case drives thirty frames of a twelve-link chain and insists nothing
+fires. The per-link tone climbs the scale rather than multiplying 68 Hz, and plateaus at
+two octaves -- a long chain gets heavier before it gets higher.
+
+The chain's *window* drives the colour note too: it fades through the last third of the
+window -- the same 0.34 the HUD's combo readout calls `lapsing`, so the mix and the frame
+cannot disagree about when a chain is in trouble. The floor it climbed to does not fade
+with it, because losing the chain is what takes that away and the drop is what should land.
+
+**A cue knows what it hit.** `EntitySnapshot.profile` has carried the material since the
+characters were authored and the mix read none of it. A plate rings, at 820 Hz where a
+narrow band is metal rather than the beep the register pass removed; a brawler at arm's
+length is the densest impact in the game; a hunter is the reference. `GameRuntime` fills a
+reused `Map` per frame rather than allocating one.
+
+**And the cues combine.** One target produces one impact cue per batch, worked out from the
+whole batch before anything plays. A killing slash arrives as a `melee`, a `hit` and a
+`kill` on the same tick, and playing all three is three impacts for one attack. Now the
+kill carries the blade's own edge and a longer sub, and the confirm stands down. A slash
+the guard ate keeps the edge and the ring and loses the weight entirely.
+
+**The three blades sound like themselves.** Tempo on the root, Cleave lower, longer and
+darker on the flat seventh, Riposte higher, shorter and brighter on the minor third -- the
+same three differences `content/blades.ts` already states, in the only three terms a
+synthesised impact has. Every style stays inside the register and inside the key, guarded
+the same way the reach is.
+
+**I cannot hear any of this, and said so at the time.** What is guarded is structural: that
+every pitch in the run *and the interface* is a degree of the key (with a negative control,
+because a tolerance wide enough to allow the detune could otherwise pass anything), that the
+chain opens the four things it claims to and fires nothing per frame, that a plate rings and
+carries no weight, that a killing slash is one impact, and that each blade is
+lower/longer/heavier or the reverse. What is verified is that the real graph runs: the e2e
+that drives it through combat passes in Chromium (55.9 s) and Firefox (13.5 s) with an empty
+console.
+
+Constants worth turning, all at the top of `AudioManager.ts`: `KEY_HZ` transposes the whole
+game; `CHAIN.floorLift`, `harmonicGain` and `sendLift` are how much a chain may change the
+room; `TONAL_SPREAD` is how loose the tuning is; `BLADE_VOICE` is three rows of how each
+blade lands; `MATERIAL` is three rows of what things are made of.
+
+The test double grew with it, which is the only reason any of this is checkable: it now
+records the player's own level separately from the bed, the two reverb sends separately
+again, every pitch a *held* oscillator was moved to (the only observable form a
+transposition can take, since an oscillator cannot be restarted), and how long each tonal
+voice was scheduled for.
+
+### Job 2: two timers in two layers is how a corner starts lying
+
+The ammo corner rendered `activeWeapon.name` and a magazine count unconditionally, so it
+read `CARBINE 30/120` while a blade was on screen and in the player's hands. The label was
+the symptom: `ViewmodelPresenter` owned a private 0.95 s timer that chose which model to
+draw and the HUD had no way to ask it. The decision is now `player.weapons.inHand` on the
+snapshot, the hold is `gunHoldSeconds` in `content/weapons.ts` next to the gun it belongs
+to, and both presentation layers read the field.
+
+Two more instances of the same disagreement fell out of moving it. A swing now clears the
+hold outright -- the blade is what does the swinging, and the old arrangement ran the
+blade's swing pose on a *gun* for up to 0.95 s after a shot. And asking for a gun brings it
+up: selecting slot 2 used to change the name in the corner while the blade stayed on
+screen.
+
+The corner says the blade's style with no magazine when the blade is up, and the gun with
+its magazine when the gun is up. The magazine's `aria-label` announcing the capacity is
+intact for the gun case -- accessibility work that has now survived three HUD passes. The
+low and empty states no longer fire for a gun that is not in hand: an empty magazine in a
+holster is not an emergency, and it was reddening the corner border and the root class.
+
+Three e2e cases changed because what the HUD says changed. Two read the corner for a
+magazine at rest; the armory case reads the pause card's weapon strip instead, which is
+where a carried build's magazine belongs. The swap case now asserts the blade at rest and
+then both guns by name *and* magazine, which is the pair that used to be able to disagree.
+
+Screenshotted at 1280x720: `TEMPO / BLADE` with the blade on screen, `CARBINE 26/120` while
+firing, `TEMPO / BLADE` again a frame into a slash.
+
+### Job 3 was a constraint, and it holds
+
+`Gun builder` is unchanged: four chassis, five slots, the 3D preview driven by the game's
+own `ViewmodelPresenter`, the stat rows, and the blade section above them. The four bench
+and loadout e2e cases pass.
+
+### Job 4: life from damage, and the styles already said it
+
+Kills return health at the chain multiplier, capped per kill, and there is **no
+out-of-combat regeneration at all**. Two numbers in `content/config.ts`: `perKill` 6, a
+fifteenth of the pool, because a kill has to be worth taking a hit for and not worth
+trading four; `maxPerKill` 18, which is exactly what the reference blade's ×3.0 ceiling
+buys, so the cap and the curve land on the same number instead of the cap quietly
+overriding it. Riposte reaches ×4.0 and is capped: the defensive blade may not also be the
+sustain blade.
+
+**No per-style field, and that is the finding.** Cleave already pays two links a kill, so
+its chain -- and therefore its healing -- grows twice as fast per body. Measured over five
+brawlers, Cleave heals 12 a kill where Tempo heals 9. A number on each style would be
+saying the same thing twice.
+
+Measured headless, five brawlers on a stationary player who only mashes the light and never
+dodges, which is the worst case a player can actually produce:
+
+| | clear | damage taken | healed | ends on |
+| --- | --- | --- | --- | --- |
+| with lifesteal | 3.52 s | 132 | 39 | **47** / 140 |
+| without | 3.52 s | 132 | 0 | **8** / 140 |
+
+That is the shape the design wanted: about a third of what the crowd cost you, back, and
+only while you keep killing. The Roofline's eight still kill that player either way --
+lifesteal buys 1.28 s and one more body, not a room you can stand still in.
+
+Measured in a browser at `?scene=crowd`: a heavy that finished three hostiles at ×1.5 paid
+a merged **+22** in one mark; singles read +8 and +14.
+
+A `heal` event carries the amount rather than leaving presentation to infer it from the
+health number moving. The mix answers with a rising fifth -- the consonance the bed is built
+from -- where damage taken is a falling flat second, at the quietest level anything earned
+gets, and with no duck of its own because the kill that caused it already ducked on that
+tick. The HUD puts the number inside the health corner, merged over 420 ms so a heavy reads
+as one climbing figure. No seventh readout.
+
+**One thing I could not do: photograph it.** The mark lives 760 ms and capturing a frame of
+this page takes about as long, so every screenshot landed after it had gone -- including a
+parallel capture-then-read. It is verified by reading the live DOM mid-fight and by two
+rendering cases.
+
+### Also worth knowing
+
+- The save is at **V6**. It added `settings.volume`; every earlier save inherits the
+  default, and the value is clamped to 0..1 on read.
+- `app.spec.ts` asserted schema version `4` in one place and `5` in another -- the last bump
+  left one behind, which is a failure that reads exactly like a broken migration. Both now
+  derive it from `migrateSaveData`.
+- Trap 11 is **done**. There is a volume control, and it is the first row of the settings
+  grid.
+- The three visual baselines were not regenerated and did not need to be. If a future audio
+  or HUD pass moves them, something is wrong -- that inference is still good.

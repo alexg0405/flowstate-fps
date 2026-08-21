@@ -25,7 +25,11 @@ export interface AudioSustainState {
    */
   chain: {
     links: number;
-    /** Fraction of the link window still open. Nothing reads it yet; see `CHAIN`. */
+    /**
+     * Fraction of the link window still open. The colour note fades with the last of it,
+     * so a chain about to lapse is audible as the thing the player is about to lose
+     * dimming rather than as a warning arriving.
+     */
     window: number;
   };
 }
@@ -273,6 +277,14 @@ const CHAIN = {
   harmonicGain: 0.024,
   /** How much further into the room a full chain pushes both reverb sends. */
   sendLift: 0.5,
+  /**
+   * Window fraction the colour note starts fading at. The same 0.34 the HUD's combo
+   * readout switches to its `lapsing` state on, deliberately: one threshold, said in two
+   * places, rather than the mix and the frame disagreeing about when a chain is in
+   * trouble. It fades the harmonic only -- the floor it climbed to stays, because losing
+   * the chain is what takes that away and it should be the *drop* that lands.
+   */
+  lapseFrom: 0.34,
   /** Extra cutoff on the movement layer at a full chain, in Hz. */
   driveOpen: 130,
 } as const;
@@ -1041,7 +1053,10 @@ export class AudioManager {
       : (BED.floorQuiet + (BED.floorEngaged - BED.floorQuiet) * engaged) * (1 + CHAIN.floorLift * lift);
     const drive = state.down ? 0 : BED.driveQuiet + (BED.driveFull - BED.driveQuiet) * speed;
     this.floorGain.gain.setTargetAtTime?.(floor, now, BED.followSeconds);
-    this.harmonicGain?.gain.setTargetAtTime?.(state.down ? 0 : CHAIN.harmonicGain * lift, now, BED.followSeconds);
+    // The colour note carries the urgency the window reports: full while the chain has
+    // time on it, fading through the last third of it.
+    const holding = links > 0 ? Math.min(1, Math.max(0, state.chain.window / CHAIN.lapseFrom)) : 1;
+    this.harmonicGain?.gain.setTargetAtTime?.(state.down ? 0 : CHAIN.harmonicGain * lift * holding, now, BED.followSeconds);
     this.driveGain.gain.setTargetAtTime?.(drive, now, BED.followSeconds);
     this.driveFilter.frequency.setTargetAtTime?.(
       BED.driveCutoffLow + (BED.driveCutoffHigh - BED.driveCutoffLow) * speed + CHAIN.driveOpen * lift,
