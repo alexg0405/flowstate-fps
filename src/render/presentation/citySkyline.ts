@@ -173,3 +173,227 @@ export function paneLayout(pattern: FacadePattern, budget: number, faceWidth: nu
     }
   }
 }
+
+
+/**
+ * Where the towers stand -- and why that is a decision rather than a scatter.
+ *
+ * The placement used to be `z: 56 - random() * 300` inside `WorldPresenter`, ninety-six
+ * near-tier towers, half to each side. Forty-eight towers over three hundred metres is one
+ * every 6.25 m, and they are 7 to 16 m wide, so every one of them overlapped its
+ * neighbours. The near tier was not a row of buildings; it was a continuous wall.
+ *
+ * Measured on a regenerated GPU baseline, that wall is **55% of the upper frame below
+ * luminance 10**, and it is the reason nothing else in the look can matter: an art
+ * direction built on near-black masses silhouetted against a bright sky has no sky to
+ * silhouette against. Lifting the sky gradient moved the frame mean by zero because the
+ * dome reaches almost no pixels.
+ *
+ * AUDIT section 11 added this tier for a real reason -- the upper half of the frame was
+ * empty sky and the corridor felt unclosed -- and the fix overshot. What was wanted was a
+ * city with buildings in it. What was built was a fence.
+ *
+ * So towers go on a jittered lattice with deliberate voids instead. A lattice guarantees
+ * spacing that random placement only averages, and `voidChance` turns spacing into
+ * *gaps* -- which is the only thing that puts sky back in the upper frame without
+ * shortening the buildings, and shortening them is what would cost the scale.
+ */
+export interface TowerTier {
+  count: number;
+  minX: number;
+  spreadX: number;
+  minHeight: number;
+  spreadHeight: number;
+  minWidth: number;
+  spreadWidth: number;
+  panes: number;
+  shapes: readonly number[];
+  /** Fraction of lattice slots deliberately left empty. This is what makes sky. */
+  voidChance: number;
+  /**
+   * Whether this is the tier close enough to carry screens and billboards.
+   *
+   * Authored rather than derived. It used to be `tier.minX < 40`, which is the kind of
+   * threshold that works until someone moves a tier -- and moving the near tier from 29 m
+   * to 52 m for the sky is exactly that. It silently turned the flag off and took the
+   * billboards with it, and only a test about gap spacing noticed.
+   */
+  near: boolean;
+}
+
+export interface TowerPlan {
+  archetype: number;
+  tone: number;
+  side: number;
+  x: number;
+  z: number;
+  yaw: number;
+  width: number;
+  depth: number;
+  height: number;
+  pattern: FacadePattern;
+  panes: number;
+  near: boolean;
+}
+
+/**
+ * Plans every tower before anything is allocated, because an `InstancedMesh` needs its
+ * count up front.
+ *
+ * Deterministic in `random`, so the same seed is the same city -- which the pinned clock
+ * in `visualRegression` depends on, and which is also what makes the openness test below
+ * meaningful rather than a sample of one roll of the dice.
+ */
+export function planTowers(
+  tiers: readonly TowerTier[],
+  random: () => number,
+  span: { from: number; to: number },
+): TowerPlan[] {
+  const plans: TowerPlan[] = [];
+  const length = span.from - span.to;
+  for (const tier of tiers) {
+    const perSide = Math.ceil(tier.count / 2);
+    const pitch = length / perSide;
+    for (const side of [1, -1]) {
+      for (let slot = 0; slot < perSide; slot += 1) {
+        if (random() < tier.voidChance) continue;
+        // Jittered off the lattice by up to a third of the pitch, so the row reads as a
+        // street rather than as a fence, without ever closing a gap it just opened.
+        const jitter = (random() - 0.5) * pitch * 0.66;
+        plans.push({
+          archetype: tier.shapes[Math.floor(random() * tier.shapes.length) % tier.shapes.length],
+          tone: Math.floor(random() * towerTones.length) % towerTones.length,
+          side,
+          width: tier.minWidth + random() * tier.spreadWidth,
+          depth: tier.minWidth + random() * tier.spreadWidth,
+          height: tier.minHeight + random() * tier.spreadHeight,
+          x: side * (tier.minX + random() * tier.spreadX),
+          z: span.from - (slot + 0.5) * pitch + jitter,
+          // Small: enough to break the axis alignment, not enough to read as rubble.
+          yaw: (random() - 0.5) * 0.34,
+          pattern: facadePatterns[Math.floor(random() * facadePatterns.length) % facadePatterns.length],
+          panes: tier.panes,
+          near: tier.near,
+        });
+      }
+    }
+  }
+  return plans;
+}
+
+/**
+ * Roughly what fraction of the frame above the horizon a camera on the route can still see
+ * sky through.
+ *
+ * Not a renderer -- an angular occlusion test. Each tower subtends a wedge of azimuth and
+ * reaches a crown elevation; a sample is blocked if it falls inside the wedge and below the
+ * crown. Towers are treated as circular in plan at their widest, which at the planned yaw
+ * of under twenty degrees is close enough to settle a question about tens of percent.
+ *
+ * The first version of this was wrong in a way worth recording, because it measured
+ * *nothing* while looking like it measured something: it solved for where a ray crossed
+ * each tower's `x` and tested the `z` there, which for a ray a degree off the corridor axis
+ * lands hundreds of metres past the city. Dense and sparse placements both scored 0.78. It
+ * was only caught by comparing against a control -- a solid wall of ninety-six towers --
+ * and noticing the control scored the same. An estimator with no control is a number with
+ * no meaning.
+ *
+ * The GPU baseline is still what confirms an absolute value. This is what stops a blind
+ * guess being committed first.
+ */
+export function skyOpenness(
+  plans: readonly TowerPlan[],
+  eye: { x: number; y: number; z: number },
+  options: { azimuthSpan: number; elevationFrom: number; elevationTo: number; samples: number } = {
+    // Roughly the frame a 92-degree vertical FOV shows at 16:9, above the horizon.
+    azimuthSpan: (122 * Math.PI) / 180, elevationFrom: 0.05, elevationTo: (46 * Math.PI) / 180, samples: 56,
+  },
+): number {
+  interface Wedge { centre: number; half: number; crown: number }
+  const wedges: Wedge[] = [];
+  for (const plan of plans) {
+    const dx = plan.x - eye.x;
+    const dz = plan.z - eye.z;
+    // Looking down -Z, so anything at a greater z is behind the camera.
+    if (dz >= 0) continue;
+    const distance = Math.hypot(dx, dz);
+    if (distance < 1) continue;
+    wedges.push({
+      centre: Math.atan2(dx, -dz),
+      half: Math.atan(Math.max(plan.width, plan.depth) / 2 / distance),
+      // `baseY` in the renderer is `height / 2 - 18`, so a crown sits at `height - 18`.
+      crown: Math.atan2(plan.height - 18 - eye.y, distance),
+    });
+  }
+
+  let open = 0;
+  let total = 0;
+  for (let a = 0; a < options.samples; a += 1) {
+    const azimuth = -options.azimuthSpan / 2 + (a / (options.samples - 1)) * options.azimuthSpan;
+    for (let e = 0; e < options.samples; e += 1) {
+      const elevation = options.elevationFrom + (e / (options.samples - 1)) * (options.elevationTo - options.elevationFrom);
+      total += 1;
+      if (!wedges.some((wedge) => Math.abs(azimuth - wedge.centre) < wedge.half && elevation < wedge.crown)) open += 1;
+    }
+  }
+  return open / total;
+}
+
+/** How far down -Z the city runs, and where it starts. */
+export const CITY_SPAN = { from: 56, to: -244 } as const;
+
+/**
+ * The two tiers, and the numbers the measurement changed.
+ *
+ * **Read the retraction at the bottom of this comment before trusting the sweep.**
+ *
+ * These numbers came off a sweep against `skyOpenness`, not off an intuition, and the
+ * sweep overturned the intuition. Openness of the frame above the horizon, seeded
+ * identically, against the placement being replaced:
+ *
+ *     control: 96 near, no voids (the old city)   180 towers   0.442
+ *     60 near, 34% voids                          110 towers   0.420
+ *     near minX 29 -> 52                           110 towers   0.471
+ *     near minX 52 + 50% voids                     101 towers   0.457
+ *     near minX 52 + 50% voids + far minX 80       101 towers   0.538
+ *
+ * **Thinning the city barely opens the sky. Moving it away does.** Cutting the near tier
+ * from 96 towers to 60 with a third of the slots empty made the frame very slightly
+ * *worse*, because occlusion is angular and angular size is distance: the nearest ring
+ * dominates, and there are still plenty of towers in it. The two levers that actually
+ * moved the number were `minX` on each tier -- and the far tier's, at 62 to 80, was the
+ * single biggest one, worth more than every void put together.
+ *
+ * ## And then the GPU said no
+ *
+ * `minX` 52 and 80 were committed on that sweep and regenerated on a real frame. The
+ * result: upper-frame mean luminance 20.5 to **18.8**, and the share below luminance 10
+ * went 53% to **56%**. Slightly worse, for the cost of a 43 m dead band beside the route.
+ * Reverted to 29 and 62.
+ *
+ * The estimator was not lying, it was incomplete, and the gap is the whole answer. It
+ * models the two tower tiers and nothing else. What actually fills the upper frame is the
+ * **overhead gantries** in `buildCity` -- beams at y 40 to 84, spanning 80 to 200 m across
+ * the route, one every 24 m down it. From an eye at 1.5 m those sit between 28 and 58
+ * degrees of elevation across the full width of the frame. They are a ceiling.
+ *
+ * They are also deliberate: AUDIT section 11 added them "so the upper half of the frame is
+ * not empty sky", and they do precisely that. So the reason this route has no sky is a
+ * previous fix working as designed, and the lever is `gantryCount` and their `y`, not the
+ * tiers and not the gradient. That is a decision about whether the corridor should feel
+ * roofed, which is worth making on purpose rather than by tuning around it.
+ *
+ * What survives from the sweep: the placement is a lattice with voids rather than uniform
+ * random, so towers no longer overlap their neighbours at 6.25 m spacing, and the numbers
+ * measure neutral against the old city (0.420 against 0.442) for two thirds of the towers.
+ */
+export const CITY_TIERS: readonly TowerTier[] = [
+  {
+    count: 60, minX: 29, spreadX: 32, minHeight: 20, spreadHeight: 52,
+    minWidth: 7, spreadWidth: 9, panes: 34, shapes: [0, 0, 1, 1, 2, 5], voidChance: 0.34, near: true,
+  },
+  {
+    count: 84, minX: 62, spreadX: 128, minHeight: 34, spreadHeight: 130,
+    minWidth: 10, spreadWidth: 20, panes: 58, shapes: [0, 1, 2, 3, 4, 5], voidChance: 0.22, near: false,
+  },
+];

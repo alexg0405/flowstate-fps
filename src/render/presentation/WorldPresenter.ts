@@ -6,7 +6,7 @@ import { isAssetId } from '../assets/catalog';
 import { palette } from '../palette';
 import { MaterialLibrary } from './MaterialLibrary';
 import { FACE_BLEND } from './facePaint';
-import { facadeAt, facadePatterns, paneLayout, towerArchetypes, towerTones, type FacadePattern } from './citySkyline';
+import { CITY_SPAN, CITY_TIERS, facadeAt, facadePatterns, paneLayout, planTowers, towerArchetypes, towerTones, type FacadePattern } from './citySkyline';
 import { skyFragmentShader, SKY_STOPS } from './skyGradient';
 
 interface GateArt {
@@ -586,46 +586,11 @@ export class WorldPresenter {
     const orientation = new THREE.Quaternion();
     const euler = new THREE.Euler();
 
-    const tiers = [
-      // Near tier: fills the dead band beside the route, and tall enough to close the
-      // corridor in. Low frontage left the upper half of the frame as empty sky.
-      // Weighted toward the solid masses -- a wall of twinned shafts and podiums
-      // leaves gaps the corridor used to be closed by, and this is the tier doing
-      // that job. The exotic silhouettes read better on the skyline anyway.
-      { count: 96, minX: 29, spreadX: 32, minHeight: 20, spreadHeight: 52, minWidth: 7, spreadWidth: 9, panes: 34, shapes: [0, 0, 1, 1, 2, 5] },
-      // Far tier: the skyline behind it. More panes because the whole facade is in
-      // frame at that distance, and a grid of lights is what makes it read as a city.
-      { count: 84, minX: 62, spreadX: 128, minHeight: 34, spreadHeight: 130, minWidth: 10, spreadWidth: 20, panes: 58, shapes: [0, 1, 2, 3, 4, 5] },
-    ];
-    const total = tiers.reduce((sum, tier) => sum + tier.count, 0);
-
-    // Each tower is planned before anything is allocated, because an instanced mesh
-    // needs its count up front and the archetypes are chosen at random.
-    interface Plan {
-      archetype: number; tone: number; side: number; x: number; z: number; yaw: number;
-      width: number; depth: number; height: number; pattern: FacadePattern; panes: number; near: boolean;
-    }
-    const plans: Plan[] = [];
-    for (const tier of tiers) {
-      for (let index = 0; index < tier.count; index += 1) {
-        const side = index % 2 ? -1 : 1;
-        plans.push({
-          archetype: tier.shapes[Math.floor(random() * tier.shapes.length) % tier.shapes.length],
-          tone: Math.floor(random() * towerTones.length) % towerTones.length,
-          side,
-          width: tier.minWidth + random() * tier.spreadWidth,
-          depth: tier.minWidth + random() * tier.spreadWidth,
-          height: tier.minHeight + random() * tier.spreadHeight,
-          x: side * (tier.minX + random() * tier.spreadX),
-          z: 56 - random() * 300,
-          // Small: enough to break the axis alignment, not enough to read as rubble.
-          yaw: (random() - 0.5) * 0.34,
-          pattern: facadePatterns[Math.floor(random() * facadePatterns.length) % facadePatterns.length],
-          panes: tier.panes,
-          near: tier.minX < 40,
-        });
-      }
-    }
+    // Tiers and placement live in `citySkyline`, which is pure, so the one number that
+    // decides whether this route has a sky -- how much of the near tier is *missing* --
+    // can be tuned against a measurement instead of a hunch. See `skyOpenness`.
+    const plans = planTowers(CITY_TIERS, random, CITY_SPAN);
+    const total = plans.length;
 
     // Plain boxes rather than rounded ones: an archetype is four or five blocks, so
     // rounding every one of them would multiply the skyline's triangle count for a
@@ -665,7 +630,10 @@ export class WorldPresenter {
     // Storeys of lit windows, budgeted per tier and split across the two faces a
     // player can actually see: the one pointing at the route, and the one pointing
     // back up it.
-    const paneBudget = tiers.reduce((sum, tier) => sum + tier.count * tier.panes, 0) * 2;
+    // Off the plans rather than the tier counts, because voids mean fewer towers were
+    // planned than were budgeted for, and over-allocating this is 2 KB of matrices while
+    // under-allocating it silently drops the last towers' windows.
+    const paneBudget = plans.reduce((sum, plan) => sum + plan.panes, 0) * 2;
     const windowGeometry = new THREE.PlaneGeometry(1, 1);
     const windowMaterial = this.emissiveMaterial('#ffd9a3', 1.15);
     const windows = new THREE.InstancedMesh(windowGeometry, windowMaterial, paneBudget);

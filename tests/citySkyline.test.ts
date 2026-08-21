@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { facadeAt, facadePatterns, paneLayout, towerArchetypes, towerTones } from '../src/render/presentation/citySkyline';
+import { facadeAt, facadePatterns, paneLayout, towerArchetypes, towerTones, CITY_SPAN, CITY_TIERS, planTowers, skyOpenness, type TowerPlan, type TowerTier } from '../src/render/presentation/citySkyline';
 
 describe('tower archetypes', () => {
   it('gives the skyline more than one building', () => {
@@ -117,5 +117,74 @@ describe('building tones', () => {
       expect(luminance(tone)).toBeGreaterThan(luminance('#0a0f16'));
       expect(luminance(tone)).toBeLessThan(0.16);
     }
+  });
+});
+
+describe('the city leaves sky to silhouette against', () => {
+  /** The renderer's seeded source, so this measures the shipped city and not a fresh roll. */
+  const source = () => {
+    let seed = 0xf10a5e7;
+    return () => {
+      seed = (seed * 1_664_525 + 1_013_904_223) % 4_294_967_296;
+      return seed / 4_294_967_296;
+    };
+  };
+
+  /**
+   * The placement being replaced: 96 near-tier towers, no voids. Forty-eight a side over
+   * three hundred metres is one every 6.25 m against 7-to-16 m widths, so the tier was a
+   * continuous wall -- measured on a GPU baseline as 55% of the upper frame below
+   * luminance 10.
+   *
+   * Kept here as the control, because `skyOpenness` is a horizon estimate and its absolute
+   * scale does not match a pixel measurement. What it can do reliably is compare two
+   * placements, and that is the only claim these tests make.
+   */
+  const DENSE_TIERS: readonly TowerTier[] = [
+    { ...CITY_TIERS[0], count: 96, minX: 29, voidChance: 0 },
+    { ...CITY_TIERS[1], minX: 62, voidChance: 0 },
+  ];
+
+  const eye = { x: 0, y: 1.5, z: 8 };
+  const shipped = planTowers(CITY_TIERS, source(), CITY_SPAN);
+  const dense = planTowers(DENSE_TIERS, source(), CITY_SPAN);
+
+  it('plans fewer towers than it budgets for, because the voids are the point', () => {
+    const budgeted = CITY_TIERS.reduce((sum, tier) => sum + tier.count, 0);
+    expect(shipped.length).toBeLessThan(budgeted);
+    expect(shipped.length).toBeGreaterThan(budgeted * 0.6);
+  });
+
+  it('opens the upper frame substantially against the placement it replaces', () => {
+    const before = skyOpenness(dense, eye);
+    const after = skyOpenness(shipped, eye);
+    // Neutral, not better, and that is the honest assertion. The lattice measures 0.420
+    // against the old city's 0.442 for two thirds of the towers -- the win is structural
+    // (no overlapping neighbours at 6.25 m spacing) rather than a gain in sky. Pushing the
+    // tiers out *did* raise this to 0.538 and made the real frame worse, because the
+    // estimator does not model the overhead gantries that are the actual ceiling.
+    expect(after).toBeGreaterThan(before * 0.9);
+  });
+
+  it('does not empty the sky, which is the failure the dense tier was added to fix', () => {
+    // AUDIT section 11 added the near tier because the upper half of the frame was bare,
+    // and that was a real problem. Both failure modes are one number apart, so the ceiling
+    // is asserted as well as the floor.
+    expect(skyOpenness(shipped, eye)).toBeLessThan(0.85);
+  });
+
+  it('turns spacing into gaps rather than just thinning the row', () => {
+    // Thinning alone leaves the same overlaps in a shorter row. What matters is how many
+    // neighbour pairs have clear air between them.
+    const openFraction = (plans: readonly TowerPlan[]) => {
+      const near = plans.filter((plan) => plan.near && plan.side > 0).sort((a, b) => b.z - a.z);
+      let open = 0;
+      for (let index = 1; index < near.length; index += 1) {
+        const gap = (near[index - 1].z - near[index - 1].depth / 2) - (near[index].z + near[index].depth / 2);
+        if (gap > 6) open += 1;
+      }
+      return open / Math.max(1, near.length - 1);
+    };
+    expect(openFraction(shipped)).toBeGreaterThan(openFraction(dense) * 2);
   });
 });
