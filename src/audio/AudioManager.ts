@@ -1,4 +1,4 @@
-import type { GameEvent, Vec3 } from '../contracts';
+import type { BladeStyleId, BotProfile, GameEvent, Vec3 } from '../contracts';
 
 /**
  * What the run sounds like *between* events.
@@ -15,6 +15,15 @@ export interface AudioSustainState {
   threat: number;
   /** True while the player is down, when the floor falls away entirely. */
   down: boolean;
+  /**
+   * The flow chain, which is the game's measure of playing well and had almost no voice
+   * in the mix. Driven from here rather than from `consume` deliberately: see `CHAIN`.
+   */
+  chain: {
+    links: number;
+    /** Fraction of the link window still open. Nothing reads it yet; see `CHAIN`. */
+    window: number;
+  };
 }
 
 /** Where the player is and which way they face, so threats can be placed in the mix. */
@@ -22,6 +31,14 @@ export interface AudioListenerState {
   position: Vec3;
   yaw: number;
   playerId: number;
+  /**
+   * What each live hostile is made of, by entity id. Presentation already knows this --
+   * `EntitySnapshot.profile` has carried it since the characters were authored -- and
+   * without it the mix cannot tell a slash into a brawler from a slash into a plate,
+   * which is the difference between the two most common impacts in the game. Absent for
+   * callers that have no roster, in which case every target is the reference material.
+   */
+  profiles?: ReadonlyMap<number, BotProfile['kind']>;
 }
 
 interface Voice {
@@ -151,6 +168,206 @@ const SUB_DRIVE = 2.6;
 const SUB_TONE_HZ = 760;
 
 /**
+ * The key, and this is the change that makes the difference between a set of cues and
+ * a mix.
+ *
+ * Every pitch in this file used to be an arbitrary number that sounded right on its own,
+ * which is exactly why two cues landing together sounded like two cues landing together:
+ * a kill at 104 Hz over a chain tone at 68 is a minor sixth *and a bit*, and the bit is
+ * what the ear hears. Nothing is picked in Hz any more. There is a root -- 34 Hz, which
+ * is the bed's own floor, because the floor is the one thing always sounding and so it is
+ * the only honest place to put the tonic -- and every tonal layer in the game is an
+ * interval over it.
+ *
+ * The ratios are just rather than tempered on purpose. A mix this low is mostly harmonics
+ * of harmonics: at 34 Hz the fundamental is below what a laptop speaker can move and what
+ * the player actually hears is the series the drive stage generates. Small integer ratios
+ * put those series on top of each other; a tempered fifth at 1.4983 puts them two cents
+ * apart, which at these register is an audible beat rather than a chord.
+ *
+ * The register statement from the last pass is unchanged: nothing tonal starts above
+ * 200 Hz, and the interface still sits above the run rather than inside it.
+ */
+const KEY_HZ = 34;
+
+const INTERVAL = {
+  root: 1,
+  /**
+   * The sour one, and it is reserved. Everything that happens *to* the player -- a
+   * telegraph, a hit taken, a wave arriving, a chain breaking -- is built on the flat
+   * second, so it beats against the floor the whole mix is sitting on. Everything the
+   * player *does* is consonant. That is the one rule in this table, and it means the mix
+   * says which direction a transaction went before it says anything else about it.
+   */
+  minorSecond: 16 / 15,
+  minorThird: 6 / 5,
+  fourth: 4 / 3,
+  fifth: 3 / 2,
+  minorSixth: 8 / 5,
+  minorSeventh: 9 / 5,
+} as const;
+
+type Interval = keyof typeof INTERVAL;
+
+/**
+ * The key, published for the one test that can hold this whole design: that every tonal
+ * layer in the game is a degree of it. Nothing reads this at runtime -- it is the mix's
+ * own statement of what it is built from, and the only way to guard a rule that is
+ * otherwise a hundred numbers scattered through one file.
+ */
+export const mixKey = { rootHz: KEY_HZ, intervals: INTERVAL } as const;
+
+/** A pitch in the key: `interval`, `octaves` above the root. Negative octaves go under it. */
+function note(interval: Interval, octaves = 0): number {
+  return KEY_HZ * INTERVAL[interval] * 2 ** octaves;
+}
+
+/**
+ * The scale a chain climbs, a degree per link.
+ *
+ * Two octaves and a bit, and then it holds. A chain can run to sixteen links and beyond;
+ * a scale that kept climbing would put the style meter in the beep register it took a
+ * whole pass to get out of, and a chain that gets *shriller* the better it goes is the
+ * opposite of the read. Plateauing is also a fair statement about a long chain: the
+ * climbing stops, and what is left is the weight the bed has picked up underneath it.
+ */
+const CHAIN_SCALE: readonly number[] = [
+  ...([0, 1] as const).flatMap((octave) =>
+    (['root', 'minorThird', 'fourth', 'fifth', 'minorSixth', 'minorSeventh'] as const).map((interval) => note(interval, octave))),
+  note('root', 2),
+  note('minorThird', 2),
+];
+
+/**
+ * What a live chain does to the mix.
+ *
+ * The chain is the style meter and until now the mix said one thing about it: a tone per
+ * link. It should be audible that a chain is *live* -- and the shape of that has to be
+ * continuous rather than eventful, for the same reason `comboScoring.flourishFromLink`
+ * exists. A full-frame effect that fires constantly is decoration; a *sound* that fires
+ * constantly is worse, because the player cannot look away from it. So nothing here is a
+ * new cue. Everything is a target the bed is already following at
+ * `BED.followSeconds`: the floor climbs the scale, a harmonic opens over it, the room
+ * gets wetter and the movement layer brightens. A player who chains well hears the room
+ * change; a player who drops the chain hears it relax over the best part of a second.
+ */
+const CHAIN = {
+  /** Links at which the chain's effect on the mix is fully open. The S-rank gate. */
+  fullLinks: 8,
+  /** Links per scale degree the floor climbs. */
+  linksPerDegree: 3,
+  /** Degrees it may climb. Four puts an eight-link chain a fifth over the tonic. */
+  maxDegrees: 4,
+  /** Extra floor level at a full chain, as a fraction of the level it would have had. */
+  floorLift: 0.55,
+  /**
+   * The harmonic that opens over the floor. A tenth above the tonic -- the colour note --
+   * so a live chain is the only time the bed is a chord rather than a fifth. Its level is
+   * under the floor's, because it is meant to be noticed on the way in and not stared at.
+   */
+  harmonicHz: note('minorThird', 1),
+  harmonicGain: 0.024,
+  /** How much further into the room a full chain pushes both reverb sends. */
+  sendLift: 0.5,
+  /** Extra cutoff on the movement layer at a full chain, in Hz. */
+  driveOpen: 130,
+} as const;
+
+/**
+ * What each blade sounds like.
+ *
+ * `content/blades.ts` gives Tempo, Cleave and Riposte different reach, recovery and chain
+ * rules, and until now they sounded identical -- which is a strange thing for the primary
+ * verb, and the one place in the game where a choice the player made was completely
+ * inaudible. The differences here are the same differences the tuning already states, in
+ * the only three terms a synthesised impact has: **how low**, **how long** and **how
+ * bright**.
+ *
+ * - **Tempo** is the reference, on the root.
+ * - **Cleave** is lower, longer and darker: it recovers in 0.30 s where Tempo takes 0.24,
+ *   hits for 82, and takes a wider bite. It lands on the flat seventh, which is the
+ *   heaviest consonance in the table.
+ * - **Riposte** is higher, shorter and brighter, because it is 0.19 s of recovery and 52
+ *   damage -- a blade that is *quick* has to sound quick, and length is the only way a
+ *   sub says so. It sits on the minor third.
+ *
+ * Every heavy is a fourth or a fifth under its own light and carries a second sub an
+ * octave over that, which is the trick the kill uses: a swing that moved the room.
+ */
+interface BladeVoice {
+  light: { hz: number; seconds: number; gain: number };
+  heavy: { hz: number; seconds: number; gain: number };
+  /** The body under the cut -- a bent sine, the layer that says what the blade is. */
+  bodyHz: number;
+  /** Where the edge's transient sits. Brightness is most of a blade's character. */
+  edgeHz: number;
+  /** The whiff: dark air, and how long the player just committed for. */
+  airHz: number;
+  airSeconds: number;
+}
+
+const BLADE_VOICE: Record<BladeStyleId, BladeVoice> = {
+  tempo: {
+    light: { hz: note('root', 1), seconds: 0.34, gain: 0.15 },
+    heavy: { hz: note('fifth', 0), seconds: 0.55, gain: 0.17 },
+    bodyHz: note('fifth', 1),
+    edgeHz: 1200,
+    airHz: 700,
+    airSeconds: 0.16,
+  },
+  cleave: {
+    light: { hz: note('minorSeventh', 0), seconds: 0.44, gain: 0.17 },
+    heavy: { hz: note('fourth', 0), seconds: 0.62, gain: 0.19 },
+    bodyHz: note('fourth', 1),
+    edgeHz: 900,
+    airHz: 560,
+    airSeconds: 0.22,
+  },
+  riposte: {
+    light: { hz: note('minorThird', 1), seconds: 0.24, gain: 0.13 },
+    heavy: { hz: note('minorSixth', 0), seconds: 0.46, gain: 0.15 },
+    bodyHz: note('minorSeventh', 1),
+    edgeHz: 1500,
+    airHz: 860,
+    airSeconds: 0.12,
+  },
+};
+
+/**
+ * What a hostile is made of, and it is three sounds rather than three levels.
+ *
+ * The simulation already treats these as three different problems -- a hunter shoots from
+ * eighteen metres, a brawler closes inside the blade's reach, a bulwark walks a plate at
+ * you -- and the mix knew about exactly one of them, through `deflected`. A plate should
+ * ring. A brawler at arm's length should be the meatiest thing the player hits. A hunter
+ * is the reference.
+ */
+const MATERIAL = {
+  ranged: { bodyHz: 220, edgeHz: 1100, weight: 1, ring: false },
+  /** Closest, densest and the one the player hits most in a crowd. */
+  aggressive: { bodyHz: 170, edgeHz: 900, weight: 1.12, ring: false },
+  /** Steel. The ring is what makes it plate rather than a quieter hit. */
+  bulwark: { bodyHz: 300, edgeHz: 1500, weight: 0.9, ring: true },
+} as const satisfies Record<BotProfile['kind'], { bodyHz: number; edgeHz: number; weight: number; ring: boolean }>;
+
+type Material = typeof MATERIAL[keyof typeof MATERIAL];
+
+/** Everything that happened to one hostile inside a single batch of events. */
+interface TargetOutcome {
+  killed: boolean;
+  /** Which swing reached it, or null if it was a round. */
+  blade: 'light' | 'heavy' | null;
+  deflected: boolean;
+}
+
+/**
+ * The plate's ring. Deliberately just under the kilohertz the register rule guards, with
+ * a narrow band and a long decay for something that is otherwise all transient: a struck
+ * plate is the one thing in this game that keeps sounding after it is hit.
+ */
+const PLATE_RING = { hz: 820, q: 9, seconds: 0.12, gain: 0.03 } as const;
+
+/**
  * The whole mix, and it is deliberately built from the bottom.
  *
  * The register is the design. Every cue is a **sub** carrying the weight, a **boom** of
@@ -189,10 +406,22 @@ export class AudioManager {
   private driveCurve: Float32Array<ArrayBuffer> | null = null;
   /** Context time the current duck finishes at. A new one is refused before then. */
   private duckUntil = 0;
-  /** The bed's two layers. Built with the graph, silent until `sustain` asks for them. */
+  /** The bed's layers. Built with the graph, silent until `sustain` asks for them. */
   private floorGain: GainNode | null = null;
+  /**
+   * The floor's oscillators and the interval each one sits at, so a live chain can
+   * transpose the whole bed up the scale without rebuilding it. An oscillator cannot be
+   * restarted once stopped, so moving the existing ones is the only option anyway.
+   */
+  private floorVoices: { oscillator: OscillatorNode; ratio: number }[] = [];
+  /** The colour note a live chain opens over the floor. Silent at zero links. */
+  private harmonicGain: GainNode | null = null;
   private driveGain: GainNode | null = null;
   private driveFilter: BiquadFilterNode | null = null;
+  /** Base levels of the two sends, so a chain can lift them and let them back down. */
+  private sendLevels = { near: 0.17, far: 0.44 };
+  /** Which blade is in the player's hands. The reference style until told otherwise. */
+  private bladeVoice: BladeVoice = BLADE_VOICE.tempo;
 
   async resume(): Promise<void> {
     if (typeof AudioContext !== 'function') return;
@@ -212,9 +441,22 @@ export class AudioManager {
     }
   }
 
+  /**
+   * Which blade the player carries. Read from the save and set once per run, because the
+   * blade is the primary verb and the three styles sounded identical.
+   */
+  setBladeStyle(style: BladeStyleId | undefined): void {
+    this.bladeVoice = BLADE_VOICE[style ?? 'tempo'] ?? BLADE_VOICE.tempo;
+  }
+
   consume(events: readonly GameEvent[], listener?: AudioListenerState): void {
     if (!this.context || this.context.state !== 'running') return;
     let impacts = 0;
+    // What happened to each hostile across the whole batch, worked out before anything
+    // is played. This is what lets one target produce one impact cue: a killing slash
+    // arrives as a `melee`, a `hit` and a `kill` on the same tick, and playing all three
+    // is three cues queueing rather than one event.
+    const outcomes = batchOutcomes(events);
     for (const event of events) {
       const place = this.placement(event, listener);
       // Deterministic per-event variation. Presentation is allowed to be arbitrary but
@@ -222,6 +464,10 @@ export class AudioManager {
       // of one identical waveform -- the most artificial thing a synth mix can do and
       // the cheapest to fix.
       const vary = variation(event.id, 0.055);
+      // Tonal layers are detuned far less than the noise layers are. See `TONAL_SPREAD`:
+      // a variation wider than the smallest interval in the key is not a variation, it
+      // is a different note, and it was audibly one whenever two cues landed together.
+      const detune = variation(event.id, TONAL_SPREAD);
       switch (event.kind) {
         case 'shot':
           // Sub first. The tick is five milliseconds of definition so the shot has an
@@ -229,8 +475,8 @@ export class AudioManager {
           // and always at full level -- it is the one sound that must never be masked.
           this.tick(1300 * vary, 0.005, 0.028, 0, 'dry');
           this.boom(190 * vary, 0.13, 0.11, 0, 'near');
-          this.sub(58 * vary, 0.3, 0.13, 0.42, 0, 'dry');
-          this.tone({ frequency: 96 * vary, duration: 0.16, gain: 0.05, type: 'sine', bend: 0.5, lowpass: 300 }, 0, 0, 'dry');
+          this.sub(note('minorSeventh', 0) * detune, 0.3, 0.13, 0.42, 0, 'dry');
+          this.tone({ frequency: note('fourth', 1) * detune, duration: 0.16, gain: 0.05, type: 'sine', bend: 0.5, lowpass: 300 }, 0, 0, 'dry');
           break;
         case 'dryFire':
           this.tick(1500, 0.006, 0.03, 0, 'dry');
@@ -245,55 +491,109 @@ export class AudioManager {
           this.boom(320 * vary, 0.06, 0.04 * place.gain, place.pan, place.send);
           this.tick(1400 * vary, 0.004, 0.012 * place.gain, place.pan, place.send);
           break;
-        case 'hit':
-          if (this.isPlayer(event.targetEntityId, listener)) this.playerDamaged(event.value ?? 0);
-          // A shot the shield ate is a dull, dead thud with no sub under it: the player
-          // should hear that they connected and that it did not count. Taking the weight
-          // away is a clearer statement than turning the volume down.
-          else if (event.deflected) this.boom(150, 0.07, 0.05, 0, 'near');
-          else {
-            // The confirm is a thud, not a blip. A headshot's sub sits a fourth higher
-            // and its tick is brighter, so precision is audible without either of them
-            // leaving the register.
-            this.sub(event.headshot ? 120 : 84, event.headshot ? 0.13 : 0.11, event.headshot ? 0.06 : 0.055, 0.58, 0, 'dry');
-            this.tick(event.headshot ? 1600 : 1100, 0.004, event.headshot ? 0.022 : 0.016, 0, 'dry');
+        case 'hit': {
+          if (this.isPlayer(event.targetEntityId, listener)) {
+            this.playerDamaged(event.value ?? 0);
+            break;
+          }
+          const outcome = event.targetEntityId === undefined ? undefined : outcomes.get(event.targetEntityId);
+          // One target, one impact cue. Whatever else happened to this hostile on this
+          // tick owns the confirm: a kill folds it in, and so does a cut. Before this, a
+          // killing slash played a cut, a confirm *and* a kill -- three cues for one
+          // event, which is what "the cues queue rather than combine" meant in practice.
+          if (outcome?.killed || outcome?.blade) break;
+          const material = materialOf(event.targetEntityId, listener);
+          if (event.deflected) {
+            // A shot the plate ate is a dull, dead thud with no sub under it: the player
+            // should hear that they connected and that it did not count. Taking the
+            // weight away is a clearer statement than turning the volume down -- and what
+            // is left is the plate itself, which is the thing to go around.
+            this.boom(material.bodyHz * 0.68, 0.07, 0.05, 0, 'near');
+            this.ring(0, 'near');
+          } else {
+            // The confirm is a thud, not a blip, and how dense the thud is belongs to
+            // what was hit. A headshot's sub sits a fifth higher and its edge is
+            // brighter, so precision is audible without either leaving the register.
+            this.sub(
+              event.headshot ? note('minorSeventh', 1) : note('minorThird', 1),
+              event.headshot ? 0.13 : 0.11,
+              (event.headshot ? 0.06 : 0.055) * material.weight,
+              0.58, 0, 'dry',
+            );
+            this.tick(event.headshot ? material.edgeHz * 1.45 : material.edgeHz, 0.004, event.headshot ? 0.022 : 0.016, 0, 'dry');
           }
           break;
-        case 'kill':
+        }
+        case 'kill': {
+          const outcome = event.targetEntityId === undefined ? undefined : outcomes.get(event.targetEntityId);
+          const material = materialOf(event.targetEntityId, listener);
           // The biggest moment in the loop, and the only cue with two subs an octave
-          // apart: the upper one is the impact, the lower one is what is left of it.
+          // apart: the upper one is the impact, the lower one is what is left of it. They
+          // sit on the fifth -- the interval the bed itself is built from -- so a kill
+          // reads as the mix resolving rather than as another note arriving over it.
           // Plus the longest tail in the mix and the duck that clears room for it.
-          this.duck(0.58, 0.34);
-          this.tick(1500, 0.006, 0.03, 0, 'dry');
-          this.sub(104, 0.62, 0.16, 0.24, 0, 'near');
-          this.sub(52, 0.5, 0.1, 0.5, 0, 'near');
-          this.boom(150, 0.4, 0.09, 0, 'far');
+          this.duck(outcome?.blade ? 0.62 : 0.58, 0.34);
+          // The killing blow's own transient, at the brightness of whatever delivered it:
+          // the blade's edge for a cut, the material's for a round. This is the
+          // combining -- a killing slash is one impact in the mix, not a cut and then a
+          // kill, and the sub below is longer than the cut's own would have been.
+          this.tick(outcome?.blade ? this.bladeVoice.edgeHz * 1.25 : material.edgeHz * 1.36, 0.006, 0.03, 0, 'dry');
+          this.sub(note('fifth', 1), outcome?.blade === 'heavy' ? 0.7 : 0.62, 0.16 * material.weight, 0.24, 0, 'near');
+          this.sub(note('fifth', 0), 0.5, 0.1, 0.5, 0, 'near');
+          this.boom(material.bodyHz * 0.68, 0.4, 0.09, 0, 'far');
+          // Steel going down on a deck keeps sounding after the body has stopped.
+          if (material.ring) this.ring(0, 'far');
           break;
-        case 'melee':
+        }
+        case 'melee': {
           // A swing that connected and a swing that cut air are different sounds, not
           // the same sound at two levels. The whiff is dark air and nothing else; the
           // cut is the heaviest sub in ordinary play. This is the primary verb, so it is
-          // the cue the player hears most and the one that most has to have weight.
+          // the cue the player hears most and the one that most has to have weight --
+          // and which blade is in their hands is audible in all three of the terms a
+          // synthesised impact has. See `BLADE_VOICE`.
+          const blade = this.bladeVoice;
+          const swing = event.heavy ? blade.heavy : blade.light;
           if (event.targetEntityId === undefined) {
             // A heavy that cut air is a longer, lower rush of nothing than a light one:
-            // the whiff should tell the player how much they just committed.
-            this.boom(event.heavy ? 520 : 700 * vary, event.heavy ? 0.26 : 0.16, 0.04, 0, 'near');
-          } else if (event.heavy) {
-            // The heaviest thing in ordinary play, and the only impact with a second sub
-            // an octave down -- the same trick the kill uses, because a heavy that lands
-            // on three hostiles at once should sound like it moved the room.
-            this.tick(900, 0.006, 0.032, 0, 'dry');
-            this.boom(170, 0.3, 0.12, 0, 'near');
-            this.sub(56, 0.55, 0.17, 0.34, 0, 'near');
-            this.sub(112, 0.24, 0.1, 0.4, 0, 'far');
-            this.tone({ frequency: 84, duration: 0.26, gain: 0.06, type: 'sine', bend: 0.42, lowpass: 220 }, 0, 0, 'dry');
-          } else {
-            this.tick(1200 * vary, 0.005, 0.03, 0, 'dry');
-            this.boom(220 * vary, 0.14, 0.1, 0, 'near');
-            this.sub(74 * vary, 0.34, 0.15, 0.38, 0, 'near');
-            this.tone({ frequency: 110 * vary, duration: 0.14, gain: 0.055, type: 'sine', bend: 0.45, lowpass: 260 }, 0, 0, 'dry');
+            // the whiff should tell the player how much they just committed, and Cleave's
+            // says more than Riposte's.
+            this.boom(
+              (event.heavy ? blade.airHz * 0.74 : blade.airHz) * vary,
+              event.heavy ? blade.airSeconds * 1.62 : blade.airSeconds,
+              0.04, 0, 'near',
+            );
+            break;
           }
+          const outcome = outcomes.get(event.targetEntityId);
+          const material = materialOf(event.targetEntityId, listener);
+          // The edge and the body always sound: the player has to hear that the blade
+          // connected however the exchange ended, and the body is what it connected with.
+          this.tick(blade.edgeHz * vary, 0.005, event.heavy ? 0.032 : 0.03, 0, 'dry');
+          this.boom(material.bodyHz * vary, event.heavy ? 0.3 : 0.14, (event.heavy ? 0.12 : 0.1) * material.weight, 0, 'near');
+          // A plate rings and does not part. What is missing is the weight, which is the
+          // cue to get around it rather than keep swinging at it.
+          if (outcome?.deflected) {
+            this.ring(0, 'near');
+            break;
+          }
+          // A killing blow is not a cut and then a kill. The weight of this one belongs
+          // to the `kill` cue in the same batch, which carries the blade's own edge.
+          if (outcome?.killed) break;
+          // The heavy is the only impact with a second sub an octave up -- the same trick
+          // the kill uses, because a heavy that lands on three hostiles moved the room.
+          this.sub(swing.hz * detune, swing.seconds, swing.gain * material.weight, event.heavy ? 0.34 : 0.38, 0, 'near');
+          if (event.heavy) this.sub(swing.hz * 2 * detune, swing.seconds * 0.44, swing.gain * 0.59, 0.4, 0, 'far');
+          this.tone({
+            frequency: blade.bodyHz * detune,
+            duration: event.heavy ? 0.26 : 0.14,
+            gain: event.heavy ? 0.06 : 0.055,
+            type: 'sine',
+            bend: event.heavy ? 0.42 : 0.45,
+            lowpass: event.heavy ? 220 : 260,
+          }, 0, 0, 'dry');
           break;
+        }
         case 'enemyTelegraph': {
           // The single most important cue in the mix: it is the only warning the player
           // gets before taking damage. It used to be a rising square in the upper mids,
@@ -302,36 +602,43 @@ export class AudioManager {
           // player can tell where it came from.
           const windup = Math.max(0.12, event.value ?? 0.3);
           this.tick(1500, 0.005, 0.014 * place.gain, place.pan, 'dry');
-          this.sub(46, windup, 0.075 * place.gain, 2.6, place.pan, 'near');
-          this.tone({ frequency: 150, duration: windup, gain: 0.05 * place.gain, type: 'triangle', bend: 1.9, lowpass: 420 }, 0, place.pan, 'dry');
+          this.sub(note('fourth', 0), windup, 0.075 * place.gain, 2.6, place.pan, 'near');
+          // The flat second, which is the interval this mix keeps for things that are
+          // about to happen *to* the player: it beats against the floor the room is
+          // sitting on, so the warning is dissonance rather than volume.
+          this.tone({ frequency: note('minorSecond', 2), duration: windup, gain: 0.05 * place.gain, type: 'triangle', bend: 1.9, lowpass: 420 }, 0, place.pan, 'dry');
           break;
         }
         case 'enemyAttack':
           // Duller and lower than the player's own shot so the two never blur, and
           // wetter, because it happens out there rather than in their hands.
           this.boom(200, 0.1, 0.085 * place.gain, place.pan, place.send);
-          this.sub(44, 0.22, 0.075 * place.gain, 0.6, place.pan, 'far');
-          this.tone({ frequency: 78, duration: 0.1, gain: 0.05 * place.gain, type: 'sine', bend: 0.5, lowpass: 220 }, 0, place.pan, 'dry');
+          this.sub(note('fourth', 0), 0.22, 0.075 * place.gain, 0.6, place.pan, 'far');
+          this.tone({ frequency: note('minorSecond', 1), duration: 0.1, gain: 0.05 * place.gain, type: 'sine', bend: 0.5, lowpass: 220 }, 0, place.pan, 'dry');
           break;
         case 'death':
           // The lowest and longest thing in the game, and the deepest duck. Everything
           // else stops mattering, and the mix says so by nearly stopping.
           this.duck(0.8, 0.9);
-          this.sub(58, 1.5, 0.16, 0.42, 0, 'far');
-          this.sub(29, 1.2, 0.1, 0.7, 0, 'far');
+          this.sub(note('minorSeventh', 0), 1.5, 0.16, 0.42, 0, 'far');
+          this.sub(note('minorSeventh', -1), 1.2, 0.1, 0.7, 0, 'far');
           this.boom(110, 0.9, 0.12, 0, 'far');
           break;
         case 'respawn':
           // Rises where death fell, so redeploying reads as the inverse of going down.
-          this.sub(38, 0.45, 0.1, 3.4, 0, 'near');
-          this.tone({ frequency: 90, duration: 0.3, gain: 0.06, type: 'triangle', bend: 2, lowpass: 300 }, 0, 0, 'near');
+          // Starts on the flat second and *resolves* onto the fifth two octaves up,
+          // which is the only voice in the mix that leaves the dissonance behind it.
+          this.sub(note('minorSecond', 0), 0.45, 0.1, 2.81, 0, 'near');
+          this.tone({ frequency: note('fourth', 1), duration: 0.3, gain: 0.06, type: 'triangle', bend: 2, lowpass: 300 }, 0, 0, 'near');
           break;
         case 'comboLink': {
-          // Pitch climbs with the chain, so the chain is audible without being read --
-          // but it climbs from 68 Hz rather than 520, so a long chain gets heavier
-          // rather than shriller. Sixteen links tops out around 128 Hz.
-          const step = Math.min(16, event.value ?? 1);
-          this.sub(68 * (1 + step * 0.055), 0.1, 0.06, 1.15, 0, 'near');
+          // A degree of the scale per link, so a chain is audible as a phrase rather than
+          // as a rising number -- and every link lands *in the key* the bed is holding
+          // underneath it, which is the whole reason the key exists. It climbs from the
+          // tonic rather than from 520 Hz, so a long chain gets heavier before it gets
+          // higher, and it plateaus rather than climbing into the beep register.
+          const step = Math.max(1, Math.round(event.value ?? 1));
+          this.sub(CHAIN_SCALE[Math.min(CHAIN_SCALE.length - 1, step - 1)], 0.1, 0.06, 1.15, 0, 'near');
           break;
         }
         case 'dodge':
@@ -342,15 +649,21 @@ export class AudioManager {
           // at the front, and by being the only rising sub in the mix at that level.
           this.duck(0.5, 0.26);
           this.tick(2200, 0.008, 0.04, 0, 'dry');
-          this.sub(58, 0.34, 0.15, 3.2, 0, 'near');
+          // Two octaves in a third of a second, from the fifth to the fifth: the only
+          // voice in the mix that travels that far, and it lands somewhere the bed
+          // already agrees with, which is what makes it read as an answer.
+          this.sub(note('fifth', 0), 0.34, 0.15, 4, 0, 'near');
           this.boom(320, 0.2, 0.07, 0, 'far');
-          this.tone({ frequency: 130, duration: 0.22, gain: 0.05, type: 'triangle', bend: 2.4, lowpass: 520 }, 0, 0, 'far');
+          this.tone({ frequency: note('minorThird', 2), duration: 0.22, gain: 0.05, type: 'triangle', bend: 2.4, lowpass: 520 }, 0, 0, 'far');
           break;
         case 'comboBreak':
-          this.sub(90, 0.3, 0.07, 0.42, 0, 'near');
+          // Falls, and onto the flat second: a chain lapsing is something that happened
+          // to the player, so it sits with the telegraph and the hit rather than with
+          // the links it just lost.
+          this.sub(note('minorSecond', 1), 0.3, 0.07, 0.42, 0, 'near');
           break;
         case 'split':
-          this.sub(80, 0.16, 0.06, 1.5, 0, 'near');
+          this.sub(note('minorThird', 1), 0.16, 0.06, 1.5, 0, 'near');
           this.tick(1400, 0.005, 0.018, 0, 'near');
           break;
         case 'reloadStart':
@@ -360,40 +673,42 @@ export class AudioManager {
         case 'reloadComplete':
           this.tick(1600, 0.005, 0.032, 0, 'dry');
           this.boom(240, 0.06, 0.045, 0, 'dry');
-          this.sub(90, 0.08, 0.04, 0.8, 0, 'dry');
+          this.sub(note('fourth', 1), 0.08, 0.04, 0.8, 0, 'dry');
           break;
         case 'checkpoint':
-          this.sub(62, 0.5, 0.09, 1.6, 0, 'near');
-          this.tone({ frequency: 124, duration: 0.35, gain: 0.05, type: 'sine', lowpass: 320 }, 0, 0, 'far');
+          this.sub(note('minorSeventh', 0), 0.5, 0.09, 1.6, 0, 'near');
+          this.tone({ frequency: note('minorSeventh', 1), duration: 0.35, gain: 0.05, type: 'sine', lowpass: 320 }, 0, 0, 'far');
           break;
         case 'complete':
           this.duck(0.42, 0.5);
-          this.sub(52, 0.9, 0.12, 1.5, 0, 'far');
-          this.tone({ frequency: 104, duration: 0.6, gain: 0.06, type: 'sine', lowpass: 300 }, 0, 0, 'far');
-          this.tone({ frequency: 156, duration: 0.5, gain: 0.04, type: 'sine', lowpass: 380 }, 0.18, 0, 'far');
+          // The fifth, its octave, and then the root above both: the run resolving onto
+          // the note the bed has been holding under it for the whole of it.
+          this.sub(note('fifth', 0), 0.9, 0.12, 1.5, 0, 'far');
+          this.tone({ frequency: note('fifth', 1), duration: 0.6, gain: 0.06, type: 'sine', lowpass: 300 }, 0, 0, 'far');
+          this.tone({ frequency: note('root', 2), duration: 0.5, gain: 0.04, type: 'sine', lowpass: 380 }, 0.18, 0, 'far');
           break;
         case 'wave':
           // A room that is not finished with you. Long, low and rising, deliberately
           // close to the gate's swell -- both mean the geometry of the fight just
           // changed -- but shorter, and with a tick so it lands rather than looms.
           this.tick(1000, 0.006, 0.026, 0, 'near');
-          this.sub(36, 0.85, 0.12, 2.4, 0, 'far');
+          this.sub(note('minorSecond', 0), 0.85, 0.12, 2.4, 0, 'far');
           this.boom(140, 0.5, 0.08, 0, 'far');
           break;
         case 'gateOpen':
           // A thirty-metre door. The sub is the entire point of it.
-          this.sub(30, 1.1, 0.13 * place.gain, 2.2, place.pan, 'far');
+          this.sub(note('minorSeventh', -1), 1.1, 0.13 * place.gain, 2.2, place.pan, 'far');
           this.boom(120, 0.8, 0.09 * place.gain, place.pan, 'far');
           break;
         case 'grappleAttach':
           this.tick(1700, 0.005, 0.028, 0, 'dry');
-          this.sub(96, 0.14, 0.07, 0.7, 0, 'near');
+          this.sub(note('fourth', 1), 0.14, 0.07, 0.7, 0, 'near');
           break;
         case 'grapplePull':
-          this.sub(80, 0.12, 0.075, 1.5, 0, 'near');
+          this.sub(note('minorThird', 1), 0.12, 0.075, 1.5, 0, 'near');
           break;
         case 'grappleRelease':
-          this.sub(70, 0.1, 0.045, 0.7, 0, 'near');
+          this.sub(note('root', 1), 0.1, 0.045, 0.7, 0, 'near');
           break;
         case 'grappleFail':
           this.boom(180, 0.05, 0.03, 0, 'dry');
@@ -421,35 +736,37 @@ export class AudioManager {
       case 'hover':
         // Barely there. A menu that clicks loudly under the pointer is a menu the
         // player mutes, so this sits well under every other voice in the bus.
-        this.tone({ frequency: 420, duration: 0.026, gain: 0.013, type: 'triangle', lowpass: 900 }, 0, 0, 'dry');
+        this.tone({ frequency: note('fourth', 3), duration: 0.026, gain: 0.013, type: 'triangle', lowpass: 900 }, 0, 0, 'dry');
         break;
       case 'select':
         this.tick(1100, 0.006, 0.022, 0, 'dry');
-        this.tone({ frequency: 240, duration: 0.035, gain: 0.024, type: 'square', lowpass: 700 }, 0, 0, 'dry');
+        this.tone({ frequency: note('fifth', 2), duration: 0.035, gain: 0.024, type: 'square', lowpass: 700 }, 0, 0, 'dry');
         break;
       case 'confirm':
         // Rises a fifth. Square and lowpassed, so it cannot blur into the sine layer
         // the run is built from.
-        this.tone({ frequency: 220, duration: 0.07, gain: 0.05, type: 'square', lowpass: 640 }, 0, 0, 'dry');
-        this.tone({ frequency: 330, duration: 0.1, gain: 0.04, type: 'square', lowpass: 760 }, 0.06, 0, 'near');
+        this.tone({ frequency: note('minorSeventh', 2), duration: 0.07, gain: 0.05, type: 'square', lowpass: 640 }, 0, 0, 'dry');
+        this.tone({ frequency: note('minorSeventh', 2) * INTERVAL.fifth, duration: 0.1, gain: 0.04, type: 'square', lowpass: 760 }, 0.06, 0, 'near');
         this.tick(1300, 0.005, 0.022, 0, 'dry');
         break;
       case 'cancel':
         // The inverse: one note, falling.
-        this.tone({ frequency: 200, duration: 0.13, gain: 0.045, type: 'square', bend: 0.6, lowpass: 560 }, 0, 0, 'dry');
+        this.tone({ frequency: note('minorSixth', 2), duration: 0.13, gain: 0.045, type: 'square', bend: 0.6, lowpass: 560 }, 0, 0, 'dry');
         break;
       case 'result': {
         // A stab under the rank landing, an octave and a half below where it used to
         // sit. Delayed so it does not land on top of the `complete` cue the run itself
         // just played, which is now nearly a second long.
-        const notes: readonly [number, number][] = [[131, 0], [196, 0.09], [262, 0.18]];
+        // The key's own triad, and the only place in the game it is stated plainly:
+        // root, fifth, octave.
+        const notes: readonly [number, number][] = [[note('root', 2), 0], [note('fifth', 2), 0.09], [note('root', 3), 0.18]];
         for (const [frequency, offset] of notes) {
           this.tone({ frequency, duration: 0.55 - offset, gain: 0.05, type: 'square', lowpass: 620 }, RESULT_STINGER_DELAY + offset, 0, 'far');
         }
         // A root under the stab. A tone rather than a sub, because `sub` takes no delay
         // and would have fired at zero, straight over the tail of the `complete` cue
         // this whole thing is offset to avoid.
-        this.tone({ frequency: 65, duration: 0.6, gain: 0.055, type: 'triangle', lowpass: 200 }, RESULT_STINGER_DELAY, 0, 'near');
+        this.tone({ frequency: note('root', 1), duration: 0.6, gain: 0.055, type: 'triangle', lowpass: 200 }, RESULT_STINGER_DELAY, 0, 'near');
         break;
       }
       default:
@@ -482,6 +799,8 @@ export class AudioManager {
     this.noiseBuffer = null;
     this.driveCurve = null;
     this.floorGain = null;
+    this.floorVoices = [];
+    this.harmonicGain = null;
     this.driveGain = null;
     this.driveFilter = null;
     this.duckUntil = 0;
@@ -496,9 +815,11 @@ export class AudioManager {
   private playerDamaged(amount: number): void {
     const weight = Math.min(1, Math.max(0.25, amount / 25));
     this.duck(0.4 * weight, 0.26);
-    this.sub(60, 0.42, 0.15 * weight, 0.5, 0, 'near');
+    // The flat second under a minor third, both falling: the sourest pair in the table,
+    // against a bed holding a root and a fifth. Nothing else in the mix rubs like this.
+    this.sub(note('minorSecond', 1), 0.42, 0.15 * weight, 0.5, 0, 'near');
     this.boom(150, 0.2, 0.11 * weight, 0, 'near');
-    this.tone({ frequency: 88, duration: 0.28, gain: 0.07 * weight, type: 'sine', bend: 0.4, lowpass: 240 }, 0, 0, 'dry');
+    this.tone({ frequency: note('minorThird', 1), duration: 0.28, gain: 0.07 * weight, type: 'sine', bend: 0.4, lowpass: 240 }, 0, 0, 'dry');
   }
 
   /**
@@ -594,10 +915,10 @@ export class AudioManager {
     reverb.connect(bus);
     // Two fixed send levels. See `Send` for why this is three states and not a knob.
     const near = context.createGain();
-    near.gain.value = 0.17;
+    near.gain.value = this.sendLevels.near;
     near.connect(reverb);
     const far = context.createGain();
-    far.gain.value = 0.44;
+    far.gain.value = this.sendLevels.far;
     far.connect(reverb);
     this.wetNear = near;
     this.wetFar = far;
@@ -619,10 +940,18 @@ export class AudioManager {
     const floor = context.createGain();
     floor.gain.value = 0;
     floor.connect(bus);
-    for (const [frequency, type, level] of [[BED.floorHz, 'sine', 1], [BED.fifthHz, 'triangle', 0.45]] as const) {
+    // Built before the oscillators so the shared nodes of the graph are created in one
+    // run, which is also what lets the test double attribute them by construction order.
+    const harmonic = context.createGain();
+    harmonic.gain.value = 0;
+    harmonic.connect(bus);
+    const drive = context.createGain();
+    drive.gain.value = 0;
+    drive.connect(bus);
+    for (const [ratio, type, level] of [[1, 'sine', 1], [INTERVAL.fifth, 'triangle', 0.45]] as const) {
       const oscillator = context.createOscillator();
       oscillator.type = type;
-      oscillator.frequency.value = frequency;
+      oscillator.frequency.value = KEY_HZ * ratio;
       const filter = context.createBiquadFilter();
       filter.type = 'lowpass';
       filter.frequency.value = 190;
@@ -638,14 +967,25 @@ export class AudioManager {
       }
       filter.connect(layer).connect(floor);
       oscillator.start();
+      this.floorVoices.push({ oscillator, ratio });
     }
     this.floorGain = floor;
 
+    // The colour note. One oscillator straight into its own gain, with no balance stage
+    // of its own: it is either opening or it is silent, and `sustain` owns which.
+    const colour = context.createOscillator();
+    colour.type = 'triangle';
+    colour.frequency.value = CHAIN.harmonicHz;
+    const colourFilter = context.createBiquadFilter();
+    colourFilter.type = 'lowpass';
+    colourFilter.frequency.value = 260;
+    colourFilter.Q.value = 0.6;
+    colour.connect(colourFilter).connect(harmonic);
+    colour.start();
+    this.harmonicGain = harmonic;
+
     // The movement layer. Noise rather than a tone, because speed is a rush and not a
     // note, and lowpassed hard so it stays underneath everything.
-    const drive = context.createGain();
-    drive.gain.value = 0;
-    drive.connect(bus);
     const driveFilter = context.createBiquadFilter();
     driveFilter.type = 'lowpass';
     driveFilter.frequency.value = BED.driveCutoffLow;
@@ -673,17 +1013,37 @@ export class AudioManager {
     const now = context.currentTime;
     const engaged = Math.min(1, Math.max(0, state.threat / BED.threatFull));
     const speed = Math.min(1, Math.max(0, (state.speed - BED.driveFromSpeed) / (BED.driveFullSpeed - BED.driveFromSpeed)));
+    // How live the chain is, and every line below that reads it is a target rather than a
+    // value -- so a chain opens the mix over about half a second and closes it over the
+    // same, which is the difference between the player noticing a state and being tracked.
+    const links = Math.max(0, state.chain.links);
+    const lift = state.down ? 0 : Math.min(1, links / CHAIN.fullLinks);
     // Down is silence, not a quieter version of being alive: the floor going out from
     // under the player is the loudest thing about dying.
-    const floor = state.down ? 0 : BED.floorQuiet + (BED.floorEngaged - BED.floorQuiet) * engaged;
+    const floor = state.down
+      ? 0
+      : (BED.floorQuiet + (BED.floorEngaged - BED.floorQuiet) * engaged) * (1 + CHAIN.floorLift * lift);
     const drive = state.down ? 0 : BED.driveQuiet + (BED.driveFull - BED.driveQuiet) * speed;
     this.floorGain.gain.setTargetAtTime?.(floor, now, BED.followSeconds);
+    this.harmonicGain?.gain.setTargetAtTime?.(state.down ? 0 : CHAIN.harmonicGain * lift, now, BED.followSeconds);
     this.driveGain.gain.setTargetAtTime?.(drive, now, BED.followSeconds);
     this.driveFilter.frequency.setTargetAtTime?.(
-      BED.driveCutoffLow + (BED.driveCutoffHigh - BED.driveCutoffLow) * speed,
+      BED.driveCutoffLow + (BED.driveCutoffHigh - BED.driveCutoffLow) * speed + CHAIN.driveOpen * lift,
       now,
       BED.followSeconds,
     );
+    // The floor climbs a scale degree every few links, which is the part of this a player
+    // can hum back. It is the *whole bed* that moves -- the tonic and its fifth together,
+    // by the same ratio -- so the room changes key rather than growing a note.
+    const degree = state.down ? 0 : Math.min(CHAIN.maxDegrees, Math.floor(links / CHAIN.linksPerDegree));
+    const transpose = CHAIN_SCALE[degree] / KEY_HZ;
+    for (const voice of this.floorVoices) {
+      voice.oscillator.frequency.setTargetAtTime?.(KEY_HZ * voice.ratio * transpose, now, BED.followSeconds);
+    }
+    // And the room opens up. A chain is the one time the player is moving through the
+    // space fast enough for its size to be the point, so the sends carry more of it.
+    this.wetNear?.gain.setTargetAtTime?.(this.sendLevels.near * (1 + CHAIN.sendLift * lift), now, BED.followSeconds);
+    this.wetFar?.gain.setTargetAtTime?.(this.sendLevels.far * (1 + CHAIN.sendLift * lift), now, BED.followSeconds);
   }
 
   /**
@@ -770,6 +1130,19 @@ export class AudioManager {
    */
   private tick(cutoff: number, duration: number, gainValue: number, pan: number, send: Send): void {
     this.noise('bandpass', cutoff, 1.4, duration, gainValue, pan, send);
+  }
+
+  /**
+   * A struck plate, and the only thing in this mix that keeps sounding after it is hit.
+   *
+   * A narrow band with a long decay, which is what metal is. It sits just under the
+   * kilohertz the register rule guards, deliberately: the whole point of the last pass
+   * was that content up there is an edge and nothing else, and a ring that lasted eight
+   * milliseconds would be a tick with extra steps while one at 1.5 kHz would be the beep
+   * that pass removed.
+   */
+  private ring(pan: number, send: Send): void {
+    this.noise('bandpass', PLATE_RING.hz, PLATE_RING.q, PLATE_RING.seconds, PLATE_RING.gain, pan, send);
   }
 
   /**
@@ -905,6 +1278,59 @@ export class AudioManager {
     oscillator.stop(startAt + duration);
   }
 }
+
+/**
+ * What each hostile is made of, or the reference material for a caller with no roster.
+ */
+function materialOf(entityId: number | undefined, listener?: AudioListenerState): Material {
+  const kind = entityId === undefined ? undefined : listener?.profiles?.get(entityId);
+  return kind ? MATERIAL[kind] : MATERIAL.ranged;
+}
+
+/**
+ * What happened to each hostile across one batch of events.
+ *
+ * The mix's cues used to queue because the events do: a killing slash arrives as a
+ * `melee`, one `hit` per target and a `kill`, all on the same tick, and playing each of
+ * them in turn is three impacts for one attack. Reading the batch first is what lets the
+ * cues *combine* instead -- the kill carries the cut's edge, the cut carries the
+ * material, and the confirm stands down.
+ *
+ * A heavy names only the nearest of the hostiles it swept (`FlowSimulation.swing`), so a
+ * heavy anywhere in the batch attributes every hit in it to the blade. Firing a round on
+ * the same tick as a heavy swing is possible and would be misattributed; it is also one
+ * frame, and the two cues are a tick apart in brightness.
+ */
+function batchOutcomes(events: readonly GameEvent[]): Map<number, TargetOutcome> {
+  const found = new Map<number, TargetOutcome>();
+  const sweeping = events.some((event) => event.kind === 'melee' && event.heavy === true);
+  for (const event of events) {
+    const target = event.targetEntityId;
+    if (target === undefined) continue;
+    if (event.kind !== 'melee' && event.kind !== 'kill' && event.kind !== 'hit') continue;
+    const outcome = found.get(target) ?? { killed: false, blade: null, deflected: false };
+    if (event.kind === 'kill') outcome.killed = true;
+    if (event.kind === 'melee') outcome.blade = event.heavy === true ? 'heavy' : 'light';
+    if (event.kind === 'hit') {
+      if (event.deflected === true) outcome.deflected = true;
+      if (sweeping) outcome.blade ??= 'heavy';
+    }
+    found.set(target, outcome);
+  }
+  return found;
+}
+
+/**
+ * How far a tonal layer may be detuned by the per-event variation.
+ *
+ * Two per cent, where the noise layers get five and a half. The point of the variation is
+ * that a held trigger is not one identical waveform; the point of the key is that two
+ * cues landing together agree with each other. At 5.5 per cent a sub could land 93 cents
+ * off, which is most of a semitone -- wider than the smallest interval in `INTERVAL`, so
+ * a "varied" root was sometimes a flat second. Thirty-five cents is a detuned root, which
+ * is what was wanted. Noise has no pitch to be wrong about and keeps the wider spread.
+ */
+const TONAL_SPREAD = 0.02;
 
 /**
  * A stable multiplier in `1 ± spread` for an event id. Hashed rather than random, so

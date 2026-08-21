@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GameEvent } from '../src/contracts';
-import { AudioManager } from '../src/audio/AudioManager';
+import { AudioManager, mixKey } from '../src/audio/AudioManager';
 import { cueFor, installInterfaceAudio } from '../src/audio/interfaceAudio';
 
 interface Voice { frequency: number; gain: number; type: string; startAt: number; filter: string | null }
@@ -37,19 +37,28 @@ function recordingContext() {
   // The bed's two per-oscillator balance gains are not in this list on purpose: they are
   // created straight after an oscillator, so they are attributed to it as voices. What is
   // left source-less is the bus, the two sends, and the bed's two output gains.
-  const shared: string[] = ['bus', 'master', 'wetNear', 'wetFar', 'floor', 'drive'];
+  const shared: string[] = ['bus', 'master', 'wetNear', 'wetFar', 'floor', 'harmonic', 'drive'];
   const bedAutomation: { node: string; value: number }[] = [];
   /** Every level written to the player's own gain, which sits after the ducked bus. */
   const volumes: number[] = [];
+  /** Pitches a held oscillator was moved to, which is how the bed's key is observable. */
+  const pitchTargets: { from: number; to: number }[] = [];
+  /** Levels written to the two reverb sends, which a live chain opens. */
+  const sendAutomation: { node: string; value: number }[] = [];
+  /** How long each tonal voice was scheduled for, in `voices` order. */
+  const durations: number[] = [];
   let sharedCount = 0;
 
   class Param {
     value = 0;
-    constructor(private readonly onSet?: (value: number, at: number) => void) {}
+    constructor(
+      private readonly onSet?: (value: number, at: number) => void,
+      private readonly onTarget?: (value: number) => void,
+    ) {}
     setValueAtTime(value: number, at: number) { this.value = value; this.onSet?.(value, at); return this; }
     exponentialRampToValueAtTime(_value: number, _at: number): Param { return this; }
     linearRampToValueAtTime() { return this; }
-    setTargetAtTime(_value: number, _at: number, _constant: number): Param { return this; }
+    setTargetAtTime(value: number, _at: number, _constant: number): Param { this.onTarget?.(value); return this; }
     cancelScheduledValues() { return this; }
   }
   class Node {
@@ -59,11 +68,37 @@ function recordingContext() {
   class Oscillator extends Node {
     type = '';
     startedAt = 0;
-    frequency = new Param((value, at) => { this.pitch = value; this.startedAt = at; });
     pitch = 0;
     onended: (() => void) | null = null;
+    /**
+     * Pitch is written three ways in this codebase and all three have to be observable:
+     * as `.value` when the bed's held oscillators are built, as `setValueAtTime` for
+     * every transient voice, and as `setTargetAtTime` when a live chain transposes the
+     * bed -- which is the only form a *moved* oscillator can take, since one cannot be
+     * restarted once stopped.
+     */
+    readonly frequency: {
+      value: number;
+      setValueAtTime(value: number, at: number): unknown;
+      exponentialRampToValueAtTime(value: number, at: number): unknown;
+      setTargetAtTime(value: number, at: number, constant: number): unknown;
+    };
+    constructor() {
+      super();
+      const owner = this;
+      this.frequency = {
+        get value() { return owner.pitch; },
+        set value(next: number) { owner.pitch = next; },
+        setValueAtTime(value: number, at: number) { owner.pitch = value; owner.startedAt = at; return this; },
+        exponentialRampToValueAtTime() { return this; },
+        setTargetAtTime(value: number) { pitchTargets.push({ from: owner.pitch, to: value }); return this; },
+      };
+    }
     start() {}
-    stop() {}
+    // Context time never advances in here, so a stop time *is* a duration. Recorded in
+    // construction order, which is the same order voices are pushed in -- the convention
+    // the rest of this double already runs on.
+    stop(at = 0) { durations.push(at); }
   }
 
   type Source = { kind: 'osc'; node: Oscillator } | { kind: 'buffer' };
@@ -91,11 +126,13 @@ function recordingContext() {
         sharedCount += 1;
         const label = node.label;
         const record = label === 'bus' ? ducks : null;
-        // The master is kept out of `bedAutomation` deliberately: it is the player's
-        // level, not a layer of the mix, and tests that assert the bed went silent
-        // would otherwise be reading a volume slider.
+        // The master and the two sends are kept out of `bedAutomation` deliberately.
+        // One is the player's level and the others are the size of the room; neither is
+        // a layer of the bed, and tests that assert the bed went silent would otherwise
+        // be reading a volume slider or a reverb send.
         const push = (value: number) => {
           if (label === 'master') volumes.push(value);
+          else if (label === 'wetNear' || label === 'wetFar') sendAutomation.push({ node: label, value });
           else bedAutomation.push({ node: label ?? '?', value });
         };
         const param = new Param((value, at) => {
@@ -176,7 +213,7 @@ function recordingContext() {
     },
     close() {},
   };
-  return { context, voices, noises, ducks, sends, bedAutomation, filterCutoffs, volumes };
+  return { context, voices, noises, ducks, sends, bedAutomation, filterCutoffs, volumes, pitchTargets, sendAutomation, durations };
 }
 
 async function busWith(recorder: ReturnType<typeof recordingContext>): Promise<AudioManager> {
@@ -489,7 +526,8 @@ describe('the mix has weight, space and punctuation', () => {
 });
 
 describe('the bed under the run', () => {
-  const at = (speed: number, threat: number, down = false) => ({ speed, threat, down });
+  const at = (speed: number, threat: number, down = false, links = 0) =>
+    ({ speed, threat, down, chain: { links, window: links > 0 ? 1 : 0 } });
 
   it('says nothing until the run asks for it', async () => {
     const recorder = recordingContext();
@@ -611,47 +649,48 @@ describe("the player's own level", () => {
   });
 });
 
+/**
+ * One of every cue the run can play, with the fields each one reads. This is the guard on
+ * the thing the register pass was about -- it is easy to add a cue, and just as easy to
+ * reach for a 900 Hz square while doing it -- and the key pass reads the same list, for
+ * the same reason.
+ */
+const runCues: readonly GameEvent[] = [
+  { id: 1, tick: 1, kind: 'shot', sourceEntityId: 1 },
+  { id: 2, tick: 1, kind: 'dryFire', sourceEntityId: 1 },
+  { id: 3, tick: 1, kind: 'impact', sourceEntityId: 1, position: [0, 0, -6] },
+  { id: 4, tick: 1, kind: 'hit', targetEntityId: 7, value: 34 },
+  { id: 5, tick: 1, kind: 'hit', targetEntityId: 7, value: 60, headshot: true },
+  { id: 6, tick: 1, kind: 'hit', targetEntityId: 7, value: 11, deflected: true },
+  { id: 7, tick: 1, kind: 'hit', targetEntityId: 1, value: 14 },
+  { id: 8, tick: 1, kind: 'kill', targetEntityId: 7 },
+  { id: 9, tick: 1, kind: 'melee', sourceEntityId: 1 },
+  { id: 10, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 },
+  { id: 28, tick: 1, kind: 'melee', sourceEntityId: 1, value: 0, heavy: true },
+  { id: 29, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, value: 3, heavy: true },
+  { id: 11, tick: 1, kind: 'enemyTelegraph', sourceEntityId: 2, targetEntityId: 1, value: 0.42 },
+  { id: 12, tick: 1, kind: 'enemyAttack', sourceEntityId: 2, targetEntityId: 1, value: 10 },
+  { id: 13, tick: 1, kind: 'death', entityId: 1 },
+  { id: 14, tick: 1, kind: 'respawn', entityId: 1 },
+  { id: 15, tick: 1, kind: 'comboLink', value: 6 },
+  { id: 16, tick: 1, kind: 'comboBreak', value: 6 },
+  { id: 17, tick: 1, kind: 'dodge', targetEntityId: 1, value: 10 },
+  { id: 18, tick: 1, kind: 'split', value: 30 },
+  { id: 19, tick: 1, kind: 'reloadStart' },
+  { id: 20, tick: 1, kind: 'reloadComplete' },
+  { id: 21, tick: 1, kind: 'checkpoint' },
+  { id: 22, tick: 1, kind: 'complete' },
+  { id: 23, tick: 1, kind: 'gateOpen', gateId: 'gate-one' },
+  { id: 30, tick: 1, kind: 'wave', value: 2 },
+  { id: 24, tick: 1, kind: 'grappleAttach' },
+  { id: 25, tick: 1, kind: 'grapplePull' },
+  { id: 26, tick: 1, kind: 'grappleRelease' },
+  { id: 27, tick: 1, kind: 'grappleFail' },
+];
+
+const listener = { position: [0, 0, 0] as const, yaw: 0, playerId: 1 };
+
 describe('the register itself', () => {
-  /**
-   * One of every cue the run can play, with the fields each one reads. This is the
-   * guard on the thing the whole pass was about: it is easy to add a cue, and just as
-   * easy to reach for a 900 Hz square while doing it.
-   */
-  const runCues: readonly GameEvent[] = [
-    { id: 1, tick: 1, kind: 'shot', sourceEntityId: 1 },
-    { id: 2, tick: 1, kind: 'dryFire', sourceEntityId: 1 },
-    { id: 3, tick: 1, kind: 'impact', sourceEntityId: 1, position: [0, 0, -6] },
-    { id: 4, tick: 1, kind: 'hit', targetEntityId: 7, value: 34 },
-    { id: 5, tick: 1, kind: 'hit', targetEntityId: 7, value: 60, headshot: true },
-    { id: 6, tick: 1, kind: 'hit', targetEntityId: 7, value: 11, deflected: true },
-    { id: 7, tick: 1, kind: 'hit', targetEntityId: 1, value: 14 },
-    { id: 8, tick: 1, kind: 'kill', targetEntityId: 7 },
-    { id: 9, tick: 1, kind: 'melee', sourceEntityId: 1 },
-    { id: 10, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 },
-    { id: 28, tick: 1, kind: 'melee', sourceEntityId: 1, value: 0, heavy: true },
-    { id: 29, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, value: 3, heavy: true },
-    { id: 11, tick: 1, kind: 'enemyTelegraph', sourceEntityId: 2, targetEntityId: 1, value: 0.42 },
-    { id: 12, tick: 1, kind: 'enemyAttack', sourceEntityId: 2, targetEntityId: 1, value: 10 },
-    { id: 13, tick: 1, kind: 'death', entityId: 1 },
-    { id: 14, tick: 1, kind: 'respawn', entityId: 1 },
-    { id: 15, tick: 1, kind: 'comboLink', value: 6 },
-    { id: 16, tick: 1, kind: 'comboBreak', value: 6 },
-    { id: 17, tick: 1, kind: 'dodge', targetEntityId: 1, value: 10 },
-    { id: 18, tick: 1, kind: 'split', value: 30 },
-    { id: 19, tick: 1, kind: 'reloadStart' },
-    { id: 20, tick: 1, kind: 'reloadComplete' },
-    { id: 21, tick: 1, kind: 'checkpoint' },
-    { id: 22, tick: 1, kind: 'complete' },
-    { id: 23, tick: 1, kind: 'gateOpen', gateId: 'gate-one' },
-    { id: 30, tick: 1, kind: 'wave', value: 2 },
-    { id: 24, tick: 1, kind: 'grappleAttach' },
-    { id: 25, tick: 1, kind: 'grapplePull' },
-    { id: 26, tick: 1, kind: 'grappleRelease' },
-    { id: 27, tick: 1, kind: 'grappleFail' },
-  ];
-
-  const listener = { position: [0, 0, 0] as const, yaw: 0, playerId: 1 };
-
   it('has no tonal layer anywhere near the beep register', async () => {
     for (const event of runCues) {
       const recorder = recordingContext();
@@ -696,6 +735,320 @@ describe('the register itself', () => {
       if (deliberatelyDry) expect(subs, `${event.kind} should carry no sub`).toHaveLength(0);
       else expect(subs.length, `${event.kind} should carry a sub`).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('the mix is in one key', () => {
+  /**
+   * Whether a pitch is a degree of the key, in any octave, allowing the detune the
+   * per-event variation applies. The tolerance is 3 per cent where the detune is 2 and
+   * the smallest interval in the table is 6.7, so this cannot pass by landing on the
+   * neighbouring degree.
+   */
+  const inKey = (frequency: number): boolean => Object.values(mixKey.intervals).some((ratio) => {
+    const octaves = Math.log2(frequency / (mixKey.rootHz * ratio));
+    return Math.abs(octaves - Math.round(octaves)) < 0.032;
+  });
+
+  it('knows its own root', () => {
+    // A guard on the guard: 34 Hz and its fifth are in the key, and the pitch halfway
+    // between two degrees is not -- otherwise `inKey` would pass anything.
+    expect(inKey(mixKey.rootHz)).toBe(true);
+    expect(inKey(mixKey.rootHz * 1.5)).toBe(true);
+    expect(inKey(mixKey.rootHz * 1.13)).toBe(false);
+  });
+
+  it('derives every tonal layer the run plays from an interval over the root', async () => {
+    // This is the change job 1 turned on, and it is the only way to hold it: a hundred
+    // pitches in one file, each of which used to be a number that sounded right alone.
+    // A kill at 104 Hz over a chain tone at 68 is a minor sixth *and a bit*, and the bit
+    // is what the ear hears when two cues land together.
+    for (const event of runCues) {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([event], listener);
+      for (const voice of recorder.voices) {
+        expect(inKey(voice.frequency), `${event.kind} plays ${voice.frequency.toFixed(1)} Hz, which is not in the key`).toBe(true);
+      }
+    }
+  });
+
+  it('puts the interface in the same key, two octaves up where it lives', async () => {
+    for (const kind of ['hover', 'select', 'confirm', 'cancel', 'result'] as const) {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.cue(kind);
+      for (const voice of recorder.voices) {
+        expect(inKey(voice.frequency), `${kind} plays ${voice.frequency.toFixed(1)} Hz`).toBe(true);
+      }
+    }
+  });
+
+  it('keeps a repeated cue varied without letting it leave the key', async () => {
+    // The variation is what stops a held trigger being one identical waveform, and at
+    // the spread the noise layers use it would put a sub 93 cents off -- most of a
+    // semitone, and wider than the smallest interval in the table.
+    const pitches = new Set<number>();
+    for (const id of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([{ id, tick: 1, kind: 'shot', sourceEntityId: 1 }]);
+      for (const voice of recorder.voices) {
+        pitches.add(voice.frequency);
+        expect(inKey(voice.frequency)).toBe(true);
+      }
+    }
+    expect(pitches.size).toBeGreaterThan(8);
+  });
+});
+
+describe('a live chain drives the mix', () => {
+  const bed = (links: number) => ({ speed: 8, threat: 3, down: false, chain: { links, window: 1 } });
+
+  it('opens the floor, the colour note and the room as the chain grows', async () => {
+    const state = async (links: number) => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.sustain(bed(links));
+      return {
+        floor: recorder.bedAutomation.filter((entry) => entry.node === 'floor').at(-1)?.value ?? 0,
+        harmonic: recorder.bedAutomation.filter((entry) => entry.node === 'harmonic').at(-1)?.value ?? -1,
+        send: recorder.sendAutomation.filter((entry) => entry.node === 'wetFar').at(-1)?.value ?? 0,
+        cutoff: Math.max(...recorder.filterCutoffs.flat()),
+      };
+    };
+    const cold = await state(0);
+    const warm = await state(4);
+    const live = await state(9);
+
+    // The chain is the game's measure of playing well and the mix said one thing about
+    // it: a tone per link. A chain being live is now a state of the room.
+    expect(cold.harmonic).toBe(0);
+    expect(warm.harmonic).toBeGreaterThan(0);
+    expect(live.harmonic).toBeGreaterThan(warm.harmonic);
+    expect(live.floor).toBeGreaterThan(cold.floor);
+    expect(live.send).toBeGreaterThan(cold.send);
+    expect(live.cutoff).toBeGreaterThan(cold.cutoff);
+    // And it saturates rather than climbing forever: past the S-rank gate there is
+    // nothing left to open, which is what stops a long chain becoming a siren.
+    const past = await state(20);
+    expect(past.harmonic).toBeCloseTo(live.harmonic, 6);
+  });
+
+  it('transposes the whole floor rather than growing a note on top of it', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.sustain(bed(9));
+    // Both held oscillators move, by the same ratio, so the bed changes key instead of
+    // becoming a chord it was not designed as. A held oscillator cannot be restarted, so
+    // moving the two it already has is also the only option available.
+    const moved = recorder.pitchTargets.filter((target) => target.to !== target.from);
+    expect(moved.length).toBeGreaterThanOrEqual(2);
+    const ratios = moved.map((target) => target.to / target.from);
+    for (const ratio of ratios) {
+      expect(ratio).toBeGreaterThan(1);
+      expect(ratio).toBeCloseTo(ratios[0], 6);
+    }
+    // And it is a degree of the key, not an arbitrary glide.
+    expect(ratios[0]).toBeCloseTo(mixKey.intervals.fifth, 6);
+  });
+
+  it('says nothing new per frame, however long the chain is', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    for (let frame = 0; frame < 30; frame += 1) bus.sustain(bed(12));
+    // The lesson `comboScoring.flourishFromLink` records, in sound: an effect that fires
+    // every frame is decoration, and a *sound* that does is worse because the player
+    // cannot look away from it. Everything here is a smoothed target on a node that
+    // already exists.
+    expect(recorder.voices).toHaveLength(0);
+    expect(recorder.noises).toHaveLength(0);
+    expect(recorder.ducks).toHaveLength(0);
+  });
+
+  it('climbs the scale a degree per link, and stops climbing before it gets shrill', async () => {
+    const link = async (links: number) => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.consume([{ id: 1, tick: 1, kind: 'comboLink', value: links }]);
+      return recorder.voices[0].frequency;
+    };
+    const first = await link(1);
+    const fourth = await link(4);
+    const eighth = await link(8);
+    expect(fourth).toBeGreaterThan(first);
+    expect(eighth).toBeGreaterThan(fourth);
+    // A chain of twenty is reachable, and a scale that kept climbing would put the style
+    // meter back in the beep register a whole pass was spent leaving.
+    expect(await link(20)).toBeLessThanOrEqual(200);
+  });
+});
+
+describe('a cue knows what it hit', () => {
+  const roster = (kind: 'ranged' | 'aggressive' | 'bulwark') =>
+    ({ position: [0, 0, 0] as const, yaw: 0, playerId: 1, profiles: new Map([[7, kind]]) });
+  const slash = async (kind: 'ranged' | 'aggressive' | 'bulwark', extra: Record<string, unknown> = {}) => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([{ id: 3, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, ...extra } as never], roster(kind));
+    return recorder;
+  };
+
+  it('rings a plate, and gives it none of the weight a body gets', async () => {
+    const plate = await slash('bulwark', { deflected: false });
+    const flesh = await slash('aggressive');
+    // The simulation has treated these as three different problems since the bulwark was
+    // authored -- a plate is a puzzle, a brawler is proximity -- and the mix knew about
+    // exactly one of them, through `deflected`.
+    expect(flesh.noises.some((noise) => noise.filter === 'lowpass' && noise.cutoff < 200)).toBe(true);
+    expect(plate.noises.some((noise) => noise.cutoff > 240)).toBe(true);
+  });
+
+  it('takes the weight off a slash the guard ate and leaves the plate ringing', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([
+      { id: 3, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 },
+      { id: 4, tick: 1, kind: 'hit', sourceEntityId: 1, targetEntityId: 7, value: 12, deflected: true },
+    ], roster('bulwark'));
+    // A cut that did not count carries no sub, exactly as a deflected round does not --
+    // and what is left is the plate, which is the thing to get around.
+    expect(recorder.voices.filter((voice) => voice.filter === 'lowpass')).toHaveLength(0);
+    expect(recorder.noises.filter((noise) => noise.filter === 'bandpass').length).toBeGreaterThan(1);
+  });
+
+  it('makes a brawler at arm\'s length denser than a hunter at range', async () => {
+    const brawler = await slash('aggressive');
+    const hunter = await slash('ranged');
+    const weight = (recorder: { voices: { filter: string | null; gain: number }[] }) =>
+      Math.max(...recorder.voices.filter((voice) => voice.filter === 'lowpass').map((voice) => voice.gain));
+    expect(weight(brawler)).toBeGreaterThan(weight(hunter));
+  });
+
+  it('plays one impact for a killing slash where it used to play three', async () => {
+    const killing = recordingContext();
+    const killingBus = await busWith(killing);
+    // Exactly what one tick of `FlowSimulation.swing` emits when the blade finishes a
+    // hunter: the swing, the damage and the death, in that order.
+    killingBus.consume([
+      { id: 1, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, value: 1 },
+      { id: 2, tick: 1, kind: 'hit', sourceEntityId: 1, targetEntityId: 7, value: 65 },
+      { id: 3, tick: 1, kind: 'kill', targetEntityId: 7, value: 100 },
+    ], roster('ranged'));
+
+    const separate = recordingContext();
+    const separateBus = await busWith(separate);
+    separateBus.consume([{ id: 2, tick: 1, kind: 'hit', sourceEntityId: 1, targetEntityId: 7, value: 65 }], roster('ranged'));
+    const alone = recordingContext();
+    const aloneBus = await busWith(alone);
+    aloneBus.consume([{ id: 3, tick: 1, kind: 'kill', targetEntityId: 7, value: 100 }], roster('ranged'));
+    const cut = recordingContext();
+    const cutBus = await busWith(cut);
+    cutBus.consume([{ id: 1, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, value: 1 }], roster('ranged'));
+
+    const layers = (recorder: { voices: unknown[]; noises: unknown[] }) => recorder.voices.length + recorder.noises.length;
+    // The confirm stands down: what the player hears is the cut and the kill combined,
+    // not three cues queueing behind each other on one attack.
+    expect(layers(killing)).toBeLessThan(layers(separate) + layers(alone) + layers(cut));
+    expect(layers(killing)).toBeGreaterThan(layers(alone));
+    // And the kill still ducks, because it is still the biggest moment in the loop.
+    expect(killing.ducks.length).toBeGreaterThan(0);
+  });
+
+  it('carries the blade that did it into the kill, so a cut kill is not a shot kill', async () => {
+    const byBlade = recordingContext();
+    const bladeBus = await busWith(byBlade);
+    bladeBus.consume([
+      { id: 1, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 },
+      { id: 2, tick: 1, kind: 'kill', targetEntityId: 7 },
+    ], roster('ranged'));
+
+    const byRound = recordingContext();
+    const roundBus = await busWith(byRound);
+    roundBus.consume([{ id: 2, tick: 1, kind: 'kill', targetEntityId: 7 }], roster('ranged'));
+
+    // The transient is the killing blow's own, so the two read as different attacks
+    // rather than as the same kill with a different thing in front of it.
+    const edges = (recorder: { noises: { filter: string; cutoff: number }[] }) =>
+      recorder.noises.filter((noise) => noise.filter === 'bandpass').map((noise) => noise.cutoff);
+    expect(edges(byBlade)[0]).not.toBeCloseTo(edges(byRound)[0], 1);
+    expect(Math.min(...byBlade.ducks.map((duck) => duck.value)))
+      .toBeLessThan(Math.min(...byRound.ducks.map((duck) => duck.value)));
+  });
+});
+
+describe('the three blades sound like themselves', () => {
+  const cut = async (style: 'tempo' | 'cleave' | 'riposte', extra: Record<string, unknown> = {}) => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.setBladeStyle(style);
+    bus.consume([{ id: 9, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, ...extra } as never]);
+    const subs = recorder.voices.map((voice, index) => ({ ...voice, duration: recorder.durations[index] ?? 0 }))
+      .filter((voice) => voice.filter === 'lowpass' && voice.type === 'sine');
+    return {
+      hz: Math.min(...subs.map((voice) => voice.frequency)),
+      seconds: Math.max(...subs.map((voice) => voice.duration)),
+      gain: Math.max(...subs.map((voice) => voice.gain)),
+      edge: Math.max(...recorder.noises.filter((noise) => noise.filter === 'bandpass').map((noise) => noise.cutoff)),
+      voices: recorder.voices,
+    };
+  };
+
+  it('is lower, longer and heavier on Cleave and quicker and brighter on Riposte', async () => {
+    const tempo = await cut('tempo');
+    const cleave = await cut('cleave');
+    const riposte = await cut('riposte');
+    // The three styles differ in reach, recovery and chain rules and sounded identical,
+    // which made the one choice the player makes about the primary verb inaudible. These
+    // are the only three terms a synthesised impact has.
+    expect(cleave.hz).toBeLessThan(tempo.hz);
+    expect(riposte.hz).toBeGreaterThan(tempo.hz);
+    expect(cleave.seconds).toBeGreaterThan(tempo.seconds);
+    expect(riposte.seconds).toBeLessThan(tempo.seconds);
+    expect(cleave.gain).toBeGreaterThan(tempo.gain);
+    expect(riposte.gain).toBeLessThan(tempo.gain);
+    expect(cleave.edge).toBeLessThan(tempo.edge);
+    expect(riposte.edge).toBeGreaterThan(tempo.edge);
+  });
+
+  it('keeps every style in the register and inside the key', async () => {
+    for (const style of ['tempo', 'cleave', 'riposte'] as const) {
+      for (const swing of [{}, { heavy: true }]) {
+        const recorder = recordingContext();
+        const bus = await busWith(recorder);
+        bus.setBladeStyle(style);
+        bus.consume([{ id: 9, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, ...swing } as never]);
+        for (const voice of recorder.voices) {
+          // Whatever a style is allowed to do to the blade, it may not undo the register
+          // pass or leave the key -- the same rule `content/blades.ts` states about reach.
+          expect(voice.frequency, `${style} plays ${voice.frequency.toFixed(1)} Hz`).toBeLessThanOrEqual(200);
+        }
+      }
+    }
+  });
+
+  it('keeps the heavy heavier than the light on every style', async () => {
+    for (const style of ['tempo', 'cleave', 'riposte'] as const) {
+      const light = await cut(style);
+      const heavy = await cut(style, { heavy: true });
+      expect(heavy.gain, style).toBeGreaterThan(light.gain);
+      expect(heavy.seconds, style).toBeGreaterThan(light.seconds);
+      expect(heavy.hz, style).toBeLessThan(light.hz);
+    }
+  });
+
+  it('says how much a whiff committed, per style', async () => {
+    const air = async (style: 'tempo' | 'cleave' | 'riposte', heavy: boolean) => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.setBladeStyle(style);
+      bus.consume([{ id: 9, tick: 1, kind: 'melee', sourceEntityId: 1, heavy } as never]);
+      return recorder.noises[0];
+    };
+    // A whiff is dark air and nothing else, and how much air is the statement: a heavy
+    // is longer and lower than a light one, and Cleave's says more than Riposte's.
+    expect((await air('cleave', false)).cutoff).toBeLessThan((await air('riposte', false)).cutoff);
+    expect((await air('tempo', true)).cutoff).toBeLessThan((await air('tempo', false)).cutoff);
   });
 });
 

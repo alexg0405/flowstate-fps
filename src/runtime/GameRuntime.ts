@@ -1,4 +1,4 @@
-import type { BladeStyleId, GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveSettingsV3, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
+import type { BladeStyleId, BotProfile, GameEvent, GhostTrack, RunModifier, RuntimeLevelV1, SaveSettingsV3, SimulationSnapshot, Vec3, WeaponBuild } from '../contracts';
 import { AudioManager } from '../audio/AudioManager';
 import { bladeStyle } from '../content/blades';
 import { chainEarnsFlourish } from '../content/config';
@@ -131,6 +131,8 @@ export class GameRuntime {
   private recorder: GhostRecorder | null = null;
   private playback: GhostPlayback | null = null;
   private readonly unsubscribeLock: () => void;
+  /** Reused between frames. See `audioProfiles`. */
+  private readonly profileRoster = new Map<number, BotProfile['kind']>();
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -144,9 +146,12 @@ export class GameRuntime {
   ) {
     this.simulation = new FlowSimulation(settings, loadout, modifier, blade);
     this.renderer = new GameRenderer(canvas, settings);
-    // Set before the context exists: `AudioManager` holds the level and applies it when
-    // the first gesture builds the graph.
+    // Set before the context exists: `AudioManager` holds both of these and applies them
+    // when the first gesture builds the graph.
     this.audio.setVolume(settings.volume);
+    // The blade is the primary verb and the three styles sounded identical. Set once,
+    // because the style is chosen at the bench and cannot change inside a run.
+    this.audio.setBladeStyle(blade);
     this.renderer.setBladeAccent(bladeStyle(blade).accent);
     this.input = new InputController(canvas);
     this.unsubscribeLock = this.input.onLockChange((locked) => {
@@ -179,6 +184,23 @@ export class GameRuntime {
     this.running = true;
     this.lastTime = performance.now();
     this.animationFrame = requestAnimationFrame(this.loop);
+  }
+
+  /**
+   * What each live hostile is made of, for the mix.
+   *
+   * Rebuilt in place every frame rather than allocated: this runs at the display rate
+   * alongside everything else in `loop`, and a fresh `Map` of twenty-eight entries per
+   * frame is garbage for no reason. The mix needs it because a slash into a brawler, a
+   * slash into a plate and a slash into a hunter are three different impacts and the
+   * simulation is the only thing that knows which one happened.
+   */
+  private audioProfiles(): ReadonlyMap<number, BotProfile['kind']> {
+    this.profileRoster.clear();
+    for (const entity of this.snapshot.entities) {
+      if (entity.kind === 'bot' && entity.profile) this.profileRoster.set(entity.id, entity.profile);
+    }
+    return this.profileRoster;
   }
 
   /** The path this run took, for storing alongside a new record. */
@@ -361,6 +383,7 @@ export class GameRuntime {
       position: this.snapshot.camera.position,
       yaw: this.snapshot.camera.yaw,
       playerId: this.playerId() ?? 0,
+      profiles: this.audioProfiles(),
     });
     // The continuous half of the mix, driven every frame rather than by events: the low
     // floor a live room sits on and the movement layer that opens with speed. Kept apart
@@ -370,6 +393,9 @@ export class GameRuntime {
       speed: this.snapshot.player.speed,
       threat: this.snapshot.entities.reduce((total, entity) => total + (entity.kind === 'bot' ? 1 : 0), 0),
       down: this.snapshot.player.awaitingRespawn,
+      // The style meter, driving the mix rather than being reported by it: the bed
+      // climbs, a harmonic opens and the room gets wetter while a chain is live.
+      chain: { links: this.snapshot.player.combo.links, window: this.snapshot.player.combo.window },
     });
     const ghostPosition = this.playback?.positionAt(this.snapshot.elapsedSeconds) ?? null;
     const stats = this.renderer.render(this.snapshot, this.pendingEvents, this.accumulator / STEP_SECONDS, ghostPosition);
