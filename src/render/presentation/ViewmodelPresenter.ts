@@ -35,6 +35,20 @@ export class ViewmodelPresenter {
   readonly muzzleSocket = new THREE.Object3D();
   readonly grappleSocket = new THREE.Object3D();
   private readonly rifle = new THREE.Group();
+  /**
+   * The blade, and it is generated here rather than authored in Blender.
+   *
+   * `tools/art/generate_vertical_slice.py` is the pipeline every GLB comes from, and
+   * running it regenerates all eight of them -- AUDIT.md trap 9 records the characters
+   * shipping visibly broken from exactly that. AUDIT.md section 14 set the other
+   * precedent: the skyline, the sky and every deck marking are runtime TypeScript in
+   * `WorldPresenter`, built that way on purpose. A blade is simpler geometry than any
+   * of those, and its swing is timed off `melee.light.seconds` and `melee.heavy.seconds`
+   * -- numbers an authored clip cannot know -- so generating it costs nothing an export
+   * would have bought and risks nothing an export would have risked.
+   */
+  private readonly blade = new THREE.Group();
+  private readonly bladePivot = new THREE.Group();
   private readonly leftArm = new THREE.Group();
   private readonly rightArm = new THREE.Group();
   private readonly magazine = new THREE.Group();
@@ -74,6 +88,17 @@ export class ViewmodelPresenter {
   private lateralRecoil = 0;
   private muzzleEnergy = 0;
   private grappleKick = 0;
+  /**
+   * Seconds the sidearm stays on screen after it is used. The blade is the primary verb
+   * and what the player sees at rest; the gun is what comes up when they fire it and
+   * goes away again, which is the only honest way to show a loadout of two weapons on
+   * one pair of hands.
+   */
+  private gunHold = 0;
+  /** Progress through the current swing, and whether it was the heavy. */
+  private swingHeavy = false;
+  private swingActive = false;
+  private bladeAllowed = true;
   private settings: SaveDataV1['settings'];
 
   constructor(private readonly materials: MaterialLibrary, settings: SaveDataV1['settings']) {
@@ -81,13 +106,24 @@ export class ViewmodelPresenter {
     this.root.name = 'VX-09 Viewmodel';
     this.buildArms();
     this.buildCarbine();
+    this.buildBlade();
     this.buildMuzzleFlash();
-    this.root.add(this.leftArm, this.rightArm, this.rifle);
+    this.root.add(this.leftArm, this.rightArm, this.rifle, this.blade);
     this.root.position.set(0.1, -0.17, -0.3);
   }
 
   updateSettings(settings: SaveDataV1['settings']): void {
     this.settings = settings;
+  }
+
+  /**
+   * Turns the blade off. The gun bench drives this same presenter so that fitting a
+   * drum magazine shows the drum, and a blade hanging across that preview is noise:
+   * the bench is about the gun.
+   */
+  showBlade(allowed: boolean): void {
+    this.bladeAllowed = allowed;
+    if (!allowed) this.blade.visible = false;
   }
 
   /**
@@ -215,10 +251,12 @@ export class ViewmodelPresenter {
     this.externalModel?.removeFromParent();
     this.externalModel = model;
     this.externalGrappleSocket = null;
+    // Only which gun exists is decided here. Whether it is *shown* is decided every
+    // frame in `update`, against the blade -- so this must not latch it on.
     const proceduralVisible = model === null;
-    this.rifle.visible = proceduralVisible;
-    this.leftArm.visible = proceduralVisible;
-    this.rightArm.visible = proceduralVisible;
+    this.rifle.visible = proceduralVisible && !this.bladeAllowed;
+    this.leftArm.visible = this.rifle.visible;
+    this.rightArm.visible = this.rifle.visible;
     if (model) {
       model.position.set(0.24, -0.28, -0.82);
       // The exported source already faces the view camera's -Z axis.
@@ -249,7 +287,13 @@ export class ViewmodelPresenter {
 
   consume(events: readonly GameEvent[]): void {
     for (const event of events) {
-      if (event.kind === 'shot') {
+      if (event.kind === 'melee') {
+        this.swingHeavy = event.heavy === true;
+        this.swingActive = true;
+      } else if (event.kind === 'shot') {
+        // Firing brings the sidearm up and keeps it up for a beat, so a burst does not
+        // flicker between the two weapons.
+        this.gunHold = 0.95;
         this.recoil = Math.min(1, this.recoil + 0.72);
         this.lateralRecoil = ((event.id * 16807) % 1000 / 1000 - 0.5) * 0.016;
         this.muzzleEnergy = 1;
@@ -294,6 +338,21 @@ export class ViewmodelPresenter {
     else if (adsActive) this.playExternalClip('vm_ads_in', 0.1, false);
     else this.playExternalClip('vm_idle', 0.12, true);
     this.externalMixer?.update(deltaSeconds);
+
+    // Which weapon is in frame. The blade is what the hands hold; the sidearm comes up
+    // when it is used -- fired, or being reloaded -- and drops away again. Reload counts
+    // because a gun the player cannot see cannot be seen reloading, and the reload pose
+    // this presenter already runs is the clearest thing it does.
+    const usingGun = snapshot.player.action === 'firing' || snapshot.player.action === 'reloading';
+    if (usingGun) this.gunHold = Math.max(this.gunHold, 0.95);
+    this.gunHold = Math.max(0, this.gunHold - deltaSeconds);
+    const gunVisible = !this.bladeAllowed || this.gunHold > 0;
+    this.blade.visible = this.bladeAllowed && !gunVisible;
+    if (this.externalModel) this.externalModel.visible = gunVisible;
+    else this.rifle.visible = gunVisible;
+    this.leftArm.visible = this.rifle.visible;
+    this.rightArm.visible = this.rifle.visible;
+    this.poseBlade(snapshot.player.action, THREE.MathUtils.clamp(presentation.actionProgress ?? 0, 0, 1), deltaSeconds);
 
     this.recoil = THREE.MathUtils.damp(this.recoil, 0, 16, deltaSeconds);
     this.lateralRecoil = THREE.MathUtils.damp(this.lateralRecoil, 0, 20, deltaSeconds);
@@ -718,6 +777,116 @@ export class ViewmodelPresenter {
     const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, toneMapped: false });
     this.generatedMaterials.push(material);
     return new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.105), material);
+  }
+
+  /**
+   * The blade, generated.
+   *
+   * Built along local -Z so the whole thing can be swung by rotating one pivot, with
+   * the pivot at the hand rather than at the blade's centre -- a cut that rotates about
+   * its middle reads as a spin, not a swing.
+   *
+   * The edge is `yellowHot` and that is not a free choice: `palette.ts` states the rule
+   * that hostiles read cyan or red and the player's own signals own the yellow, which is
+   * why the grapple anchors, the wall-run trim and the chain flourish are all yellow. The
+   * one thing in the player's hands has to be on the player's side of that line.
+   */
+  private buildBlade(): void {
+    const gunmetal = this.materials.get('gunmetal');
+    const carbon = this.materials.get('carbon');
+    const edgeMaterial = this.materials.get('yellow-light').clone() as THREE.MeshStandardMaterial;
+    // The library's yellow runs at 2.6, which is right for a wall-run panel forty metres
+    // away and wrong for a strip half a metre from the eye: at that intensity the edge is
+    // the whole silhouette and the blade reads as a bar of light rather than as steel.
+    edgeMaterial.emissiveIntensity = 1.15;
+    this.generatedMaterials.push(edgeMaterial);
+
+    // Carried rather than presented: the hand low and outboard, the tip up and inboard
+    // so the point sits under the crosshair instead of at the player's feet.
+    this.blade.position.set(0.28, -0.26, -0.46);
+    // Positive X pitches the tip *up*: a point at -Z maps to +Y. The first version had
+    // this negative and the blade lay across the deck pointing at the player's feet.
+    // Rolled far enough to present some flat alongside the edge. Edge-on, the dark mass
+    // disappears and the lit line is all there is.
+    this.blade.rotation.set(0.34, 0.28, 0.86);
+    this.blade.add(this.bladePivot);
+
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.03, 0.2, 12), carbon);
+    grip.rotation.x = Math.PI / 2;
+    grip.position.z = 0.09;
+    const pommel = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.026, 0.035, 12), gunmetal);
+    pommel.rotation.x = Math.PI / 2;
+    pommel.position.z = 0.2;
+    const guard = this.rounded(0.13, 0.028, 0.05, 0.012, gunmetal);
+    guard.position.z = -0.02;
+
+    // Two segments rather than one, so the blade tapers: a wide ricasso off the guard
+    // and a narrower length running out to the point.
+    const ricasso = this.rounded(0.09, 0.028, 0.3, 0.01, gunmetal);
+    ricasso.position.z = -0.18;
+    const span = this.rounded(0.072, 0.023, 0.44, 0.008, gunmetal);
+    span.position.z = -0.54;
+    const point = new THREE.Mesh(new THREE.ConeGeometry(0.038, 0.14, 4), gunmetal);
+    point.rotation.set(Math.PI / 2, Math.PI / 4, 0);
+    point.position.z = -0.82;
+
+    // The lit edge, proud of the spine so it reads as an edge rather than as a stripe
+    // painted down the middle -- and on the *upper* side, because the view camera looks
+    // slightly down on the weapon and an edge underneath it is an edge nobody sees.
+    const edge = this.rounded(0.014, 0.0085, 0.74, 0.003, edgeMaterial);
+    edge.position.set(0, 0.016, -0.44);
+    const edgeGlow = new THREE.Mesh(new THREE.PlaneGeometry(0.042, 0.78), edgeMaterial.clone());
+    const glowMaterial = edgeGlow.material as THREE.MeshStandardMaterial;
+    glowMaterial.transparent = true;
+    glowMaterial.opacity = 0.1;
+    glowMaterial.depthWrite = false;
+    glowMaterial.side = THREE.DoubleSide;
+    this.generatedMaterials.push(glowMaterial);
+    edgeGlow.rotation.x = Math.PI / 2;
+    edgeGlow.position.set(0, 0.018, -0.44);
+
+    for (const part of [grip, pommel, guard, ricasso, span, point, edge, edgeGlow]) {
+      part.castShadow = part !== edgeGlow;
+      this.bladePivot.add(part);
+    }
+  }
+
+  /**
+   * Poses the blade for the swing the simulation is running.
+   *
+   * Driven from `actionProgress` rather than a clip, which is what makes one pose serve
+   * both swings: the light recovers in 0.24 s and the heavy in 0.46, and the same curve
+   * stretched across either is the same *shape* of cut at two speeds.
+   *
+   * The curve is front-loaded on purpose. `strike` takes the blade through the arc in
+   * the first fifth of the window and `recover` brings it back across the remaining four
+   * fifths, so the edge arrives early -- which is where the hit already resolved -- and
+   * the rest of the animation is the follow-through the player is waiting out.
+   */
+  private poseBlade(action: SimulationSnapshot['player']['action'], progress: number, deltaSeconds: number): void {
+    const swinging = action === 'melee';
+    if (!swinging) this.swingActive = false;
+    const strike = THREE.MathUtils.smoothstep(progress, 0, 0.2);
+    const recover = THREE.MathUtils.smoothstep(progress, 0.28, 1);
+    const arc = swinging ? strike - recover : 0;
+    const heavy = this.swingHeavy;
+
+    // Yaw and pitch carry the cut; roll only tilts the edge into it. The first version
+    // of this had roll doing the work, which spins a blade about its own length -- the
+    // silhouette barely moves and it reads as a twitch rather than a swing.
+    //
+    // The two travel in opposite directions on purpose. Alternating light and heavy then
+    // reads as a combination rather than as the same animation at two speeds, which is
+    // the one thing a shared curve risks.
+    const target = heavy
+      ? { y: 1.62 * arc, x: -0.34 * arc, z: -0.55 * arc }
+      : { y: -1.18 * arc, x: -0.56 * arc, z: 0.36 * arc };
+    const rate = this.settings.reducedMotion ? 60 : heavy ? 26 : 34;
+    this.bladePivot.rotation.z = THREE.MathUtils.damp(this.bladePivot.rotation.z, target.z, rate, deltaSeconds);
+    this.bladePivot.rotation.y = THREE.MathUtils.damp(this.bladePivot.rotation.y, target.y, rate, deltaSeconds);
+    this.bladePivot.rotation.x = THREE.MathUtils.damp(this.bladePivot.rotation.x, target.x, rate, deltaSeconds);
+    // A little reach into the cut, so the swing travels rather than only rotating.
+    this.bladePivot.position.z = THREE.MathUtils.damp(this.bladePivot.position.z, -arc * (heavy ? 0.16 : 0.1), rate, deltaSeconds);
   }
 
   private rounded(x: number, y: number, z: number, radius: number, material: THREE.Material): THREE.Mesh {

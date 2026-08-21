@@ -112,6 +112,9 @@ export function WeaponPreview({ chassisId, parts, activeSlot = null, reducedMoti
       sensitivity: 0.002, fov: 92, cameraRoll: 0, headBob: 0, shake: 0, renderScale: 1, debug: false,
       graphicsQuality: 'high', dynamicResolution: false, reducedMotion: true,
     });
+    // The bench is about the gun. The blade the player carries in the run would hang
+    // across this preview saying nothing about the build being assembled.
+    presenter.showBlade(false);
     presenter.setHandsVisible(false);
     presenter.root.position.set(0, 0, 0);
     presenter.root.rotation.set(0, 0, 0);
