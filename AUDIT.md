@@ -1774,6 +1774,11 @@ and a renamed string is not on that list.
 
 **Two are older than this pass**, and they are the interesting ones -- see below.
 
+Re-run after the three fixes, on a quiet machine: **47 passed / 4 failed / 3 skipped** in
+11.8 minutes, and the four are those two cases in both browsers. So the suite is now green
+except for the route deadlock, which is the first honest statement of the e2e state since the
+pivot -- section 15 could not make one.
+
 ### A route deadlock, and the previous section's claim about isolation was wrong
 
 `freezes the frame on a landed blow` and `never freezes the frame with reduced motion on`
