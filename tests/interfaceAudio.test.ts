@@ -1022,6 +1022,34 @@ describe('a cue knows what it hit', () => {
     expect(killing.ducks.length).toBeGreaterThan(0);
   });
 
+  it('answers a second body on the same tick instead of repeating the first', async () => {
+    const single = recordingContext();
+    const singleBus = await busWith(single);
+    singleBus.consume([{ id: 1, tick: 1, kind: 'kill', targetEntityId: 7 }], roster('ranged'));
+
+    const sweep = recordingContext();
+    const sweepBus = await busWith(sweep);
+    // What a heavy landing on three hostiles emits: one swing and three deaths, on one
+    // tick. It is ordinary play, not an edge case.
+    sweepBus.consume([
+      { id: 1, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7, heavy: true },
+      { id: 2, tick: 1, kind: 'kill', targetEntityId: 7 },
+      { id: 3, tick: 1, kind: 'kill', targetEntityId: 8 },
+      { id: 4, tick: 1, kind: 'kill', targetEntityId: 9 },
+    ], roster('ranged'));
+
+    const layers = (recorder: { voices: unknown[]; noises: unknown[] }) => recorder.voices.length + recorder.noises.length;
+    // Three copies of one cue at one pitch is not a bigger sound, it is the same waveform
+    // nine decibels louder -- so the second answers a fourth up and the third is not
+    // played at all.
+    expect(layers(sweep)).toBeLessThan(layers(single) * 3);
+    const pitches = new Set(sweep.voices.map((voice) => Math.round(voice.frequency)));
+    expect(pitches.size).toBeGreaterThan(2);
+    // And one duck, not three: overlapping ducks are pumping.
+    const attacks = sweep.ducks.filter((duck) => duck.at === 0);
+    expect(attacks.length).toBeLessThanOrEqual(2);
+  });
+
   it('carries the blade that did it into the kill, so a cut kill is not a shot kill', async () => {
     const byBlade = recordingContext();
     const bladeBus = await busWith(byBlade);

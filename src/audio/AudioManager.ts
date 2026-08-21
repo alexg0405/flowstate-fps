@@ -94,6 +94,15 @@ const RESULT_STINGER_DELAY = 0.95;
 const MAX_AUDIBLE_METRES = 55;
 /** Cap on impact ticks per batch, so a shotgun shell does not fire eight voices. */
 const MAX_IMPACTS_PER_BATCH = 2;
+/**
+ * Cap on kill cues per batch, and the reason is the same one the whole combining pass is
+ * about. A heavy sweeps every hostile in a 160-degree arc, so three bodies going down on
+ * one tick is ordinary play -- and three copies of one cue at one pitch is not a bigger
+ * sound, it is the same waveform nine decibels louder. The first is the full cue; the
+ * second answers it a fourth up, shorter and quieter, so a multi-kill reads as an interval;
+ * anything past that is inaudible under the two and is not played.
+ */
+const MAX_KILLS_PER_BATCH = 2;
 
 /** Resting level of the bus everything passes through, and the level a duck returns to. */
 const BUS_LEVEL = 0.75;
@@ -473,6 +482,7 @@ export class AudioManager {
     // arrives as a `melee`, a `hit` and a `kill` on the same tick, and playing all three
     // is three cues queueing rather than one event.
     const outcomes = batchOutcomes(events);
+    let kills = 0;
     for (const event of events) {
       const place = this.placement(event, listener);
       // Deterministic per-event variation. Presentation is allowed to be arbitrary but
@@ -541,8 +551,20 @@ export class AudioManager {
           break;
         }
         case 'kill': {
+          const stacked = kills;
+          kills += 1;
+          if (stacked >= MAX_KILLS_PER_BATCH) break;
           const outcome = event.targetEntityId === undefined ? undefined : outcomes.get(event.targetEntityId);
           const material = materialOf(event.targetEntityId, listener);
+          if (stacked > 0) {
+            // A second body on the same tick answers the first a fourth up rather than
+            // repeating it. No duck: the first kill already took the mix down, and a
+            // second one inside it would be refused anyway.
+            this.tick(material.edgeHz * 1.2, 0.005, 0.024, 0, 'dry');
+            this.sub(note('root', 2), 0.3, 0.09 * material.weight, 0.3, 0, 'near');
+            if (material.ring) this.ring(0, 'far');
+            break;
+          }
           // The biggest moment in the loop, and the only cue with two subs an octave
           // apart: the upper one is the impact, the lower one is what is left of it. They
           // sit on the fifth -- the interval the bed itself is built from -- so a kill

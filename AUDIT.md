@@ -1570,7 +1570,7 @@ working, and pay the player for aggression. Four jobs, all four landed, plus the
 control the handoff listed as trap 11 and suggested doing first -- which was the right
 order, because everything else in job 1 makes the mix louder and busier.
 
-Verified at the end: `npm test` **470 passing / 38 files**, `npm run typecheck` clean,
+Verified at the end: `npm test` **471 passing / 38 files**, `npm run typecheck` clean,
 `npm run build` clean, `npm run art:validate` clean at 1.93 MiB of 25.00 MiB, and the 3
 Chromium visual baselines passing **untouched** -- which is the expected result and worth
 stating, because trap 7 says pure UI and pure audio cannot move them and this pass is
@@ -1642,6 +1642,11 @@ whole batch before anything plays. A killing slash arrives as a `melee`, a `hit`
 `kill` on the same tick, and playing all three is three impacts for one attack. Now the
 kill carries the blade's own edge and a longer sub, and the confirm stands down. A slash
 the guard ate keeps the edge and the ring and loses the weight entirely.
+
+The same argument caps kill cues at two a batch. A heavy sweeps a 160-degree arc, so three
+bodies on one tick is ordinary play -- and three copies of one cue at one pitch is not a
+bigger sound, it is the same waveform nine decibels louder. The first is the full cue, the
+second answers it a fourth up, shorter and quieter, and the third is not played.
 
 **The three blades sound like themselves.** Tempo on the root, Cleave lower, longer and
 darker on the flat seventh, Riposte higher, shorter and brighter on the minor third -- the
