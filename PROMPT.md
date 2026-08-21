@@ -1,252 +1,247 @@
-# Handoff: pivot to first-person character action
+# Handoff: make the mix interactive, fix what the HUD claims, and pay the player for aggression
 
 Paste the block below into a fresh Claude Code session in this repo. It is
-self-contained. `AUDIT.md` has the full history of prior work — sections 5–14,
-worth skimming, especially the traps in sections 11, 12 and 14.
+self-contained. `AUDIT.md` has the full history of prior work — **section 15 is the one
+that matters**, because it records the pivot the game has just been through and the
+sections before it describe a game that no longer exists.
 
-Repo state: `alexg0405/flowstate-fps`, public, `main` at `562e7fc`, clean tree.
+Repo state: `alexg0405/flowstate-fps`, public, `main` at `f35050b`, clean tree.
 
 ---
 
 ```
-You are picking up Flowstate FPS, a browser first-person game (Three.js + Rapier +
-React + TypeScript) built as a movement shooter along a linear 172-metre route. Read
-AUDIT.md first — it records nine phases of prior work, what was measured, and several
-mistakes worth not repeating.
+You are picking up Flowstate FPS, a browser first-person character-action game (Three.js
++ Rapier + React + TypeScript). Read AUDIT.md section 15 first, then skim sections 11–14
+for the presentation and world work the pivot built on. Section 15 also records one item
+that was built, measured and thrown away, and why — that is the standard for this repo.
 
-The job: pivot it into a **first-person character-action game**. Melee becomes the
-core verb, the existing chain becomes a style meter, and the linear route becomes
-locked rooms you fight your way out of. Think Ghostrunner and Ultrakill, not Devil
-May Cry — the camera stays where it is, for a reason spelled out under "Decisions
-already taken" below.
+The game today: a blade on the left mouse button is the primary verb, a heavy on `E`
+sweeps a crowd and breaks a guard, a dash arms invulnerability frames that turn an enemy
+telegraph into a perfect dodge, a flow chain with ten distinct link kinds is the style
+meter, and twenty-eight hostiles across seven waves fill three rooms you fight your way
+out of. Guns are a secondary on the right mouse button with a parts bench behind them.
 
-This is a pivot, not a rewrite. A surprising amount of the game is already the game
-you want; the section on what transfers is the most important part of this brief.
+Four jobs, and the first is the largest.
 
 ## Setup and the bar you must hold
 
     export PATH="$PWD/.tooling/node-v24.18.1-darwin-arm64/bin:$PATH"
 
-All of these must stay green:
-- `npm test` — 328 passing / 31 files
+- `npm test` — 427 passing / 37 files
 - `npm run typecheck` — clean. Run it every time: vitest transpiles WITHOUT
   typechecking, so tests can pass while types are broken.
-- `npm run build` — clean
-- `FLOWSTATE_STATIC_DIST=1 npm run test:e2e` — 41 passing (Chromium + Firefox)
+- `npm run build` — clean, and it must come BEFORE any e2e run (see the traps)
+- `FLOWSTATE_STATIC_DIST=1 npm run test:e2e` — 54 cases, and **this is not currently
+  green**. Read the e2e trap below before you conclude anything from it.
 - `FLOWSTATE_STATIC_DIST=1 npx playwright test --project=chromium tests/e2e/visual.spec.ts`
 - `npm run art:validate` — clean, 1.93 MiB of a 25.00 MiB budget
 
-Verify in a real browser at 1280x720 as well as through DOM assertions. Every screen
-is reachable without playing: `/` is the menu, `/?mode=editor` the level editor,
-`/?mode=game` the run — its pause card is the standby overlay — and
-`/?mode=game&scene=finish` drops you onto the results screen. Only `editor` and
-`game` are read from the URL (`src/App.tsx`), so the gun bench is reached by clicking
-`Gun builder` on the menu or in the pause overlay.
+Every screen is reachable without playing: `/` is the menu, `/?mode=editor` the level
+editor, `/?mode=game` the run — its pause card is the standby overlay —
+`/?mode=game&scene=finish` the results screen, `/?mode=game&scene=hunters` a staged pair,
+and `/?mode=game&scene=crowd` the biggest authored wave with no gating, which is how you
+measure the worst frame in one step. Only `editor` and `game` are read from the URL
+(`src/App.tsx`); the bench is reached by clicking `Gun builder`.
 
-The e2e suite has a pointer-lock-rejected fallback path (see `app.spec.ts`) that lets
-a headless browser drive the live HUD. Use it; it is how combat gets tested.
+The e2e suite has a pointer-lock-rejected fallback (`tests/e2e/app.spec.ts`) that lets a
+headless browser drive the live HUD. It is how combat gets tested. Look at
+`fightIntoTheAtrium` before writing a new one — driving this game blind is harder than it
+looks and that helper encodes several lessons.
 
 ## Decisions already taken — do not relitigate these
 
-**The camera stays first person.** Third person is the instinct for this genre and it
-is the wrong call here. There is no player-body art at all — the player is a camera
-holding a rifle — so third person means authoring a character with a full melee
-animation set through `tools/art/generate_vertical_slice.py` and `npm run art:build`,
-plus a new orbit camera with hard lock-on, plus discarding `ViewmodelPresenter` and
-the first-person camera work in `GameRenderer`. That is months, and it throws away the
-part of the codebase that already works. Ghostrunner is first-person katana with
-dash, wall run, grapple and room-locked arenas: that is this movement kit with the
-gun swapped for a blade.
+**First person stays.** There is no player-body art and the whole viewmodel layer assumes
+a camera holding a weapon.
 
-**The arena gating stays.** `updateObjectives` in `FlowSimulation` locks the exit
-until every encounter is cleared. That was a flaw for a speedrun game and it is the
-room-lock the entire character-action genre is built on.
+**The blade's reach is load bearing.** 3.6 m through a 130-degree cone. Judging reach in
+first person with no visible arm is the risk the pivot turned on, and the generous envelope
+is the answer to it. A launcher was rejected specifically because that reach makes vertical
+displacement meaningless — AUDIT §15 has the numbers. Do not shorten it to make room for
+something else.
 
-**Guns stay, as a secondary.** Ultrakill and DMC both give you a sidearm to extend
-combos. Do not delete the weapon system; demote it.
+**The blade is generated TypeScript, not a GLB.** `ViewmodelPresenter.buildBlade`. Read
+trap 4 before you think about the art pipeline.
 
-**The movement kit is the differentiator.** Dash-chain with per-surface recharge, a
-commit-cost grapple, wall runs, wall jumps, vaults, slides. Do not rebuild it, and do
-not let combat tuning quietly strangle it.
+**Guns stay, with their parts bench.** The player asked for this explicitly. Whatever you
+do to the HUD or the loadout, `Gun builder` keeps working: four chassis, five slots, the
+3D preview, the stat rows.
 
-## What already transfers — read this before designing anything
+**Hitstop and the duck are presentation only.** The simulation steps at a deterministic
+60 Hz and `tests/simulationReplay.test.ts` proves identical trajectories from identical
+input tapes. Do not gate the fixed step on anything the renderer decides.
 
-This is the part that makes the pivot cheap. All of it is verified in source, not
-assumed.
+## Job 1 — make the mix interactive
 
-- **The style meter already exists and is already correct.** `ComboLinkKind` in
-  `src/contracts.ts` is `dash | wall-run | wall-jump | vault | hook | pull | kill`,
-  and `addComboLink` in `FlowSimulation` refuses a repeat of the same kind inside one
-  chain (`if (player.comboKinds.includes(kind)) return;`). That is Devil May Cry's
-  anti-mashing rule, in the simulation, with tests on it in
-  `tests/comboChain.test.ts`. The window is `comboScoring.linkWindowSeconds` = 2.5 s.
-- **Kills already feed the chain.** `addComboLink(events, 'kill', headshot ? 2 : 1)`,
-  and `'kill'` is deliberately exempt from the no-repeat rule. Combat already extends
-  the chain rather than interrupting it — you do not need to build that.
-- **Rank is already a style rank.** `runScoring.ranks` gates S behind
-  `minPeakCombo: 8` and `maxDeaths: 0`.
-- **Soft lock-on exists.** `player.lockedTargetId`, and the `aimAssist` profile in
-  `content/config.ts` with `acquireCosine`, `holdCosine`, `slowdownScale` and
-  `maxTurnRate`. It is tuned for gunplay; it is the right primitive for melee snap.
-- **Telegraphs exist.** The `enemyTelegraph` event carries a windup duration, and
-  AUDIT.md §5 calls it the most important cue in the mix. That is a parry window,
-  already authored and already audible.
-- **Melee plumbing exists.** `Action.Melee` (`1 << 11`, bound to `KeyE` in
-  `InputController`), a 0.35 s `meleeTimer`, `closestBotInArc(origin, direction,
-  weapon.meleeRange)`, `meleeDamage: 70` and `meleeRange: 2.25` on every weapon
-  definition, a `melee` event, an audio case and hit feedback. It is a stub, but
-  nothing has to be invented.
-- **Enemy design has a proven pattern.** The bulwark — a 137-degree frontal arc that
-  scales incoming damage to 0.18, brought round at 1.5 rad/s, with a 57-degree firing
-  cone so flanking removes its damage as well as its armour — is already a
-  break-the-guard enemy. AUDIT.md §12 records how it was built and sized.
-- **The interface is already in the right idiom.** AUDIT.md §13 put the menus,
-  overlays, results and feedback into a Persona-style register — sheared blocks, cut
-  edges, stamped confirmations, a comic-burst kill marker and an all-out chain
-  flourish. DMC and Persona share that visual family. None of it needs redoing.
+This is the big one and it is a design job, not a plumbing job. The player's words:
+*"I like the dull effects of the sound currently but I want to combine it with other
+sounds to make something great."*
 
-## The tension you have to hold
+Read `src/audio/AudioManager.ts` end to end first. The register is right and is not up for
+debate: three layers per cue — a driven `sub` carrying the weight, a lowpassed `boom`
+carrying the body, and at most eight milliseconds of `tick` for definition — plus a `bed`
+of a held floor and a speed-driven movement layer, a `duck` that pulls the whole bus down
+on the few events that deserve it, a generated convolution reverb with three send levels,
+and a limiter. Keep all of that. AUDIT §15 records what the arcade version sounded like and
+why; do not walk it back.
 
-- **The simulation is deterministic and must stay that way.**
-  `tests/simulationReplay.test.ts` proves identical trajectories from identical input
-  tapes. Hitstop is the first thing this genre wants and the obvious implementation —
-  freezing the fixed step — breaks that. Do it in the presentation layer only.
-- **Do not undo the HUD reduction.** AUDIT.md §12 took the play frame from thirteen
-  modules to six in four zones because it was illegible in motion, and §13 added a
-  kill burst and a chain flourish under a hard rule: nothing new inside fifteen
-  degrees of the crosshair, which is 93 px at 720p and a 92-degree vertical FOV. A
-  style meter is a standing temptation to put a big loud readout on the play frame.
-  The chain multiplier is already in the reticle cluster. `tests/ui.test.tsx` has
-  cases asserting the reticle zone holds only the flow-critical set and that the cut
-  modules stayed cut. **Update them, do not delete them.**
-- **Combat spacing will fight the level.** The movement kit is tuned for traversal —
-  35 m grapple range, 21 m/s dash — across a 172 m corridor with three arenas that
-  are waypoints on a route rather than rooms. Retuning for close-quarters combat will
-  expose that. The editor exists and bakes navmesh; use it rather than fighting the
-  shipped level.
+What is missing is that the mix does not **react** to how the run is going, and its cues do
+not **combine** — they queue. Four things, roughly in order of how much they buy:
+
+1. **Give the mix a key.** Every pitch in the file is currently an arbitrary number, which
+   is why two cues landing together sound like two cues landing together. Pick a root and
+   derive every tonal layer as an interval over it. A kill sting and a chain tone in the
+   same key harmonise; at 880 and 1320 Hz they collided. This is the single change most
+   likely to turn a pile of sounds into something that sounds composed, and it is mostly a
+   table of ratios plus a helper.
+2. **Make the chain drive the mix.** The chain is the style meter and the mix says almost
+   nothing about it — one climbing tone per link. It should be audible that a chain is
+   *live*: the bed tightening, a harmonic opening, the reverb send rising, the floor moving
+   up a scale degree per few links. `snapshot.player.combo` has links, multiplier and the
+   window fraction; `sustain` already runs every frame and is the natural home. Take care:
+   `comboScoring.flourishFromLink` exists because a full-frame effect that fires constantly
+   is decoration, and the same is true of a sound.
+3. **Let a cue depend on what it hit.** A slash into a hunter, into a bulwark's plate, and
+   into air are three different events already (`deflected`, `targetEntityId`, and the
+   `melee` event's `heavy` flag) and the mix distinguishes some of it. Material and outcome
+   should shape the layers, not just their level — a killing blow should *combine* the cut
+   and the kill rather than playing both.
+4. **Give the three blade styles audible identity.** `content/blades.ts` has Tempo, Cleave
+   and Riposte with different recoveries and different chain rules, and they sound
+   identical. The style is carried in the save and reaches the runtime already.
+
+Test it the way the existing audio tests do: `tests/interfaceAudio.test.ts` drives the real
+`AudioManager` against a recording double that implements exactly the Web Audio surface the
+class uses, and it now records voices, noises, ducks, reverb sends, bed automation and
+filter sweeps. That harness is the reason this file can be changed with any confidence at
+all — extend it rather than working around it.
+
+**You cannot hear any of this.** Say so. Guard what you can (register, layer counts,
+relative levels, that a cue reacts to the state it claims to react to), verify the graph
+runs in a real browser with the e2e that drives it through combat, and tell the player
+which constants to turn.
+
+## Job 2 — the HUD says CARBINE while a blade is on screen
+
+A real bug, spotted by the player. `src/game/Hud.tsx` renders the ammo corner as
+`activeWeapon?.name` plus a magazine count, unconditionally — so it reads `CARBINE 30/120`
+while the blade is what is in the player's hands and what is drawn on screen.
+
+The fix is not just a label. `ViewmodelPresenter` decides which weapon is visible from a
+0.95 s `gunHold` timer it owns privately, so the HUD has no way to agree with it — and two
+timers in two layers is how you get a corner that says `CARBINE` over a blade. Move the
+decision into the simulation, publish it on the snapshot (something like
+`player.weapons.inHand`), and have both the viewmodel and the HUD read the same field.
+
+Then the corner should say what is actually in hand: the blade's style with no ammo when
+the blade is up, the gun with its magazine when the gun is up. Note that the ammo readout
+has an `aria-label` announcing the magazine capacity and `tests/ui.test.tsx` asserts it —
+that accessibility work survived two HUD passes, so keep it working for the gun case rather
+than deleting it.
+
+Two constraints. The reticle-cluster rule from AUDIT §12 still holds: nothing new inside
+fifteen degrees of the crosshair, which is 93 px at 720p. And the play frame is six
+readouts in four zones — this is a change to what an existing corner says, not licence for
+a seventh.
+
+## Job 3 — keep the gun builder working
+
+Not a change; a constraint the player stated. `src/ui/WeaponBuilder.tsx` and
+`src/ui/WeaponPreview.tsx`. The bench already has a blade section that picks a style and a
+gun section that assembles a build, and the preview drives the game's own
+`ViewmodelPresenter` so fitting a drum magazine shows the drum. Four e2e cases cover it.
+Whatever job 2 does to the loadout or the snapshot, those keep passing.
+
+## Job 4 — life from damage
+
+New mechanic, and the design is yours to make but here is the shape the rest of the game
+argues for.
+
+Healing on a **kill**, scaled by the **chain multiplier**, capped per kill, and **no
+out-of-combat regeneration at all.** The reasoning: the health pool was retuned for crowds
+and the answer to being hurt should be to fight better, not to disengage. A regen that
+rewards hiding fights everything the pivot built — and the chain is already the game's
+measure of playing well, so tying the health economy to it makes the style meter matter
+in a second dimension.
+
+Where it goes:
+- The kill path in `FlowSimulation.damageBot`, which already awards score at the chain
+  multiplier and adds the kill link. `PLAYER_MAX_HEALTH` is `playerHealth` in
+  `content/config.ts`, at 140.
+- A `heal` event on the contract, so the mix and the HUD can both react. The health corner
+  already has bands (`critical`/`warning`/`nominal`) and a vignette keyed to them.
+- `content/blades.ts` is the obvious place for variation — a style that heals more, or a
+  fourth style built around it — but only if the numbers earn it.
+
+Measure it, do not assert it. The crowd balance is documented in `content/config.ts`: five
+brawlers on the player is about 92 damage a second, a heavy one-shots a brawler and sweeps
+three, and the Roofline puts eight on the deck. Lifesteal changes whether that room is a
+fight or a formality. `?scene=crowd` stages the worst case in one browser step, and the
+headless simulation harnesses in `tests/` are much faster to iterate against than the
+browser.
+
+## Traps that have already cost real time
+
+1. **`npm run typecheck` is not optional.** Vitest transpiles without typechecking.
+2. **`npm run build` before any e2e run.** `FLOWSTATE_STATIC_DIST=1` serves `dist/`
+   through Playwright's own route interception, so a stale build means you are testing the
+   previous commit. This has produced at least one deeply confusing failure.
+3. **The e2e suite is not currently green and it is probably not your fault.** Read the
+   last subsection of AUDIT §15 before you spend an hour on it. Startup measures 7.7–8.9 s
+   and measures the same before the crowd landed; every failing case passes in isolation;
+   the failures move between runs and arrive with load averages of seven to sixteen. Check
+   `uptime` before you believe a red suite, and run the targeted subset for what you
+   touched rather than the whole thing on a loaded machine.
+4. **Don't touch `tools/art/generate_vertical_slice.py`.** Running `npm run art:build`
+   regenerates every GLB and the characters shipped visibly broken from exactly that.
+   Section 14 and the blade both set the other precedent: generate geometry at runtime.
+   Blender 4.5.10 is bundled if you genuinely need it.
+5. **Screenshots taken ~2 s after entering a run race the async asset load** and come back
+   washed pale. Wait 6 s+, or use the `openPresentation` pattern in `visual.spec.ts`, which
+   waits on the asset responses.
+6. **`maxDiffPixelRatio` in the visual spec is 0.035**, about 32k pixels. A total
+   character-rendering failure once passed inside it. Tighten it to `0.00001` when you want
+   a real number, then put it back — and regenerating needs `--timeout=150000` or two of
+   the three time out during the update pass and then pass on a normal run.
+7. **The visual baselines hide everything except the canvas**, so pure UI work cannot move
+   them — but anything in `src/render/` or the simulation's visible state will. Job 2 is UI;
+   job 1 is neither. If job 1 moves them, something is wrong.
+8. **AUDIT trap 6 is stale.** Both browsers now report
+   `prefers-reduced-motion: no-preference`. Emulate the media explicitly at both ends when
+   a test cares.
+9. **The in-app preview pane reports `visibilityState: 'hidden'` permanently**, which
+   starves `requestAnimationFrame`. The run clock freezes and the player never moves. It is
+   fine for static screens and useless for gameplay — measure through Playwright.
+10. **Every decorative effect honours `reducedMotion`**, guarded with a
+    `@media (prefers-reduced-motion: no-preference)` block *and* a
+    `.reduced-motion <selector> { animation: none !important; }` escape, because the
+    setting is a save-file toggle as well as a media query. Hitstop and the camera shake
+    do the same in code. Note that sound is not motion — do not gate audio on it.
+11. **There is no volume control anywhere in the game.** With a continuous bed under the
+    mix that is now a real gap rather than a theoretical one, and job 1 makes it worse. It
+    wants a save field, a bus gain multiplier and a row next to reduced motion in
+    `SettingsPanel`. Consider doing it first; it is small, and it is the thing that lets a
+    player live with an aggressive mix.
 
 ## Architecture rules
 
 - `src/contracts.ts` is the presentation-safe boundary. Extend it; don't bypass it.
-- `src/simulation/` owns ALL gameplay state at a deterministic 60 Hz.
-  `src/render/`, `src/audio/`, `src/input/` are adapters that own none. Combat
-  changes DO belong in the simulation — this is the first pass in a while that
-  legitimately touches it. Feedback, hitstop and juice do not.
-- Tuning lives in `src/content/config.ts` and `src/content/modifiers.ts`. Don't
-  inline constants at call sites.
-- **Every decorative effect honours `reducedMotion`.** The pattern is in the
-  stylesheet: guard with `@media (prefers-reduced-motion: no-preference)` and add a
-  `.reduced-motion <selector> { animation: none !important; }` escape, because the
-  setting is a save-file toggle and not only a media query. Hitstop and screen shake
-  need the same treatment — `settings.shake` already exists.
-- `src/render/palette.ts` is the single source of truth for 3D colour, kept in step
-  with the `--cyber-*` properties in `styles.css`. Change one, change both.
+- `src/simulation/` owns ALL gameplay state at a deterministic 60 Hz. `src/render/`,
+  `src/audio/`, `src/input/` are adapters that own none. Job 4 belongs in the simulation.
+  Job 1 does not. Job 2 straddles it deliberately: the *decision* moves down so both
+  presentation layers can agree on it.
+- Tuning lives in `src/content/` — `config.ts` for the run, `blades.ts` for the blade,
+  `weapons.ts` for the gun. Don't inline constants at call sites, and don't leave two
+  sources of truth for the same number: the melee envelope moved out of `config.ts` into
+  `blades.ts` for exactly that reason.
+- `src/render/palette.ts` is the single source of truth for 3D colour, kept in step with
+  the `--cyber-*` properties in `styles.css`. Change one, change both. Hostiles read cyan
+  or red; the player's own signals own the yellow.
+- Presentation decisions that are pure get extracted and unit tested —
+  `ResolutionController`, `visualBatching`, `citySkyline`, `hitstop`. `GameRenderer` needs
+  WebGL to construct, so anything left inside it cannot be reached from a test.
 
-## Items, roughly in order of payoff
-
-### 1 — Make the slash the primary verb
-Move melee to `Action.Fire` (LMB) and retune the existing arc: shorter than the 0.35 s
-cooldown, wider than the current cone, and damage that kills a ranged bot in one or
-two hits rather than chipping it. Everything you need is in `updateCombat` and
-`closestBotInArc`. Keep `Action.Melee` free for a heavy or a launcher.
-
-This is the cheapest possible test of whether the pivot is fun, and it needs no art:
-you will be swinging an invisible blade with the rifle still on screen. Ugly, and it
-tells you in an hour.
-
-### 2 — Hitstop
-The single biggest juice item in the genre and there is none. Freeze 3–6 frames on a
-landed hit, scaled by damage. **Presentation layer only** — see the tension section.
-`GameRenderer.render` already computes `frameSeconds` and pins it to zero under
-`visualRegression`, which is the seam to work with.
-
-### 3 — A defensive verb
-Give the dash invulnerability frames, and a perfect-dodge window keyed off the
-existing `enemyTelegraph` windup: dodging inside it should pay a chain link and
-something loud. This converts a warning that already exists into a mechanic, and it
-is the layer that stops combat being a damage race.
-
-### 4 — Melee variety into the chain
-Extend `ComboLinkKind` so different melee actions are different link kinds — the
-no-repeat rule then does the work for free, and mashing one attack stops paying. This
-is a `contracts.ts` change plus `addComboLink` call sites, and `tests/comboChain.test.ts`
-is where it gets proved.
-
-### 5 — Crowds
-Nine hostiles across three arenas is three per room; this genre wants six to twelve
-at once and waves within a room. `botProfiles` is a config map and spawns are level
-data, so this is mostly content. Watch the frame budget — AUDIT.md §10 and §14 have
-the draw-call and triangle numbers and how they were measured.
-
-### 6 — A launcher and air combat
-Pop an enemy up and follow with the movement kit. This codebase is unusually ready:
-air control, dash and a grapple that already publishes whether a cast would be
-accepted all exist. Grapple-to-enemy is Nero's Snatch and the raycast is already
-there.
-
-### 7 — The blade
-`runner-rifle.glb` is authored in `tools/art/generate_vertical_slice.py`. This is the
-one item that requires `npm run art:build`, which regenerates every GLB — read trap 9
-before touching it. A blade is far simpler geometry than a rifle.
-
-### 8 — Repoint the bench
-The gun bench is four chassis and five part slots with a 3D preview. If melee is the
-core verb that is the wrong reward layer, but the build/parts/loadout UI maps well
-onto blade styles with different chain behaviours. A repoint, not a rewrite, and it is
-last because it is worthless until the combat loop is proven.
-
-## Traps that already cost real time — read before measuring anything
-
-1. **`npm run typecheck` is not optional.** Vitest transpiles without typechecking.
-   Tests pass while types are broken.
-2. **Screenshots taken ~2 s after entering a run race the async asset load** and come
-   back washed pale. Wait 6 s+. The same scene measured rgb(197,214,210) at 2.2 s and
-   rgb(31,39,45) at 6 s. `tests/e2e/visual.spec.ts` is immune because
-   `openPresentation` waits on the asset responses — prefer that pattern.
-3. **`maxDiffPixelRatio` in the visual spec is 0.035**, about 32k pixels. A total
-   character-rendering failure once passed inside it. Don't treat a pass as proof;
-   tighten it temporarily when you need a real number, then put it back. If a change
-   moves the frame legitimately, regenerate the baselines and report the pixel count.
-4. **Regenerating the visual baselines needs `--timeout=150000`.** At Playwright's
-   default 30 s, two of the three time out during the update pass and then pass on a
-   normal run, which looks like flakiness and is not.
-5. **The visual baselines hide everything except the canvas**
-   (`.game-shell > :not(.game-canvas) { display: none }`), so pure UI work cannot move
-   them — but anything in `src/render/` or the simulation's visible state will.
-6. **The whole e2e suite runs with reduced motion ON.** Headless Chromium reports
-   `prefers-reduced-motion: reduce` and `saveDefaults()` seeds the save from that
-   query, so no existing test sees any of the interface motion. Call
-   `page.emulateMedia({ reducedMotion: 'no-preference' })` before `goto` when you need
-   it, and do not read the suite's stability as evidence that animation is safe.
-7. **`sharp`'s `stats()` reads the input image and ignores a pending `.extract()`.**
-   Materialise the crop first: `await sharp(f).extract(box).png().toBuffer()`, then
-   `stats()` on that.
-8. **Playwright's actionability checks are sensitive to animation.** An element whose
-   box is still moving is "not stable" and `click()` waits for it. Anything animating
-   on mount near a button the suite presses needs to settle fast or be
-   `pointer-events: none`.
-9. **Don't touch `tools/art/generate_vertical_slice.py` casually.** If you do, you
-   MUST run `npm run art:build`, which regenerates every GLB — the characters shipped
-   visibly broken once for exactly this reason. Item 7 puts this on the table
-   deliberately; everything before it should avoid the pipeline entirely.
-10. **The in-app preview pane reports `visibilityState: 'hidden'` permanently**, which
-    starves `requestAnimationFrame` and throttles timers to ~1 s. Anything driven off
-    frames appears frozen there and is fine in a real browser. Measure through
-    Playwright, and give frame-driven state a timer floor so a backgrounded tab cannot
-    strand it.
-11. **First-person melee has a depth-perception problem and it is the make-or-break
-    risk of this whole pivot.** Judging swing range without a visible arm is genuinely
-    hard, and it is why most first-person melee feels bad. Ghostrunner solves it with
-    generous range plus assist — the assist already exists here. Budget real tuning
-    time for reach, arc and target snap before adding enemies or art. If after honest
-    tuning it still feels bad, say so and stop rather than building content on top of
-    a verb that does not work.
-
----
-
-Work one item at a time. After each, run the full bar above and tell me what you
-measured rather than what you expect. Screenshot every screen you touch at 1280x720
-and show me. If an item turns out to be a worse idea than it looked — and item 6 is
-the candidate, because juggling in a game with this much air mobility may just be
-chaos — say so and stop rather than shipping it.
+Work one job at a time. After each, run the full bar and tell me what you measured rather
+than what you expect. Screenshot every screen you touch at 1280x720 and show me. If a job
+turns out to be a worse idea than it looked, say so and stop rather than shipping it —
+AUDIT §15 has a worked example of doing exactly that.
 ```

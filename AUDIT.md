@@ -1310,3 +1310,254 @@ two of the three time out during the update pass, then pass on a normal run.
 The menu's route-brief strip -- `03 ARENAS / 09 HOSTILES / 172 METRE ROUTE` -- at the
 user's request, along with `routeBrief()` and the 13 now-dead `.protocol-strip` rules
 in the stylesheet.
+
+---
+
+## 15. The pivot to first-person character action
+
+Ten commits, `562e7fc..f35050b`. The brief was the handoff in `PROMPT.md` at the time:
+make melee the core verb, turn the chain into a style meter, and treat the arenas as
+rooms to fight out of. Eight items; seven landed, one was measured and thrown away.
+
+Verified at the end: `npm test` **427 passing / 37 files**, `npm run typecheck` clean,
+`npm run build` clean, `npm run art:validate` clean at 1.93 MiB of 25.00 MiB, and the 3
+Chromium visual baselines passing. **`npm run test:e2e` is not green on the machine this
+was done on** -- see the last subsection, which is the most important thing in this
+section for whoever reads it next.
+
+### The control scheme moved
+
+`Action.Slash` (new, `1 << 17`) is the blade on the left mouse button, read from `held`
+rather than `pressed` so holding it produces a rhythm at the recovery rate. `Action.Fire`
+kept its name and became the sidearm on the right button. `Action.Melee` on `E` is the
+heavy. Aiming came off the mouse entirely and onto `V`: three attack-adjacent verbs, two
+mouse buttons, and the one a player uses least is the deliberate stand-still zoom.
+
+`meleeDamage` and `meleeRange` left `WeaponDefinition` -- they were the same two numbers
+repeated on all four chassis. Melee tuning briefly lived in `content/config.ts` as `melee`
+and then moved again into `content/blades.ts`, which is where it is now.
+
+### The blade, and the number that mattered was not the blade's
+
+The light reaches 3.6 m through a 130-degree cone, recovers in 0.24 s and kills a
+hundred-health hunter in two. Measured, the usable envelope is 3.5 m of *ground* distance,
+of which 0.7 m is the two capsule radii. Generous on purpose: judging reach in first person
+with no visible arm is the risk the whole pivot turns on.
+
+The finding was elsewhere. Standing still with the blade held while a brawler closed from
+14 m landed **zero of twenty-two swings and killed the player** -- its `preferredRange` was
+5 m, correct for a game whose primary verb was a rifle and fatal for one whose primary verb
+reaches 3.6. At 2.4 m the same exchange is two swings, 2.00 s and fourteen damage taken.
+Two cases now hold the two numbers together in both directions.
+
+The heavy on `E` is not a bigger number: it sweeps every hostile in a 160-degree arc where
+the light takes the nearest, a plate scales it to 0.5 instead of 0.18, and it costs 0.46 s
+of recovery -- longer than a brawler's whole wind-up.
+
+### The chain does the work it was always able to do
+
+`ComboLinkKind` gained `slash`, `heavy` and `dodge`. The no-repeat rule then needed no
+changes: measured, several lights connecting inside one chain pay **exactly one** link, and
+following one with a heavy pays a second.
+
+One consequence worth knowing: with ten distinct link kinds, an eight-link peak -- the
+S-rank gate -- is reachable inside a single fight without touching the movement kit. The
+rank curve is measurably easier than it was and has not been retuned.
+
+### Hitstop is a stopped clock, not a stopped step
+
+The simulation keeps stepping at 60 Hz. What stops is the presentation clock: `frameSeconds`
+goes to zero and `time`, which every animation and effect birthday is a function of, is
+accumulated from it rather than read off `performance.now()`. In first person the largest
+thing on screen is the viewmodel, so a swing stopping dead mid-arc is most of the read.
+
+Only the blade and kills freeze, which is a design statement and also arithmetic: an SMG at
+1020 rounds a minute lands one every 3.5 frames, and a three-frame freeze per round is not
+hitstop. A 0.1 s refractory gap stops a crowd doing the same thing.
+
+**Known limit, stated because it is real:** entity positions still come from the live
+snapshot, so a brawler at 6.2 m/s slides 0.31-0.62 m during a freeze with its limbs stopped.
+Holding the snapshot instead trades the slide for a catch-up pop of the same distance in one
+frame, which reads worse.
+
+### The dash became a defence
+
+A dash arms 0.22 s of invulnerability -- longer than the 0.16 s dash, because judging a
+dash-length window off an audio cue is a coin flip. A telegraphed shot that resolves inside
+them is a perfect dodge: no damage, and a chain link.
+
+The check sits where the trace resolves, not at the moment of the dash. A dodge has to mean
+a round that *was going to land* did not; keyed off the dash it would pay for dashing at
+nothing. And the frames are gated while the dash is not: a ground dash has no cooldown, so
+invulnerability tied to it would be permanent on a flat floor. Measured against a dash
+spammed every tick, dashes outnumber defended dashes by more than half again and uptime
+caps at 29 per cent.
+
+### The route was never walkable, and nothing noticed
+
+Both ramps on the shipped route had a hand-set `rotationX` with the sign inverted, so
+`rise-a` sloped *down* away from the start floor and left an eight-metre hole between the
+two decks it was supposed to join. Holding forward from the spawn fell through it and died
+on tick 263 -- identically on `562e7fc`, so it had never been walkable. Nothing caught it
+because nothing walked it: the completion e2e enters through `?scene=finish`.
+
+`rampBetween` now derives the transform from the two decks it joins.
+`tests/routeTraversal.test.ts` holds both the geometry and the walk. **Combat became
+reachable in a browser for the first time**, which is what unblocked every later item's
+verification.
+
+### Crowds, waves, and the arenas becoming rooms
+
+Twenty-eight hostiles across seven waves where the route held nine in three static groups.
+`wave` on a spawn activates wave *n+1* on the tick the last of wave *n* dies; an unarrived
+wave costs nothing and cannot open a room early, because a hostile that has not spawned is
+still alive as far as the completion check is concerned. Peak concurrent is eight, in the
+Roofline.
+
+Balance moved with the counts: marksman damage 10 -> 8, brawler 14 -> 11, and the player's
+pool 100 -> 140, out of the simulation and into the tuning.
+
+And the arenas were not rooms. A room activates at 28 m from its checkpoint and a brawler
+wants to be 2.4 m from the player, so the Atrium's first wave walked the full forty metres
+back down the bridge and fought on the *start floor* with the arena empty behind it.
+`botLeashMetres` leashes pursuit to 22 m from a hostile's own spawn. Only pursuit is
+leashed, so a marksman's 27 m firing gate still reaches a player at the threshold.
+
+`?scene=crowd` stages the biggest authored wave with no gating, which is how the worst
+frame the content can produce is measurable in one browser step:
+
+| | draw calls | triangles | frame | render scale |
+| --- | --- | --- | --- | --- |
+| spawn view, nothing active | 167 | 144,655 | 2.06 ms (3.2 worst) | 88% |
+| eight hostiles, all firing | **307** | 130,401 | **4.17 ms** (5.0 worst) | 84% |
+
+About seventeen draw calls a character. Characters are the one thing on the route that is
+not batched, so that is the number to watch if the ceiling goes past eight.
+
+`?scene=hunters` had to be rebuilt while in there: it repositioned spawns *by id*, and the
+ids it named stopped existing when the arenas were re-authored, so the character pixel
+baseline had quietly stopped staging the pair it is named after.
+
+### The launcher was built, measured, and thrown away
+
+Item 6 of that brief. A launcher on crouch-plus-heavy, bot air state, and a swept lift
+speed. Nothing shipped.
+
+| lift | apex | airtime | hits landed in the air |
+| --- | --- | --- | --- |
+| 4 m/s | +0.25 m | 0.25 s | 0 of 1 |
+| 7 m/s | +0.82 m | 0.47 s | 1 of 1 |
+| 12 m/s | +2.47 m | 0.65 s | 1 of 1 |
+
+The launcher's own 0.40 s recovery is as long as the airtime it buys, so one follow-up
+fits. That is fixable with a float, and the fix makes the real problem worse: **the generous
+reach that makes first-person melee work makes vertical displacement meaningless.** At every
+lift including +2.47 m the *grounded* player still hit the target, because 3.6 m of
+spherical reach covers an enemy two and a half metres up. Forcing the player upward means
+shortening the reach, which is the thing that stops the depth problem coming back. So "air
+combat" here is standing still and looking up, which is the opposite of a game whose
+differentiator is the movement kit. Launching a crowd confirmed it: six caught by one swing,
+five floating in a cone in front of a stationary player.
+
+Incidental: bot airtime plateaus at 0.65 s between 9 and 12 m/s of lift where the arithmetic
+says 0.86 s. `enableSnapToGround(0.3)` on the bot controller fights upward motion.
+
+### The blade is generated, not exported
+
+`tools/art/generate_vertical_slice.py` was left alone. Trap 9 records the characters
+shipping visibly broken from running `art:build`, and section 14 set the other precedent:
+the skyline, the sky and every deck marking are runtime TypeScript. A blade is simpler
+geometry than any of those and its swing is timed off numbers an authored clip cannot know.
+`art:validate` is unchanged at 1.93 MiB as a result. Blender 4.5.10 is bundled at
+`.tooling/blender-4.5.10` if that ever needs revisiting.
+
+Three things were wrong in the first version and all three only showed on screen. Roll was
+doing the work, which spins a blade about its own length -- the silhouette barely moves and
+it reads as a twitch; yaw and pitch carry the cut now, and the two swings travel in opposite
+directions so alternating them reads as a combination. A negative X rotation pitches the tip
+*down*, and the blade lay across the deck pointing at the player's feet. And the lit edge was
+on the underside, where the view camera never sees it.
+
+The blade and the sidearm share one pair of hands: the blade is what is held, the gun comes
+up when fired or reloading, holds 0.95 s so a burst does not flicker, and drops away. The
+gun bench calls `showBlade(false)`, because the bench is about the gun.
+
+### The mix was rebuilt twice
+
+The first pass added a duck, a generated convolution reverb with three send levels, a
+limiter and deterministic per-event pitch variation. The user's verdict on it was that it
+still sounded like an arcade machine, and they were right: every cue was one or two square
+and sawtooth layers with fundamentals between 300 and 1500 Hz and nothing under any of them.
+A 640 Hz square is a beep at any volume.
+
+The second pass rebuilt the palette from three layers: **`sub`** (a sine falling or rising
+through the bottom two octaves, *saturated* and then rolled off, because a pure 40 Hz sine
+is inaudible on a laptop and its harmonics are not), **`boom`** (lowpassed noise -- weight
+with no pitch), and **`tick`** (four to eight milliseconds of band-limited noise, the only
+thing left above 1 kHz, capped at 0.045 gain). Every run cue dropped an octave and a half to
+two octaves. The hit confirm is an 84 Hz thud where it was a 640 Hz square; the kill is two
+subs an octave apart where it was an 880/1320 chime; the chain climbs from 68 Hz rather than
+520, so a long chain gets heavier instead of shriller. Three cases guard the register
+directly.
+
+The interface swapped sides with the run: the run lives under 200 Hz, so acknowledgements
+sit *above* it at 220-420 Hz, still square and triangle so they can never blur into the
+sine layer the run is built from.
+
+Then the bed, which was the piece that had been missing. Every cue was a transient, so the
+low end existed only in bursts and the duck had nothing sounding to take away -- the
+*return*, which is the effect, had nothing to return from. Two layers: a floor (a fifth,
+34 under 51 Hz, louder in a live room than in a corridor) and a movement layer (looped
+noise whose level and cutoff open with player speed, which is the audible half of a cue the
+renderer has had since section 3.3). Both route *into* the bus so a duck takes them with it.
+Driven by a new `sustain` method rather than by `consume`, because the menu shares this class
+and never calls it.
+
+### Two bugs the verification found, unrelated to any item
+
+`GameRenderer.dispose` never released the WebGL context. `renderer.dispose()` frees three's
+own objects and leaves the context alive; a browser caps how many exist at once -- Chromium
+at sixteen -- and kills the oldest to make room, so a session that enters and leaves a run
+enough times has the renderer taken out from under a run still using it.
+`forceContextLoss()` is the only way to hand it back.
+
+And the debug channel gained `position`, `dodge` and `hitstop` lines. Position because
+authoring or driving a route without it means guessing from the view, and a run that falls
+off the level looks exactly like one that stopped against a lip -- which is how the ramp bug
+stayed hidden.
+
+### The e2e suite, and the thing to fix first
+
+**`npm run test:e2e` was not green at the end of this work and I could not make it so.**
+The state, stated as precisely as it can be:
+
+- Every failing case passes **in isolation** -- entering a run with and without the debug
+  channel, both blades, the audio graph in both browsers, the perfect dodge, and the four
+  content-sensitive cases together.
+- The failures concentrate in the cases that build a renderer and drive combat, they move
+  around between runs, and they arrive with load averages between seven and sixteen on a box
+  where the suite used to finish in eight minutes and took twenty at the end.
+- Bringing the runtime up -- WebGL renderer, Rapier world, navmesh, character and viewmodel
+  GLBs -- measures **7.7 to 8.9 seconds**, and it measures the same on `562e7fc`. So it is
+  the cost of starting, not a regression. Against eight seconds, the fifteen- and
+  twenty-second budgets scattered through `app.spec.ts` were never a margin, and the
+  five-second default on `toBeHidden` after clicking into a run was less than that again.
+  They are now three named constants with the measurement written next to them.
+- Two genuine assertion failures did come out of it and are fixed: one named the health pool
+  as the literal `100`, one named the save schema version as `4`.
+
+That reads as the machine rather than the code, and the startup measurement is the strongest
+evidence for it. It is not proof. **Run the suite somewhere quiet before trusting anything
+from `af5f9d7` onward.**
+
+### Also worth knowing
+
+- AUDIT trap 6 is **stale**. Headless Chromium reported `prefers-reduced-motion: reduce`
+  when section 13 was written; on this Playwright build both Chromium and Firefox report
+  `no-preference`. Tests that care now emulate the media explicitly at both ends.
+- `FLOWSTATE_STATIC_DIST=1` serves `dist/` through Playwright's own route interception, so
+  no server is needed -- but `npm run build` has to come first or you are testing the
+  previous commit.
+- The save is at **V5**. It added `blade`; V1-V4 saves inherit the reference style.
+- **There is no volume control anywhere in the game.** That was theoretical while every
+  sound was a transient. With a continuous bed it is a real gap.
