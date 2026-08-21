@@ -216,6 +216,12 @@ const CUE: Record<GameEvent['kind'], CuePolicy> = {
   kill: { importance: 0, limit: 2 },
   death: { importance: 0 },
   dodge: { importance: -2 },
+  /**
+   * A wave leaving is close to the top of the list. It is the only cue in the game that
+   * tells the player about a threat they answer with *movement* rather than with aim, and
+   * a crowd talking over it would take the read away entirely.
+   */
+  resonance: { importance: -1, limit: 2 },
   complete: { importance: -2 },
   wave: { importance: -4 },
   respawn: { importance: -4 },
@@ -669,6 +675,11 @@ const MATERIAL = {
   aggressive: { bodyHz: 170, edgeHz: 900, weight: 1.12, ring: false },
   /** Steel. The ring is what makes it plate rather than a quieter hit. */
   bulwark: { bodyHz: 300, edgeHz: 1500, weight: 0.9, ring: true },
+  /**
+   * Lowest body in the roster, because this is the one hostile whose threat is a thing
+   * you feel through the floor. No ring: a Resonator hit is a shove, not a plate.
+   */
+  resonator: { bodyHz: 130, edgeHz: 760, weight: 1.05, ring: false },
 } as const satisfies Record<BotProfile['kind'], { bodyHz: number; edgeHz: number; weight: number; ring: boolean }>;
 
 type Material = typeof MATERIAL[keyof typeof MATERIAL];

@@ -3,6 +3,7 @@ import type { RuntimeLevelV1, SaveDataV6, SpawnDefinition } from './contracts';
 import { installInterfaceAudio, setInterfaceVolume } from './audio/interfaceAudio';
 import { cookLevel, defaultLevel } from './content/defaultLevel';
 import { modifierForDate } from './content/modifiers';
+import { vistaBlockout, vistaCone } from './content/vistaBlockout';
 import { formatTime } from './game/format';
 import { loadSave, writeSave } from './persistence/saveStore';
 import { ScreenWipe } from './ui/ScreenWipe';
@@ -118,8 +119,23 @@ function BuilderRoute({ onClose }: { onClose: () => void }) {
 }
 
 function initialRuntimeLevel(): RuntimeLevelV1 {
-  const level = cookLevel(defaultLevel);
   const scene = new URLSearchParams(location.search).get('scene');
+  // `vista` swaps the route out entirely for the hero blockout. It is not a staging of
+  // White Line like the three scenes below it -- it is a different level, and the whole
+  // point of it is to be looked at beside this one.
+  if (scene === 'vista') {
+    const staged = cookLevel(vistaBlockout);
+    // `&vista=<cone>` stands the player in one of the level's authored camera cones, so a
+    // composition can be looked at without running to it first.
+    const cone = vistaCone(new URLSearchParams(location.search).get('vista') ?? '');
+    if (cone) {
+      staged.spawns = staged.spawns.map((spawn) => (spawn.kind === 'player'
+        ? { ...spawn, position: cone.origin, rotationY: cone.yaw }
+        : spawn));
+    }
+    return staged;
+  }
+  const level = cookLevel(defaultLevel);
   // `finish` drops the encounter chain and starts on the exit pad so the
   // completion presentation is reachable in a single browser test step.
   if (scene === 'finish') {

@@ -47,7 +47,7 @@ export function migrateLevelDocument(level: LevelDocument): LevelDocumentV2 {
   if (level.schemaVersion === 2) {
     const clone = structuredClone(level);
     const collision = clone.collision;
-    return { ...clone, collision, primitives: collision };
+    return { ...clone, collision, primitives: collision, vistaHints: clone.vistaHints ?? [] };
   }
 
   const legacy = structuredClone(level satisfies LegacyLevelDocumentV1);
@@ -66,6 +66,7 @@ export function migrateLevelDocument(level: LevelDocument): LevelDocumentV2 {
     spawns: legacy.spawns,
     encounters: legacy.encounters,
     offMeshLinks: legacy.offMeshLinks,
+    vistaHints: [],
     exit: legacy.exit,
   };
 }

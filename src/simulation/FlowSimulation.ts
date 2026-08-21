@@ -30,6 +30,7 @@ import { chassisMultiplier } from '../content/modifiers';
 import { defaultArmory, resolveWeaponStats } from '../content/weapons';
 import { NavigationService } from '../navigation/NavigationService';
 import { approach, consumeAirCharge, resetFromGround, resetFromWall, type SurfaceResetState } from './movementRules';
+import { idleLookNudge, stepLookNudge, type LookNudgeState } from './lookNudge';
 import { hashSeed, SeededRandom } from './random';
 
 interface BotState {
@@ -42,6 +43,13 @@ interface BotState {
   fireCooldown: number;
   decisionCooldown: number;
   strafe: number;
+  /**
+   * Radius of this hostile's live ground wave, or -1 when it has none. Only a profile
+   * carrying `pulse` ever sets it.
+   */
+  pulseRadius: number;
+  /** A wave hits at most once, however long the player spends inside the band. */
+  pulseSpent: boolean;
   alive: boolean;
   spawnPosition: Vec3;
   waypoint: Vec3 | null;
@@ -91,6 +99,8 @@ interface PlayerState extends SurfaceResetState {
   invulnerableTimer: number;
   /** Time left before a dash may arm the frames again. */
   dodgeCooldown: number;
+  /** What the vista look nudge is currently responsible for, so it can give it back. */
+  lookNudge: LookNudgeState;
   jumpTapTimer: number;
   slideTimer: number;
   vaultTimer: number;
@@ -300,6 +310,7 @@ export class FlowSimulation implements GameSimulation {
       dashTimer: 0,
       dashElapsed: 0,
       dashWasGrounded: false,
+      lookNudge: idleLookNudge,
       jumpTapTimer: 0,
       slideTimer: 0,
       vaultTimer: 0,
@@ -357,6 +368,8 @@ export class FlowSimulation implements GameSimulation {
         fireCooldown: 0.4 + this.random.next() * 0.4,
         decisionCooldown: 0,
         strafe: this.random.next() > 0.5 ? 1 : -1,
+        pulseRadius: -1,
+        pulseSpent: false,
         alive: true,
         spawnPosition: botSpawn.position,
         waypoint: null,
@@ -615,6 +628,7 @@ export class FlowSimulation implements GameSimulation {
     player.pitch = clamp(player.pitch - input.look[1] * sensitivity, -1.48, 1.48);
     this.applyRecoilRecovery(dt);
     this.applyAimMagnetism(target, dt);
+    this.applyLookNudge(input, dt);
     // The target was resolved against the incoming aim, so re-check it against where
     // the view actually ended up. Without this the lock the HUD reports lags a tick
     // behind, and a player who whips off a target still sees it held.
@@ -679,6 +693,49 @@ export class FlowSimulation implements GameSimulation {
    * of the remaining error, so it can settle a shot the player has already lined up
    * and can never travel far enough to acquire one for them.
    */
+  /**
+   * A soft pull toward the pitch an authored vista is composed for.
+   *
+   * Runs after magnetism and before the lock is revalidated, so a hint can never argue
+   * with an assist that is tracking something: `stepLookNudge` disarms outright with a
+   * hostile inside `lookNudge.disarmRange`, and the two are never both live.
+   *
+   * Deterministic, like everything else here -- it reads position, pitch, this tick's
+   * look input and the level's own hints, and nothing else. `simulationReplay` still
+   * proves identical trajectories from identical tapes with this in the loop.
+   */
+  private applyLookNudge(input: InputFrame, dt: number): void {
+    const player = this.player;
+    if (player.locomotion === 'dead') {
+      player.lookNudge = idleLookNudge;
+      return;
+    }
+    const position = player.body.translation();
+    const result = stepLookNudge(player.lookNudge, {
+      position: [position.x, position.y, position.z],
+      pitch: player.pitch,
+      lookInput: Math.abs(input.look[0]) + Math.abs(input.look[1]),
+      nearestHostile: this.nearestHostileDistance(position),
+      reducedMotion: this.settings.reducedMotion,
+      hints: this.level.vistaHints,
+      dt,
+    });
+    player.lookNudge = { offset: result.offset, lockout: result.lockout };
+    if (result.delta !== 0) player.pitch = clamp(player.pitch + result.delta, -1.48, 1.48);
+  }
+
+  /** Distance to the nearest live hostile, or `Infinity` on a quiet route. */
+  private nearestHostileDistance(from: RAPIER.Vector): number {
+    let nearest = Infinity;
+    for (const bot of this.bots) {
+      if (!bot.alive) continue;
+      const position = bot.body.translation();
+      const distance = Math.hypot(position.x - from.x, position.y - from.y, position.z - from.z);
+      if (distance < nearest) nearest = distance;
+    }
+    return nearest;
+  }
+
   private applyAimMagnetism(target: BotState | null, dt: number): void {
     if (!target) return;
     const player = this.player;
@@ -1533,6 +1590,10 @@ export class FlowSimulation implements GameSimulation {
    * kit the defence rather than a separate health economy.
    */
   private updateBotFire(bot: BotState, position: RAPIER.Vector, playerDistance: number, dt: number, events: GameEvent[]): void {
+    if (bot.profile.pulse) {
+      this.updateBotPulse(bot, position, playerDistance, dt, events);
+      return;
+    }
     const muzzle = { x: position.x, y: position.y + BOT_MUZZLE_HEIGHT, z: position.z };
     if (bot.windupTimer > 0) {
       bot.windupTimer = Math.max(0, bot.windupTimer - dt);
@@ -1556,6 +1617,96 @@ export class FlowSimulation implements GameSimulation {
       origin: [muzzle.x, muzzle.y, muzzle.z],
       sourceEntityId: bot.id,
       targetEntityId: this.player.id,
+    }));
+  }
+
+  /**
+   * The Resonator's cycle: anchor, announce, and put a wave along the floor.
+   *
+   * Same three beats as a shot -- commit, telegraph, resolve -- because that grammar is
+   * what the whole game's defence is built on and a hostile that broke it would be
+   * unfair rather than novel. What differs is what resolving means. A shot picks a
+   * direction and asks whether the player is in it; this picks a *height* and asks
+   * whether the player is above it.
+   *
+   * The wave advances on its own, outside the telegraph branch. It has to: once it is
+   * out it is no longer the emitter's business, and killing the Resonator mid-wave must
+   * not delete a threat the player has already been given the information to avoid.
+   */
+  private updateBotPulse(bot: BotState, position: RAPIER.Vector, playerDistance: number, dt: number, events: GameEvent[]): void {
+    const pulse = bot.profile.pulse!;
+    if (bot.pulseRadius >= 0) {
+      bot.pulseRadius += pulse.speed * dt;
+      this.resolveBotPulse(bot, position, events);
+      if (bot.pulseRadius > pulse.reach) bot.pulseRadius = -1;
+    }
+    if (bot.windupTimer > 0) {
+      bot.windupTimer = Math.max(0, bot.windupTimer - dt);
+      if (bot.windupTimer > 0) return;
+      bot.pulseRadius = 0;
+      bot.pulseSpent = false;
+      // The wave leaving is its own event, so the mix can put weight under it and the
+      // floor can start drawing. `value` is zero because nothing has been hit yet.
+      events.push(this.event('resonance', [position.x, position.y, position.z], bot.id, 0, {
+        sourceEntityId: bot.id,
+        targetEntityId: this.player.id,
+      }));
+      return;
+    }
+    if (bot.fireCooldown > 0) return;
+    // No point announcing a wave that dies before it arrives. Unlike a shot there is no
+    // line-of-sight test: a ground wave is answered by altitude, not by cover.
+    if (playerDistance >= pulse.reach) return;
+    bot.fireCooldown = bot.profile.fireInterval;
+    bot.windupTimer = bot.profile.windupSeconds;
+    events.push(this.event('enemyTelegraph', [position.x, position.y, position.z], bot.id, bot.profile.windupSeconds, {
+      origin: [position.x, position.y, position.z],
+      sourceEntityId: bot.id,
+      targetEntityId: this.player.id,
+    }));
+  }
+
+  /**
+   * Whether the wave caught the player, which is entirely a question of altitude.
+   *
+   * Feet, not centre: sliding keeps them on the deck and is therefore *more* dangerous,
+   * while a jump, a wall-run, a mantle, an air-step, a grapple or simply standing on a
+   * crate all clear the band. That is the enemy's whole design in one comparison.
+   */
+  private resolveBotPulse(bot: BotState, position: RAPIER.Vector, events: GameEvent[]): void {
+    if (bot.pulseSpent) return;
+    const pulse = bot.profile.pulse!;
+    const player = this.player.body.translation();
+    const horizontal = Math.hypot(player.x - position.x, player.z - position.z);
+    if (Math.abs(horizontal - bot.pulseRadius) > pulse.thickness / 2) return;
+    const playerFeet = player.y - (this.player.collider.halfHeight() + PLAYER_CAPSULE_RADIUS);
+    const waveFloor = position.y - BOT_COLLIDER_BOTTOM;
+    if (playerFeet - waveFloor > pulse.height) return;
+    bot.pulseSpent = true;
+    const origin: Vec3 = [position.x, position.y, position.z];
+    const damage = bot.profile.damage;
+    events.push(this.event('enemyAttack', origin, bot.id, damage, {
+      origin,
+      sourceEntityId: bot.id,
+      targetEntityId: this.player.id,
+    }));
+    // The dash's invulnerability frames answer everything in this game, and a wave the
+    // player read and dashed through is exactly the perfect dodge the mechanic is for.
+    if (this.player.invulnerableTimer > 0) {
+      events.push(this.event('dodge', this.cameraPosition(), this.player.id, damage, {
+        origin,
+        sourceEntityId: bot.id,
+        targetEntityId: this.player.id,
+      }));
+      this.addComboLink(events, 'dodge', this.blade.chain.dodgeLinks);
+      return;
+    }
+    this.player.health -= damage;
+    events.push(this.event('hit', this.cameraPosition(), this.player.id, damage, {
+      origin,
+      sourceEntityId: bot.id,
+      targetEntityId: this.player.id,
+      headshot: false,
     }));
   }
 
@@ -2018,6 +2169,16 @@ export class FlowSimulation implements GameSimulation {
             health: bot.health,
             maxHealth: bot.profile.health,
             profile: bot.profile.kind,
+            // Where the wave has got to, so the floor can draw it. Only ever set on a
+            // profile that has one, and cleared the moment it passes its reach.
+            pulse: bot.profile.pulse && bot.pulseRadius >= 0
+              ? { radius: bot.pulseRadius, ...bot.profile.pulse }
+              : undefined,
+            // The Resonator's warning belongs on the deck, not in the HUD -- the player
+            // has to read *where*, and a HUD cannot say where.
+            telegraph: bot.windupTimer > 0
+              ? 1 - bot.windupTimer / bot.profile.windupSeconds
+              : undefined,
           };
         }),
       ],
@@ -2212,6 +2373,7 @@ function createWeaponSlot(build: WeaponBuild): WeaponSlotState {
 function botProfileKind(kind: SpawnDefinition['kind']): BotProfile['kind'] {
   if (kind === 'bot-aggressive') return 'aggressive';
   if (kind === 'bot-bulwark') return 'bulwark';
+  if (kind === 'bot-resonator') return 'resonator';
   return 'ranged';
 }
 

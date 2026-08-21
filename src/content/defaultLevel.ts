@@ -73,7 +73,22 @@ const defaultCollision: CollisionPrimitiveV2[] = [
     box('wallrun-a', [-6, 6, -27], [1, 6, 13], '#22aab3', 'wall-run'),
     box('arena-one', [0, 1.5, -44], [30, 1, 22], '#f2f0e8'),
     box('arena-one-left', [-15, 5, -44], [1, 8, 22], '#d8ddd8', 'wall-run'),
-    box('arena-one-right', [15, 5, -44], [1, 8, 22], '#d8ddd8', 'wall-run'),
+    /**
+     * The Atrium's open flank.
+     *
+     * Both arenas were walled to eight metres on both sides at the same height, and that
+     * is the geometry that makes a room read as a trench however well it is lit: two
+     * parallel walls of equal height own the frame and there is nowhere for the city to
+     * be. This is now a parapet -- 1.2 m above the deck, which is under the player's eye
+     * at 1.48, so they see over it -- and the flank is open.
+     *
+     * The wall-run surface it used to be does not just disappear: `arena-one-fin` puts
+     * one back *inside* the room, where it also breaks a sightline and gives the chain
+     * something to use mid-flight. Opening a flank must not cost the movement vocabulary,
+     * which is the whole reason this is two edits and not one.
+     */
+    box('arena-one-right', [15, 2.1, -44], [1, 2.2, 22], '#22aab3', 'no-traverse'),
+    box('arena-one-fin', [10, 5, -47], [1, 6, 8], '#22aab3', 'wall-run'),
     box('cover-one-a', [-6, 3, -42], [2, 3, 5], '#e63746', 'vault'),
     box('cover-one-b', [7, 3.25, -49], [3, 3.5, 2], '#e63746', 'mantle'),
     { ...box('gate-one', [0, 5, -55.5], [29, 7, 0.5], '#e63746', 'no-traverse'), gateForEncounterId: 'arena-1' },
@@ -88,7 +103,11 @@ const defaultCollision: CollisionPrimitiveV2[] = [
     box('arena-two-cover-a', [-8, 7, -92], [2, 3, 8], '#e63746', 'vault'),
     box('arena-two-cover-b', [7, 7.5, -97], [4, 4, 2], '#e63746', 'mantle'),
     box('arena-two-left', [-17, 9, -94], [1, 8, 24], '#d8ddd8', 'wall-run'),
-    box('arena-two-right', [17, 9, -94], [1, 8, 24], '#d8ddd8', 'wall-run'),
+    // The Gallery opens on the right, because `void-wall` reinforces the left. Same
+    // trade as the Atrium: a parapet out, a fin in. The fin sits at z -99 to -94, which
+    // is the one gap on this flank that no hostile spawns into.
+    box('arena-two-right', [17, 6.1, -94], [1, 2.2, 24], '#22aab3', 'no-traverse'),
+    box('arena-two-fin', [12, 9, -96.5], [1, 6, 5], '#22aab3', 'wall-run'),
     { ...box('gate-two', [0, 9, -106.5], [33, 7, 0.5], '#e63746', 'no-traverse'), gateForEncounterId: 'arena-2' },
     rampBetween('rise-three', { z: -106, y: 6 }, { z: -116, y: 10.5 }, 9),
     box('sky-route', [0, 10, -126], [10, 1, 20], '#f2f0e8'),
@@ -100,7 +119,85 @@ const defaultCollision: CollisionPrimitiveV2[] = [
     box('finish', [0, 11, -164], [8, 2, 3], '#22aab3'),
 ];
 
-function alignedVisual(primitive: CollisionPrimitiveV2): VisualInstance | null {
+/**
+ * A mass that is only ever looked at. See `vistaBlockout.ts` for why `collision: false`
+ * is the whole trick: the simulation builds no body for it, the nav bake excludes it, and
+ * `WorldPresenter` draws it as a painted background mass instead of route furniture.
+ */
+function mass(id: string, position: Vec3, scale: Vec3, color: string, rotation: Vec3 = [0, 0, 0]): CollisionPrimitiveV2 {
+  return {
+    id,
+    kind: 'box',
+    transform: { position, rotation, scale },
+    color,
+    collision: false,
+    surface: 'no-traverse',
+    traversal: traversalFlagsFor('no-traverse', false),
+    nav: navigationFlagsFor('no-traverse', false),
+  };
+}
+
+/**
+ * The composition, laid over the route without moving a single metre of it.
+ *
+ * This route is 172 m of straight line down -Z between parallel walls seven and eight
+ * metres tall, with a 180-tower skyline scattered by seed starting 29 m out. The dead
+ * band between the two is why the frame reads as low walls under a distant city rather
+ * than as a canyon: there is nothing in the near third of the image at all.
+ *
+ * Every mass here is a no-collider addition. Nothing walkable moved, no spawn moved, no
+ * gate moved, and `routeTraversal` and `waves` are untouched by design -- the claim the
+ * blockout was built to test is that the *image* is what the level architecture caps, and
+ * this is that claim applied to the shipped route at the lowest possible risk. If the
+ * frames do not improve from this alone, the next step is moving geometry, and it should
+ * be taken with that evidence rather than before it.
+ *
+ * Four movements, and the rules are the ones the blockout arrived at the hard way:
+ * asymmetric flanks rather than matched pairs, a subject with sky on *both* sides rather
+ * than one running off the frame edge, no horizontal foreground element (it either sits
+ * across the middle of a 122-degree frame or leaves it), and one diagonal to break the
+ * verticals.
+ */
+const whiteLineComposition: CollisionPrimitiveV2[] = [
+  // 1. The canyon. Two masses two metres outside the start walls, so the first thing the
+  // player sees is a hundred metres of building rather than seven metres of wall and then
+  // sky. Different heights and depths, because a matched pair reads as a corridor.
+  mass('canyon-left', [-26, 42, -6], [30, 120, 44], '#151d27'),
+  mass('canyon-right', [26, 30, -2], [26, 96, 40], '#101822'),
+
+  // 2. The subject, revealed coming over the bridge into the first arena. 214 m out and
+  // 520 m tall, which is what it costs to have sky on both sides of it at this field of
+  // view and still lose its crown off the top of a frame pitched 20 degrees up. Held
+  // clear of the final arena in both axes so the route can run to its foot.
+  mass('hero-spire', [-77, 242, -230], [110, 520, 110], '#151d27'),
+
+  // 3. The gallery's open flank. One 200 m mass three metres outside the left wall and
+  // nothing at all on the right, so the second arena stops being walled to the same
+  // height on both sides -- which is the geometry that makes an arena read as a trench.
+  mass('void-wall', [-37, 82, -95], [34, 200, 40], '#0d151d'),
+
+  // 4. The inversion. Roofs beside and below the final arena's deck, tops just under it,
+  // so a route that spent its whole length looking up ends looking down.
+  mass('roof-below-a', [36, -4, -150], [40, 28, 44], '#131b24'),
+  mass('roof-below-b', [62, -6, -196], [50, 24, 48], '#0f171f'),
+  // And one at height on the same flank. With only the two roofs the right half of the
+  // Roofline frame was an empty colour field: correct for "the city is beneath you", but
+  // a frame with nothing at all in half of it has no depth to read the descent against.
+  mass('roof-counterweight', [70, 26, -200], [44, 88, 44], '#101822'),
+
+  // The diagonal. Everything above is vertical, and a frame of verticals is a fence.
+  mass('sky-span', [-6, 70, -100], [200, 5, 11], '#0b1016', [0, 0.5, 0.05]),
+];
+
+/**
+ * The catalogued art a collision primitive wears, derived from its own shape and
+ * surface tag rather than authored twice.
+ *
+ * Exported because `vistaBlockout` needs a route drawn with the same materials this
+ * route is drawn with: a blockout built to be compared against the game is only
+ * evidence if it is made of the same thing the game is made of.
+ */
+export function alignedVisual(primitive: CollisionPrimitiveV2): VisualInstance | null {
   if (primitive.gateForEncounterId) return null;
   const [sx, sy, sz] = primitive.transform.scale;
   let assetId = 'environment.rooftop-platform';
@@ -109,6 +206,17 @@ function alignedVisual(primitive: CollisionPrimitiveV2): VisualInstance | null {
   if (primitive.id.includes('grapple') || (primitive.surface === 'no-traverse' && Math.max(sx, sy, sz) <= 4)) {
     assetId = 'environment.grapple-anchor';
     scale = [Math.max(0.7, sx * 0.45), Math.max(0.7, sy * 0.45), Math.max(0.7, sz * 0.45)];
+  } else if (primitive.surface === 'no-traverse' && sy <= 4 && Math.max(sx, sz) > 4) {
+    // A parapet: long, low, and deliberately not a surface. The vault barrier is the only
+    // kit piece shaped like one, and it needs the same axis swap the wall-run panel does,
+    // because the asset's length runs down X and a parapet's may run down either.
+    assetId = 'environment.vault-barrier';
+    if (sx < sz) {
+      rotation = [primitive.transform.rotation[0], primitive.transform.rotation[1] + Math.PI / 2, primitive.transform.rotation[2]];
+      scale = [sz / 2.4, sy / 1.05, sx / 0.5];
+    } else {
+      scale = [sx / 2.4, sy / 1.05, sz / 0.5];
+    }
   } else if (primitive.surface === 'wall-run') {
     assetId = 'environment.wallrun-panel';
     if (sx < sz) {
@@ -136,7 +244,10 @@ function alignedVisual(primitive: CollisionPrimitiveV2): VisualInstance | null {
   };
 }
 
+// Route primitives only. A 520 m spire is not a rooftop platform scaled a hundred and
+// thirty times, and `WorldPresenter` has a path for exactly this case.
 const collisionVisuals = defaultCollision.map(alignedVisual).filter((visual): visual is VisualInstance => visual !== null);
+const defaultCollisionWithComposition: CollisionPrimitiveV2[] = [...defaultCollision, ...whiteLineComposition];
 const routeVisuals: VisualInstance[] = [
   { id: 'visual-sign-atrium', assetId: 'environment.route-sign', transform: { position: [-5, 5.4, -33], rotation: [0, 0.15, 0], scale: [1.2, 1.2, 1.2] }, castShadow: true, receiveShadow: true },
   { id: 'visual-sign-gallery', assetId: 'environment.route-sign', transform: { position: [5.5, 8.6, -83], rotation: [0, -0.2, 0], scale: [1.2, 1.2, 1.2] }, castShadow: true, receiveShadow: true },
@@ -159,12 +270,12 @@ export const defaultLevel: LevelDocumentV2 = {
   id: 'white-line',
   name: 'White Line',
   units: 'meters',
-  collision: defaultCollision,
+  collision: defaultCollisionWithComposition,
   visuals: [...collisionVisuals, ...routeVisuals],
   lights: cyberDuskLights,
   environmentPresetId: DEFAULT_ENVIRONMENT_PRESET_ID,
   assetCatalogVersion: DEFAULT_ASSET_CATALOG_VERSION,
-  primitives: defaultCollision,
+  primitives: defaultCollisionWithComposition,
   /**
    * Three rooms, each of which asks a different question, and each of which has more
    * than one answer to give before it opens.
@@ -192,7 +303,15 @@ export const defaultLevel: LevelDocumentV2 = {
     { id: 'player-start', kind: 'player', position: [0, 1.1, 8], rotationY: 0 },
 
     // Atrium: teaches the pair, then teaches that a room is not over when it goes quiet.
-    { id: 'atrium-brawler-a', kind: 'bot-aggressive', position: [-6, 3, -44], rotationY: 0, encounterId: 'arena-1' },
+    /**
+     * Moved from [-6, 3, -44], which was inside `cover-one-a`.
+     *
+     * That block spans x -7 to -5 and z -44.5 to -39.5, so the Atrium's first brawler was
+     * spawning in the dead centre of a solid vault barrier. Found by an invariant added
+     * while opening the arena flanks, not by playing -- a bot inside a collider is a bot
+     * that never joins the fight, and nothing in the game reports it.
+     */
+    { id: 'atrium-brawler-a', kind: 'bot-aggressive', position: [-9, 3, -47], rotationY: 0, encounterId: 'arena-1' },
     { id: 'atrium-brawler-b', kind: 'bot-aggressive', position: [6, 3, -46], rotationY: 0, encounterId: 'arena-1' },
     { id: 'atrium-marksman-a', kind: 'bot-ranged', position: [-11, 3, -51], rotationY: 0, encounterId: 'arena-1' },
     { id: 'atrium-brawler-c', kind: 'bot-aggressive', position: [-9, 3, -40], rotationY: 0, encounterId: 'arena-1', wave: 1 },
@@ -234,6 +353,30 @@ export const defaultLevel: LevelDocumentV2 = {
   offMeshLinks: [
     { id: 'link-arena-one-rise', start: [0, 3, -55], end: [0, 4, -61], bidirectional: true, action: 'jump' },
     { id: 'link-gallery-rise', start: [0, 6, -105], end: [0, 10, -118], bidirectional: false, action: 'vault' },
+  ],
+  /**
+   * Where the route wants the view, now that there is something composed to look at.
+   *
+   * Placed at *approaches* rather than inside the arenas. The nudge disarms with a
+   * hostile inside 45 m, which is correct -- nothing moves the aim during a fight -- so a
+   * hint in the middle of the Gallery would almost never fire. These sit on the run-up to
+   * each room, where the player is moving and the room ahead is still quiet.
+   *
+   * Every pitch here is at or under `lookNudge.maxPitchOffset`, so the nudge delivers all
+   * of what was authored and the player sees the composition that was composed. The
+   * blockout deliberately asks for more than the cap in two places to test where the
+   * ceiling bites; the shipped route should not have to guess.
+   */
+  vistaHints: [
+    { id: 'hint-canyon', at: [0, 1.1, 4], radius: 12, yaw: 0, pitch: (16 * Math.PI) / 180 },
+    { id: 'hint-bridge', at: [0, 4, -28], radius: 12, yaw: 0, pitch: (18 * Math.PI) / 180 },
+    // Pulled back from z = -76 and tightened to 12 m: at the original placement the zone
+    // reached within 12.9 m of a Gallery spawn, and a hint the nudge disarms inside is a
+    // hint that never fires.
+    { id: 'hint-gallery-approach', at: [0, 4.5, -70], radius: 12, yaw: 0, pitch: (18 * Math.PI) / 180 },
+    // Also pulled back: the Roofline's bulwark spawns at z = -142, and a 16 m zone at
+    // z = -128 reached 14 m of it.
+    { id: 'hint-roofline', at: [0, 11, -122], radius: 12, yaw: 0, pitch: (18 * Math.PI) / 180 },
   ],
   exit: [0, 12, -164],
 };

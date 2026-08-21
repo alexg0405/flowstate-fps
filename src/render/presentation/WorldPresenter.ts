@@ -275,12 +275,115 @@ export class WorldPresenter {
     group.position.fromArray(primitive.transform.position);
     group.rotation.set(...primitive.transform.rotation);
 
-    if (primitive.gateForEncounterId) this.buildGate(group, sx, sy, sz);
+    // A primitive with no collider is not route furniture: the simulation never built a
+    // body for it and the nav bake excluded it, so it exists only to be looked at. Those
+    // are composition masses -- the enormous background architecture the art direction
+    // needs and the route cannot afford to make walkable -- and they get the skyline's
+    // treatment rather than a deck's.
+    if (!primitive.collision) this.buildMassif(group, sx, sy, sz, primitive.color);
+    else if (primitive.gateForEncounterId) this.buildGate(group, sx, sy, sz);
     else if (sy <= 1.5 && (sx > 5 || sz > 5)) this.buildDeck(group, sx, sy, sz, primitive.surface);
     else if (sy >= Math.max(sx, sz) * 0.6) this.buildWall(group, sx, sy, sz, primitive.surface);
     else if (primitive.id.includes('grapple') || primitive.surface === 'no-traverse') this.buildAnchor(group, sx, sy, sz);
     else this.buildCover(group, sx, sy, sz, primitive.surface);
     return group;
+  }
+
+  /**
+   * A mass that is only ever looked at.
+   *
+   * This is the same treatment the skyline gets, applied to an authored position instead
+   * of a seeded one. The skyline is 180 towers scattered by `random()` between 29 and
+   * 190 m off the route, which makes it *dressing*: there is no way to say "that mass,
+   * that big, exactly there", and a composition is precisely a set of statements of that
+   * form. A level can now make them, and the cost of one is a merged box stack and a
+   * sheet of panes.
+   *
+   * Three things carry the read, and none of them is lighting:
+   *
+   * - **Face painting at `mass` hardness.** Four sides, four flat decisions, a hard edge
+   *   between them. Without this a background mass is a grey box, because the procedural
+   *   architecture path is the one place in the renderer that was never painted -- route
+   *   primitives get their painting through the catalogued art batched over them, and a
+   *   mass has no catalogued art to wear.
+   * - **A setback.** One step in near the top. A plain extruded box reads as a wall at any
+   *   size; a box that steps reads as a building, and it is two triangles' difference.
+   * - **Sparse panes.** Windows are what turn a silhouette into something with a
+   *   *distance*. Budgeted off the face area rather than fixed, so a 200 m tower is not
+   *   lit like a 30 m one, and capped so a mass can never cost more than a few hundred
+   *   quads.
+   */
+  private buildMassif(group: THREE.Group, sx: number, sy: number, sz: number, color: string): void {
+    // Vertex colours arrive through the paint, so the material's own colour is white and
+    // the tone the level authored rides on the geometry.
+    const material = this.materials.build('architecture', { color, vertexColors: true });
+    this.generatedMaterials.push(material);
+
+    // A shaft with one setback near the crown. Kept to two blocks: this is background,
+    // and the silhouette is doing the work rather than the detail.
+    const shaftHeight = sy * 0.88;
+    const shaft = new THREE.BoxGeometry(sx, shaftHeight, sz);
+    shaft.translate(0, shaftHeight / 2 - sy / 2, 0);
+    const crown = new THREE.BoxGeometry(sx * 0.68, sy - shaftHeight, sz * 0.68);
+    crown.translate(0, sy / 2 - (sy - shaftHeight) / 2, 0);
+    const merged = mergeGeometries([shaft, crown], false) ?? shaft;
+    this.materials.paintFaces(merged, FACE_BLEND.mass);
+    const mesh = new THREE.Mesh(merged, material);
+    mesh.receiveShadow = true;
+    group.add(mesh);
+
+    // Panes on the two faces that can be seen from the route: the one pointing at it and
+    // the one pointing back up it. Which those are is not knowable here, so both of the
+    // wide faces get them and the narrow ones go dark, which is also what a real curtain
+    // wall does.
+    const paneMaterial = this.emissiveMaterial('#ffd9a3', 1.05);
+    const faceWidth = Math.max(sx, sz);
+    const pattern: FacadePattern = facadePatterns[Math.floor(faceWidth + sy) % facadePatterns.length];
+    const layout = paneLayout(pattern, 220, faceWidth, sy);
+    const cellWidth = faceWidth / layout.columns;
+    const cellHeight = sy / layout.rows;
+    const panes = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1),
+      paneMaterial,
+      Math.max(1, layout.columns * layout.rows * 2),
+    );
+    panes.count = 0;
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    const position = new THREE.Vector3();
+    const scale = new THREE.Vector3(cellWidth * layout.fillWidth, cellHeight * layout.fillHeight, 1);
+    // Deterministic, because a composition that reshuffles its own windows between two
+    // screenshots is not a composition anyone can iterate on.
+    let seed = Math.round(sx * 31 + sy * 17 + sz * 7);
+    const random = () => {
+      seed = (seed * 1_664_525 + 1_013_904_223) % 4_294_967_296;
+      return seed / 4_294_967_296;
+    };
+    let slot = 0;
+    for (const side of [1, -1]) {
+      const onZ = sz <= sx;
+      quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), onZ ? (side > 0 ? 0 : Math.PI) : side * Math.PI / 2);
+      for (let row = 0; row < layout.rows; row += 1) {
+        // The setback takes the wall in, so a pane above it would float off the side.
+        const height = (row + 0.5) / layout.rows;
+        const block = facadeAt([{ y0: 0, y1: 0.88, width: 1, depth: 1 }, { y0: 0.88, y1: 1, width: 0.68, depth: 0.68 }], height);
+        for (let column = 0; column < layout.columns; column += 1) {
+          if (random() > layout.litChance) continue;
+          const across = (-faceWidth / 2 + (column + 0.5) * cellWidth) * block.width;
+          const depth = (onZ ? sz : sx) / 2 * block.depth + 0.05;
+          position.set(
+            onZ ? across * side : side * depth,
+            -sy / 2 + (row + 0.5) * cellHeight,
+            onZ ? side * depth : across * -side,
+          );
+          panes.setMatrixAt(slot, matrix.compose(position, quaternion, scale));
+          slot += 1;
+        }
+      }
+    }
+    panes.count = slot;
+    panes.instanceMatrix.needsUpdate = true;
+    group.add(panes);
   }
 
   private buildDeck(group: THREE.Group, sx: number, sy: number, sz: number, surface: LevelPrimitive['surface']): void {
