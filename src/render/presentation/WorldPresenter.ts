@@ -7,6 +7,7 @@ import { palette } from '../palette';
 import { MaterialLibrary } from './MaterialLibrary';
 import { FACE_BLEND } from './facePaint';
 import { facadeAt, facadePatterns, paneLayout, towerArchetypes, towerTones, type FacadePattern } from './citySkyline';
+import { skyFragmentShader, SKY_STOPS } from './skyGradient';
 
 interface GateArt {
   group: THREE.Group;
@@ -1267,14 +1268,17 @@ export class WorldPresenter {
       new THREE.ShaderMaterial({
         side: THREE.BackSide,
         depthWrite: false,
+        // Stops and bands come from `skyGradient`, and so does the shader body, so the
+        // gradient is one set of numbers that a test can measure rather than a literal
+        // buried in a string.
         uniforms: {
-          zenith: { value: new THREE.Color('#080b1d') },
-          dusk: { value: new THREE.Color('#51244e') },
-          horizon: { value: new THREE.Color('#ec6a72') },
-          nadir: { value: new THREE.Color('#070b13') },
+          zenith: { value: new THREE.Color(SKY_STOPS.zenith.hex) },
+          dusk: { value: new THREE.Color(SKY_STOPS.dusk.hex) },
+          horizon: { value: new THREE.Color(SKY_STOPS.horizon.hex) },
+          nadir: { value: new THREE.Color(SKY_STOPS.nadir.hex) },
         },
         vertexShader: 'varying vec3 vWorld; void main(){vWorld=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
-        fragmentShader: 'varying vec3 vWorld;uniform vec3 zenith;uniform vec3 dusk;uniform vec3 horizon;uniform vec3 nadir;void main(){float h=normalize(vWorld).y;vec3 c=h>0.0?mix(horizon,mix(dusk,zenith,smoothstep(.1,.88,h)),smoothstep(0.,.28,h)):mix(horizon,nadir,smoothstep(0.,-.38,h));gl_FragColor=vec4(c,1.);}',
+        fragmentShader: skyFragmentShader(),
       }),
     );
     this.environmentRoot.add(sky);

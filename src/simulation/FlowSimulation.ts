@@ -24,12 +24,13 @@ import {
   type WeaponDefinition,
   type Vec3,
 } from '../contracts';
-import { aimAssist, botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, lifestealForKill, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
+import { botCapsule, botColliderBottom, botLeashMetres, botProfiles, comboScoring, dodge, lifestealForKill, movementProfile, playerCapsule, playerHealth, recoilAdsFactor, recoilHoldSeconds, runScoring } from '../content/config';
 import { bladeStyle } from '../content/blades';
 import { chassisMultiplier } from '../content/modifiers';
 import { defaultArmory, resolveWeaponStats } from '../content/weapons';
 import { NavigationService } from '../navigation/NavigationService';
 import { approach, consumeAirCharge, resetFromGround, resetFromWall, type SurfaceResetState } from './movementRules';
+import { ACQUIRE_FLOOR, acquires, bearingTo, holds, lookSlowdown, magnetism, type AimBearing } from './aimAssist';
 import { idleLookNudge, stepLookNudge, type LookNudgeState } from './lookNudge';
 import { hashSeed, SeededRandom } from './random';
 
@@ -639,16 +640,18 @@ export class FlowSimulation implements GameSimulation {
     const player = this.player;
     const target = this.bots.find((bot) => bot.id === player.lockedTargetId);
     if (!target) return;
-    const origin = this.cameraPosition();
-    const forward = directionFromLook(player.yaw, player.pitch);
-    const position = target.body.translation();
-    const dx = position.x - origin.x;
-    const dy = position.y + aimAssist.aimHeight - origin.y;
-    const dz = position.z - origin.z;
-    const distance = Math.hypot(dx, dy, dz);
-    if (distance < 0.001) return;
-    const dot = (dx * forward.x + dy * forward.y + dz * forward.z) / distance;
-    if (distance > aimAssist.range || dot < aimAssist.holdCosine) player.lockedTargetId = null;
+    const bearing = this.bearingTo(target);
+    if (bearing.distance < 0.001) return;
+    if (!holds(bearing)) player.lockedTargetId = null;
+  }
+
+  /** Where a hostile sits relative to the player's current aim. */
+  private bearingTo(target: BotState): AimBearing {
+    return bearingTo(
+      this.cameraPosition(),
+      directionFromLook(this.player.yaw, this.player.pitch),
+      target.body.translation(),
+    );
   }
 
   /** The bot ADS is tracking, or null. Hip fire is always fully manual. */
@@ -666,33 +669,14 @@ export class FlowSimulation implements GameSimulation {
     return target;
   }
 
-  /** 0 at the edge of the acquisition cone, 1 with the target dead centre. */
-  private aimCentredness(target: BotState): number {
-    const origin = this.cameraPosition();
-    const forward = directionFromLook(this.player.yaw, this.player.pitch);
-    const position = target.body.translation();
-    const dx = position.x - origin.x;
-    const dy = position.y + aimAssist.aimHeight - origin.y;
-    const dz = position.z - origin.z;
-    const distance = Math.hypot(dx, dy, dz) || 1;
-    const dot = (dx * forward.x + dy * forward.y + dz * forward.z) / distance;
-    return clamp((dot - aimAssist.acquireCosine) / (1 - aimAssist.acquireCosine), 0, 1);
-  }
-
   /**
    * Damping on the player's own look, strongest with the target centred. This is the
    * assist: it makes a target easier to hold without moving the crosshair for anyone.
    */
   private assistSlowdown(target: BotState | null): number {
-    if (!target) return 1;
-    return 1 - (1 - aimAssist.slowdownScale) * this.aimCentredness(target);
+    return lookSlowdown(target ? this.bearingTo(target) : null);
   }
 
-  /**
-   * A bounded nudge toward centre mass. Capped as a *rate* rather than as a fraction
-   * of the remaining error, so it can settle a shot the player has already lined up
-   * and can never travel far enough to acquire one for them.
-   */
   /**
    * A soft pull toward the pitch an authored vista is composed for.
    *
@@ -736,19 +720,18 @@ export class FlowSimulation implements GameSimulation {
     return nearest;
   }
 
+  /**
+   * A bounded nudge toward centre mass. Capped as a *rate* rather than as a fraction of
+   * the remaining error, so it can settle a shot the player has already lined up and can
+   * never travel far enough to acquire one for them. See `aimAssist.ts` for why that
+   * distinction is the difference between an assist and an aimbot.
+   */
   private applyAimMagnetism(target: BotState | null, dt: number): void {
     if (!target) return;
-    const player = this.player;
-    const origin = this.cameraPosition();
-    const position = target.body.translation();
-    const dx = position.x - origin.x;
-    const dy = position.y + aimAssist.aimHeight - origin.y;
-    const dz = position.z - origin.z;
-    const step = aimAssist.maxTurnRate * dt * this.aimCentredness(target);
-    if (step <= 0) return;
-    player.yaw += clamp(wrapAngle(Math.atan2(-dx, -dz) - player.yaw), -step, step);
-    const pitchError = Math.atan2(dy, Math.hypot(dx, dz)) - player.pitch;
-    player.pitch = clamp(player.pitch + clamp(pitchError, -step, step), -1.48, 1.48);
+    const next = magnetism(this.bearingTo(target), this.player.yaw, this.player.pitch, dt);
+    if (!next) return;
+    this.player.yaw = next.yaw;
+    this.player.pitch = next.pitch;
   }
 
   /**
@@ -767,34 +750,35 @@ export class FlowSimulation implements GameSimulation {
     player.recoilYaw = nextYaw;
   }
 
+  /**
+   * Which hostile the assist is tracking, if any.
+   *
+   * The cone tests and the bearing arithmetic are `aimAssist.ts`; what stays here is the
+   * part that genuinely needs the world -- walking the live roster, and casting a ray to
+   * confirm there is a clear shot. An assist that tracked something through a wall would
+   * be doing the one thing cover is supposed to prevent.
+   *
+   * A held target is re-tested against the wider hold cone before anything else, so a
+   * lock survives the player drifting off centre instead of being handed to whichever
+   * hostile is momentarily nearer the crosshair.
+   */
   private aimAssistTarget(origin: RAPIER.Vector, forward: RAPIER.Vector, held: BotState | undefined): BotState | null {
-    const visible = (bot: BotState, cosine: number): boolean => {
-      if (!bot.alive || !bot.active) return false;
-      const position = bot.body.translation();
-      const dx = position.x - origin.x;
-      const dy = position.y + aimAssist.aimHeight - origin.y;
-      const dz = position.z - origin.z;
-      const distance = Math.hypot(dx, dy, dz);
-      if (distance > aimAssist.range || distance < 0.001) return false;
-      const dot = (dx * forward.x + dy * forward.y + dz * forward.z) / distance;
-      return dot >= cosine && this.hasClearShot(origin, { x: dx / distance, y: dy / distance, z: dz / distance }, distance);
+    const reachable = (bot: BotState, test: (bearing: AimBearing) => boolean): AimBearing | null => {
+      if (!bot.alive || !bot.active) return null;
+      const bearing = bearingTo(origin, forward, bot.body.translation());
+      if (bearing.distance < 0.001 || !test(bearing)) return null;
+      return this.hasClearShot(origin, bearing.direction, bearing.distance) ? bearing : null;
     };
 
-    if (held && visible(held, aimAssist.holdCosine)) return held;
+    if (held && reachable(held, holds)) return held;
 
     let best: BotState | null = null;
-    let bestDot = aimAssist.acquireCosine;
+    let bestCosine = ACQUIRE_FLOOR;
     for (const bot of this.bots) {
-      if (!visible(bot, aimAssist.acquireCosine)) continue;
-      const position = bot.body.translation();
-      const dx = position.x - origin.x;
-      const dy = position.y + aimAssist.aimHeight - origin.y;
-      const dz = position.z - origin.z;
-      const distance = Math.hypot(dx, dy, dz);
-      const dot = (dx * forward.x + dy * forward.y + dz * forward.z) / distance;
-      if (dot >= bestDot) {
+      const bearing = reachable(bot, acquires);
+      if (bearing && bearing.cosine >= bestCosine) {
         best = bot;
-        bestDot = dot;
+        bestCosine = bearing.cosine;
       }
     }
     return best;
