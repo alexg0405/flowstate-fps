@@ -25,9 +25,11 @@ interface GameOverlayProps {
   onSettingsChange: (patch: Partial<SaveSettingsV3>) => void;
   onEnter: () => void;
   onExit: () => void;
+  /** Whether this device is being played with a thumb, which changes what to say. */
+  touch?: boolean;
 }
 
-export function GameOverlay({ screenState, error, snapshot, level, settings, save, result, modifier = null, onSaveChange, onSettingsChange, onEnter, onExit }: GameOverlayProps) {
+export function GameOverlay({ screenState, error, snapshot, level, settings, save, result, modifier = null, onSaveChange, onSettingsChange, onEnter, onExit, touch = false }: GameOverlayProps) {
   const loading = screenState === 'booting';
   const [builderOpen, setBuilderOpen] = useState(false);
 
@@ -65,7 +67,7 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
           <CompletionState snapshot={snapshot} level={level} result={result ?? null} modifier={modifier} reducedMotion={settings.reducedMotion} onExit={onExit} />
         ) : !loading ? (
           <div className="overlay-state standby-state">
-            <p className="state-deck">Input is released. Click back in to restore movement and combat.</p>
+            <p className="state-deck">{touch ? 'Input is released. Tap back in to restore movement and combat.' : 'Input is released. Click back in to restore movement and combat.'}</p>
             {snapshot
               ? <RunStatusPanel snapshot={snapshot} />
               : (
@@ -77,24 +79,43 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
             {modifier && <ModifierBrief modifier={modifier} />}
             <div className="guide-heading"><span>Controls</span></div>
             <div className="control-guide">
-              <span><kbd>LMB</kbd> SLASH</span>
-              <span><kbd>E</kbd> HEAVY</span>
-              <span><kbd>RMB</kbd> SIDEARM</span>
-              <span><kbd>WASD</kbd> MOVE</span>
-              <span><kbd>SPACE</kbd> JUMP</span>
-              <span><kbd>SPACE ×2</kbd> DASH / DODGE</span>
-              <span><kbd>F</kbd> HOOK</span>
-              <span><kbd>Q</kbd> PULL</span>
-              <span><kbd>SPACE</kbd> WALL JUMP</span>
-              <span><kbd>C</kbd> SLIDE</span>
-              <span><kbd>V</kbd> AIM</span>
-              <span><kbd>R</kbd> RELOAD</span>
+              {touch ? (
+                <>
+                  <span><kbd>CUT</kbd> SLASH</span>
+                  <span><kbd>HEAVY</kbd> SWEEP</span>
+                  <span><kbd>GUN</kbd> SIDEARM</span>
+                  <span><kbd>LEFT THUMB</kbd> MOVE</span>
+                  <span><kbd>JUMP</kbd> JUMP</span>
+                  <span><kbd>JUMP ×2</kbd> DASH / DODGE</span>
+                  <span><kbd>HOOK</kbd> HOOK</span>
+                  <span><kbd>PULL</kbd> REEL IN</span>
+                  <span><kbd>PUSH TO EDGE</kbd> SPRINT</span>
+                  <span><kbd>SLIDE</kbd> SLIDE</span>
+                  <span><kbd>DRAG</kbd> LOOK</span>
+                  <span><kbd>RELOAD</kbd> RELOAD</span>
+                </>
+              ) : (
+                <>
+                  <span><kbd>LMB</kbd> SLASH</span>
+                  <span><kbd>E</kbd> HEAVY</span>
+                  <span><kbd>RMB</kbd> SIDEARM</span>
+                  <span><kbd>WASD</kbd> MOVE</span>
+                  <span><kbd>SPACE</kbd> JUMP</span>
+                  <span><kbd>SPACE ×2</kbd> DASH / DODGE</span>
+                  <span><kbd>F</kbd> HOOK</span>
+                  <span><kbd>Q</kbd> PULL</span>
+                  <span><kbd>SPACE</kbd> WALL JUMP</span>
+                  <span><kbd>C</kbd> SLIDE</span>
+                  <span><kbd>V</kbd> AIM</span>
+                  <span><kbd>R</kbd> RELOAD</span>
+                </>
+              )}
             </div>
             <SettingsPanel settings={settings} onChange={onSettingsChange} />
             <div className="overlay-actions">
               <button className="primary enter-action" onClick={onEnter}><span aria-hidden="true">▶</span>Enter run</button>
               <button onClick={() => setBuilderOpen(true)}>Gun builder</button>
-              <span className="input-note"><i />Captures your mouse</span>
+              <span className="input-note"><i />{touch ? 'On-screen controls' : 'Captures your mouse'}</span>
             </div>
           </div>
         ) : (

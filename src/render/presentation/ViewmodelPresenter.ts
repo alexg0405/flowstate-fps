@@ -3,7 +3,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import type { GameEvent, SaveDataV1, SimulationSnapshot, WeaponChassisId, WeaponPartSlot } from '../../contracts';
 import { weaponPartSlots } from '../../content/weapons';
 import { palette } from '../palette';
-import { MaterialLibrary } from './MaterialLibrary';
+import { MaterialLibrary, rebindGraphicShading } from './MaterialLibrary';
 
 interface ExtendedPlayerPresentation {
   adsProgress?: number;
@@ -62,7 +62,7 @@ export class ViewmodelPresenter {
   private readonly cellBlock = new THREE.Group();
   private readonly heatSpine = new THREE.Group();
   /** Owned clone, so the chassis accent can be recoloured without touching the library. */
-  private accentMaterial!: THREE.MeshStandardMaterial;
+  private accentMaterial!: THREE.MeshToonMaterial;
   private appliedVisualKey = '';
   private readonly bolt = new THREE.Group();
   private readonly muzzleFlash = new THREE.Group();
@@ -93,7 +93,7 @@ export class ViewmodelPresenter {
   private swingActive = false;
   private bladeAllowed = true;
   /** Owned clones, so a style's accent can be set without touching the shared library. */
-  private bladeEdgeMaterials: THREE.MeshStandardMaterial[] = [];
+  private bladeEdgeMaterials: THREE.MeshToonMaterial[] = [];
   private settings: SaveDataV1['settings'];
 
   constructor(private readonly materials: MaterialLibrary, settings: SaveDataV1['settings']) {
@@ -230,8 +230,8 @@ export class ViewmodelPresenter {
   private highlightMaterial(source: THREE.Material): THREE.Material {
     const existing = this.highlightClones.get(source);
     if (existing) return existing;
-    const clone = source.clone();
-    if (clone instanceof THREE.MeshStandardMaterial) {
+    const clone = rebindGraphicShading(source.clone());
+    if (clone instanceof THREE.MeshStandardMaterial || clone instanceof THREE.MeshToonMaterial) {
       clone.emissive.set(HIGHLIGHT);
       clone.emissiveIntensity = 0.9;
       clone.color.lerp(new THREE.Color(HIGHLIGHT), 0.3);
@@ -452,7 +452,7 @@ export class ViewmodelPresenter {
     const carbon = this.materials.get('carbon');
     // The accent is a clone the presenter owns, so a chassis can recolour every lit
     // seam on the weapon at once without recolouring the shared library material.
-    this.accentMaterial = this.materials.get('cyan-light').clone() as THREE.MeshStandardMaterial;
+    this.accentMaterial = rebindGraphicShading(this.materials.get('cyan-light').clone()) as THREE.MeshToonMaterial;
     this.generatedMaterials.push(this.accentMaterial);
     const accent = this.accentMaterial;
     this.rifle.position.set(0.15, -0.19, -1.02);
@@ -794,7 +794,7 @@ export class ViewmodelPresenter {
   private buildBlade(): void {
     const gunmetal = this.materials.get('gunmetal');
     const carbon = this.materials.get('carbon');
-    const edgeMaterial = this.materials.get('yellow-light').clone() as THREE.MeshStandardMaterial;
+    const edgeMaterial = rebindGraphicShading(this.materials.get('yellow-light').clone()) as THREE.MeshToonMaterial;
     // The library's yellow runs at 2.6, which is right for a wall-run panel forty metres
     // away and wrong for a strip half a metre from the eye: at that intensity the edge is
     // the whole silhouette and the blade reads as a bar of light rather than as steel.
@@ -835,8 +835,8 @@ export class ViewmodelPresenter {
     // slightly down on the weapon and an edge underneath it is an edge nobody sees.
     const edge = this.rounded(0.014, 0.0085, 0.74, 0.003, edgeMaterial);
     edge.position.set(0, 0.016, -0.44);
-    const edgeGlow = new THREE.Mesh(new THREE.PlaneGeometry(0.042, 0.78), edgeMaterial.clone());
-    const glowMaterial = edgeGlow.material as THREE.MeshStandardMaterial;
+    const edgeGlow = new THREE.Mesh(new THREE.PlaneGeometry(0.042, 0.78), rebindGraphicShading(edgeMaterial.clone()));
+    const glowMaterial = edgeGlow.material as THREE.MeshToonMaterial;
     glowMaterial.transparent = true;
     glowMaterial.opacity = 0.1;
     glowMaterial.depthWrite = false;

@@ -39,6 +39,15 @@ FLOWSTATE_STATIC_DIST=1 npm run test:e2e
 - `R`: reload
 - `Esc`: release Pointer Lock (or embedded-preview mouse capture) and pause
 
+On a phone or tablet the game draws an on-screen scheme instead, chosen from
+`(pointer: coarse)` — the device's *primary* pointer, so a laptop with a touchscreen keeps
+its keyboard. A floating thumbstick moves (push it to the edge to sprint), a drag anywhere
+looks, and a cluster under the right thumb carries `CUT`, `JUMP`, `HEAVY`, `GUN`, `HOOK`
+and `SLIDE`, with `PULL` appearing only while a hook is out and `RELOAD`/`AIM` only while
+the gun is up. `JUMP` twice is still the dash and the perfect dodge. `PAUSE` hands the run
+back, since there is no `Esc` to press. The route is played in landscape and says so in
+portrait; fullscreen and an orientation lock are requested where the browser supports them.
+
 Editor gizmos use `W` for translate, `E` for rotate, and `R` for scale. Projects save directly to a folder in supporting browsers or export as `.fpsproj` archives elsewhere.
 
 The pause overlay exposes live sensitivity, FOV, head-bob, wall-run roll, screen-shake, render-scale, graphics-quality, dynamic-resolution, and reduced-motion controls. Reduced motion is seeded from `prefers-reduced-motion` on first run and disables decorative interface wipes, parallax, speed lines, head bob, camera roll, and shake. Preferences persist locally. If an embedded browser rejects Pointer Lock, the game falls back to focused keyboard and bounded mouse input instead of failing.
@@ -54,6 +63,24 @@ Fitted parts are visible on the SMG, shotgun and DMR, which are built procedural
 - `src/contracts.ts` contains presentation-safe simulation, content, save, and event contracts.
 - `src/simulation/` owns the fixed-step world, kinematic movement motor, combat, bots, checkpoints, and objectives. Without a baked navmesh the bots fall back to direct steering with a ledge guard, so they hold their platform instead of chasing the player into the void. Kills and damage taken by surviving bots persist across checkpoint restores.
 - `src/render/`, `src/audio/`, and `src/input/` are adapters; none owns gameplay state.
+- `src/audio/AudioManager.ts` synthesises the whole mix in one `AudioContext` with no
+  samples: every cue is scheduled off the tick it happened on plus its own flight time, and
+  a shared HDR window with one importance per cue decides what is worth a voice.
+  `tests/support/offlineAudio.ts` renders that graph offline and `tests/support/loudness.ts`
+  measures it to BS.1770-4, so true peak and loudness are numbers rather than opinions.
+- `src/input/touchControls.ts` owns the touch scheme as data and arithmetic — which device
+  wants it, what a thumb at an offset is asking for, and which controls exist — and
+  `src/game/TouchControls.tsx` only renders it.
+- `src/render/presentation/` owns the look, and it is built as an illustration rather than
+  as a photograph. `toneCurve.ts` is the one curve between the lit scene and the screen —
+  no tone mapping runs anywhere else — and it has no toe, so a surface may reach black.
+  `toonBands.ts` decides how many steps each material shades in and what hue it turns as it
+  leaves the light; `facePaint.ts` decides a generated mass's faces by which way they point;
+  `graphicShapes.ts` is the vocabulary combat is drawn with; `cameraDirection.ts` treats
+  field of view as an animation system; and `animationStepping.ts` steps hostile poses on
+  twos while leaving the camera, the aim and the mix continuous. All of them are pure and
+  unit tested, because `GameRenderer` needs WebGL to construct and cannot be reached from a
+  test. `RENDER.md` is the brief they were built from.
 - `src/render/assets/` owns the hash-verified GLB/KTX2 catalogs, abortable shared cache, fallbacks, and resident-memory estimates.
 - `src/content/weapons.ts` owns the weapon chassis and part catalog plus the pure stat resolution used by both the simulation and the builder UI.
 - `src/ui/WeaponBuilder.tsx` is the armory and loadout screen, shared by the main menu and the pause overlay.

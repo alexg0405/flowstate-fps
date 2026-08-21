@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { GameEvent, RuntimeLevelV1, SaveDataV1, SimulationSnapshot, Vec3 } from '../contracts';
 import { DEFAULT_ASSET_CATALOG_VERSION, DEFAULT_ENVIRONMENT_PRESET_ID } from '../content/migrations';
 import { AssetManager, getAssetDefinition, isAssetId, listPreloadGroup, ThreeAssetLoader, type AssetHandle, type AssetId } from './assets';
@@ -12,6 +11,7 @@ import { MaterialLibrary } from './presentation/MaterialLibrary';
 import { PostPipeline } from './presentation/PostPipeline';
 import { accentMaterial, canBatch, groupVisualBatches, resolveVariantAccent, type VariantAccent } from './presentation/visualBatching';
 import { HitstopController } from './presentation/hitstop';
+import { directCamera, FOV_DIRECTION, isTouchdown } from './presentation/cameraDirection';
 import { palette } from './palette';
 import { ResolutionController } from './ResolutionController';
 import { ViewmodelPresenter } from './presentation/ViewmodelPresenter';
@@ -20,8 +20,6 @@ import { WorldPresenter } from './presentation/WorldPresenter';
 /** Speed at which the motion cues start, and where they reach full strength. */
 const SPEED_CUE_START = 11;
 const SPEED_CUE_FULL = 30;
-/** Degrees of extra field of view at full speed. */
-const SPEED_FOV_KICK = 11;
 
 /** A visual held back from the scene graph until the batching pass runs. */
 interface BatchCandidate {
@@ -65,9 +63,8 @@ export class GameRenderer {
   private readonly assetRoot = new THREE.Group();
   // Cooled and pulled back. A warm 2.05 sun raking a pale deck is what made the floor
   // the brightest thing in frame; the accents are supposed to own that.
-  private readonly sun = new THREE.DirectionalLight('#cfe4ee', 1.5);
+  private readonly sun = new THREE.DirectionalLight('#cfe4ee', 2.4);
   private readonly sunTarget = new THREE.Object3D();
-  private environmentTexture: THREE.Texture | null = null;
   private resizeObserver: ResizeObserver;
   private settings: SaveDataV1['settings'];
   private lastFrameAt = performance.now();
@@ -75,6 +72,8 @@ export class GameRenderer {
   private readonly resolution = new ResolutionController();
   private cameraImpulse = 0;
   private cameraImpulsePhase = 0;
+  /** Decaying 0..1, set on the frame the player touches down. See `cameraDirection`. */
+  private landingImpulse = 0;
   private readonly hitstop = new HitstopController();
   /**
    * The presentation clock, accumulated rather than read off the wall.
@@ -118,10 +117,10 @@ export class GameRenderer {
       depth: true,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    // Lowered to deepen the blacks the palette sits on. The interface is flat colour
-    // over near-black, and the rendered frame was carrying far more midtone than that.
-    this.renderer.toneMappingExposure = 0.52;
+    // No tone mapping *here*, which is the point. `PostPipeline` applies one authored
+    // curve on the linear buffer instead -- see `toneCurve` for why a film curve and a
+    // grade trying to undo it is two curves rather than none.
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.autoClear = false;
@@ -141,7 +140,6 @@ export class GameRenderer {
     this.scene.add(this.world.environmentRoot, this.world.root, this.assetRoot, this.characters.root, this.fx.root, this.grapple.root, this.grapple.aimRoot, this.ghost.root);
     this.viewScene.add(this.viewmodel.root);
     this.setupLighting();
-    this.setupEnvironmentMap();
     this.assetManager = new AssetManager({
       loader: new ThreeAssetLoader({ renderer: this.renderer, ktx2TranscoderPath: '/vendor/three/basis/' }),
     });
@@ -297,7 +295,6 @@ export class GameRenderer {
     this.viewmodel.dispose();
     this.characters.dispose();
     this.world.dispose();
-    this.environmentTexture?.dispose();
     this.materials.dispose();
     this.renderer.dispose();
     // `dispose()` frees three's own objects and leaves the WebGL context alive. A
@@ -334,7 +331,7 @@ export class GameRenderer {
     }
     if (handle.source === 'gltf') {
       this.attachCatalogDiagnostics(handle);
-      this.assetInstanceMaterials.push(...this.materials.decorateImported(handle.scene));
+      this.assetInstanceMaterials.push(...this.materials.decorateImported(handle.scene, 'viewmodel'));
       this.viewmodelHandle = handle;
       this.assetHandles.push(handle);
       this.authoredViewmodel = handle.scene;
@@ -358,7 +355,9 @@ export class GameRenderer {
         continue;
       }
       this.attachCatalogDiagnostics(handle);
-      this.assetInstanceMaterials.push(...this.materials.decorateImported(handle.scene));
+      // Hostiles shade in five steps where a wall shades in three: an enemy has to hold
+      // its volume against an environment that is deliberately flat.
+      this.assetInstanceMaterials.push(...this.materials.decorateImported(handle.scene, 'character'));
       // Two hunter GLBs are authored; `CharacterPresenter` draws the bulwark with the
       // brawler's and marks it out with its shield plate and accent.
       const profile = handle.id === 'character.hunter-aggressive' ? 'aggressive' : 'ranged';
@@ -398,7 +397,7 @@ export class GameRenderer {
       batchable.push({ handle, visual });
       return;
     }
-    if (handle.source === 'gltf') this.assetInstanceMaterials.push(...this.materials.decorateImported(handle.scene));
+    if (handle.source === 'gltf') this.assetInstanceMaterials.push(...this.materials.decorateImported(handle.scene, 'architecture'));
     this.applyMaterialVariant(handle.scene, handle.definition.variants, visual.materialVariantId);
     if (gateId) this.assetGateBindings.set(handle.scene, gateId);
     this.assetRoot.add(handle.scene);
@@ -443,7 +442,10 @@ export class GameRenderer {
     for (const batch of batches) {
       const vertexCount = batch.geometry.attributes.position?.count ?? 0;
       const indexCount = batch.geometry.index?.count ?? 0;
-      const mesh = new THREE.BatchedMesh(batch.matrices.length, vertexCount, indexCount, this.batchMaterial(batch.material, batch.variant));
+      // Painted before the material is built, because a material told to read vertex
+      // colours from a geometry that has none renders black.
+      const painted = this.materials.paintFaces(batch.geometry);
+      const mesh = new THREE.BatchedMesh(batch.matrices.length, vertexCount, indexCount, this.batchMaterial(batch.material, batch.variant, painted));
       mesh.castShadow = batch.castShadow;
       mesh.receiveShadow = batch.receiveShadow;
       const geometryId = mesh.addGeometry(batch.geometry);
@@ -456,8 +458,8 @@ export class GameRenderer {
   }
 
   /** One shared material per batch, carrying the surface sheet and the variant accent. */
-  private batchMaterial(source: THREE.Material, variant: VariantAccent): THREE.Material {
-    const decorated = this.materials.decorateMaterial(source);
+  private batchMaterial(source: THREE.Material, variant: VariantAccent, painted: boolean): THREE.Material {
+    const decorated = this.materials.decorateMaterial(source, 'architecture', painted);
     const accented = accentMaterial(decorated, variant);
     if (accented) {
       // The decorated clone was only a stepping stone to the accented one.
@@ -529,11 +531,22 @@ export class GameRenderer {
     });
   }
 
+  /**
+   * The rig, and it carries more than it used to because there is no longer an
+   * environment probe under it.
+   *
+   * The hemisphere light is the important one now. Banded materials take their direct
+   * light through a coloured ramp -- so the *terminator* is where a surface changes hue --
+   * but a face inside a cast shadow receives no direct light at all, and what is left is
+   * the ambient term. That makes this light the colour of every shadow in the game, which
+   * is why its sky is a cold violet and its ground is a near-black teal rather than the
+   * grey a renderer would default to.
+   */
   private setupLighting(): void {
-    const skyFill = new THREE.HemisphereLight('#5f6fa8', '#0a0e14', 0.7);
-    const rim = new THREE.DirectionalLight('#08f7ff', 0.8);
+    const skyFill = new THREE.HemisphereLight('#3f4d8c', '#060d0e', 0.5);
+    const rim = new THREE.DirectionalLight('#08f7ff', 1.5);
     rim.position.set(-36, 22, -65);
-    const duskBounce = new THREE.DirectionalLight('#ff2d55', 0.42);
+    const duskBounce = new THREE.DirectionalLight('#ff2d55', 0.85);
     duskBounce.position.set(28, 8, 34);
 
     this.sun.position.set(35, 58, 24);
@@ -550,27 +563,21 @@ export class GameRenderer {
     this.sun.target = this.sunTarget;
     this.scene.add(skyFill, rim, duskBounce, this.sun, this.sunTarget);
 
-    const viewKey = new THREE.DirectionalLight('#d7edff', 1.55);
+    const viewKey = new THREE.DirectionalLight('#d7edff', 2.1);
     viewKey.position.set(-2.8, 4.5, 3.2);
-    const viewRim = new THREE.DirectionalLight('#ff426d', 0.9);
+    const viewRim = new THREE.DirectionalLight('#ff426d', 1.2);
     viewRim.position.set(3.8, 0.5, -2);
-    this.viewScene.add(new THREE.HemisphereLight('#86b8d4', '#0d1019', 0.82), viewKey, viewRim);
+    this.viewScene.add(new THREE.HemisphereLight('#86b8d4', '#101426', 1.1), viewKey, viewRim);
   }
 
-  private setupEnvironmentMap(): void {
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    pmrem.compileEquirectangularShader();
-    const room = new RoomEnvironment();
-    room.background = new THREE.Color('#101426');
-    const target = pmrem.fromScene(room, 0.035);
-    this.environmentTexture = target.texture;
-    this.scene.environment = this.environmentTexture;
-    this.scene.environmentIntensity = 0.52;
-    this.viewScene.environment = this.environmentTexture;
-    this.viewScene.environmentIntensity = 0.82;
-    room.dispose();
-    pmrem.dispose();
-  }
+  /**
+   * Deliberately gone: `setupEnvironmentMap` built a PMREM probe from `RoomEnvironment`
+   * and handed it to both scenes at 0.52 and 0.82 intensity. A banded material has no
+   * specular response and samples no environment, so the probe became a render target and
+   * a shader compile that nothing read. What it was contributing to the ambient term is
+   * now carried by the hemisphere light in `setupLighting`, where it can be a colour
+   * decision rather than a photograph of a room.
+   */
 
   /**
    * Projects a world point into CSS pixel coordinates on the canvas, or null
@@ -605,7 +612,11 @@ export class GameRenderer {
     const locomotion = snapshot.player.locomotion;
     const previous = this.lastLocomotion;
     this.lastLocomotion = locomotion;
-    if (this.settings.reducedMotion || locomotion !== 'dashing' || previous === 'dashing') return;
+    if (this.settings.reducedMotion) return;
+    // Touching down has no event either, and it is the one moment in the vocabulary that
+    // compresses the frame rather than opening it.
+    if (isTouchdown(previous, locomotion)) this.landingImpulse = 1;
+    if (locomotion !== 'dashing' || previous === 'dashing') return;
     this.addCameraImpulse(0.012, snapshot.tick);
   }
 
@@ -623,10 +634,18 @@ export class GameRenderer {
     const shakeY = Math.cos(this.cameraImpulsePhase * 2.7 + snapshot.tick * 0.91) * shake * 0.72;
     this.camera.rotation.set(snapshot.camera.pitch + shakeX, snapshot.camera.yaw + shakeY, roll, 'YXZ');
     this.cameraImpulse = THREE.MathUtils.damp(this.cameraImpulse, 0, 17, deltaSeconds);
-    // Widening with speed is the cue a movement game cannot do without: at 12 and at
-    // 34 metres a second the frame was otherwise identical.
-    const targetFov = snapshot.camera.fov + this.speedDrive(snapshot) * SPEED_FOV_KICK;
-    this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 8, deltaSeconds);
+    // Perspective as an animation system rather than one effect: speed widens the frame,
+    // a hook widens it further, and a landing compresses it and snaps back. All of it is
+    // an offset on the player's own setting, and none of it can move where a shot goes.
+    // See `cameraDirection`.
+    this.landingImpulse = Math.max(0, this.landingImpulse - FOV_DIRECTION.landingDecay * deltaSeconds);
+    const direction = directCamera({
+      drive: this.speedDrive(snapshot),
+      locomotion: snapshot.player.locomotion,
+      landing: this.landingImpulse,
+      reducedMotion: this.settings.reducedMotion,
+    });
+    this.camera.fov = THREE.MathUtils.damp(this.camera.fov, snapshot.camera.fov + direction.offset, direction.damping, deltaSeconds);
     this.camera.updateProjectionMatrix();
   }
 
@@ -669,7 +688,12 @@ export class GameRenderer {
   };
 
   private pixelRatio(width: number, height: number): number {
-    const capScale = Math.min(1, Math.sqrt((1920 * 1080) / Math.max(1, width * height * window.devicePixelRatio ** 2)));
+    // A phone at a pixel ratio of three asks for more pixels than a 1080p desktop and has
+    // a fraction of the fill rate to draw them with. Dynamic resolution would find this
+    // on its own, but only after several seconds of a bad frame -- capping the target up
+    // front is the difference between a run that starts well and a run that recovers.
+    const budget = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 1280 * 720 : 1920 * 1080;
+    const capScale = Math.min(1, Math.sqrt(budget / Math.max(1, width * height * window.devicePixelRatio ** 2)));
     return Math.max(0.5, window.devicePixelRatio * capScale * this.effectiveRenderScale());
   }
 

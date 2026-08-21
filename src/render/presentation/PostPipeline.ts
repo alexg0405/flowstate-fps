@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
+import { TONE, toneCurveGlsl } from './toneCurve';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { SaveDataV1 } from '../../contracts';
@@ -42,14 +43,17 @@ class CombinedScenePass extends Pass {
 }
 
 /**
- * Grade plus speed feedback in one pass.
+ * The whole of the image pipeline that is not lighting: the authored tone curve, the
+ * palette, and the speed feedback, in one pass.
  *
- * Runs before `OutputPass`, on the linear buffer. Moving it after tone mapping is
- * arguably more correct -- the filmic curve clamps to 0..1 -- but the grade's tuning
- * was built against linear input, and post-tonemap the same curve lifts mid tones
- * instead of crushing highlights, which washes the whole route out. Folding the speed
- * effects into this pass means they cost no extra fullscreen pass, which matters
- * because the stack already spends about ten on bloom.
+ * Runs on the linear buffer before `OutputPass`, and it is the *only* curve in the stack
+ * now -- `renderer.toneMapping` is `NoToneMapping`, so `OutputPass` does nothing but the
+ * colour-space conversion. That is the change: this used to sit downstream of ACES and
+ * spend most of its budget undoing it, which is why its own comment recorded that moving
+ * it "washes the whole route out". See `toneCurve`.
+ *
+ * The speed effects stay folded in here because they cost no extra fullscreen pass, which
+ * matters more than ever now that the phone profile caps the render target.
  */
 const CyberDuskGrade = {
   uniforms: {
@@ -58,7 +62,6 @@ const CyberDuskGrade = {
     /** 0 at a standstill, 1 at the speed the effects are tuned to peak at. */
     speed: { value: 0 },
     streakStrength: { value: 1 },
-    saturation: { value: 1.22 },
   },
   vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
   fragmentShader: `
@@ -66,9 +69,8 @@ const CyberDuskGrade = {
     uniform float gradeStrength;
     uniform float speed;
     uniform float streakStrength;
-    uniform float saturation;
     varying vec2 vUv;
-    vec3 filmicCurve(vec3 x){return x*x*(3.0-2.0*x);}
+    ${toneCurveGlsl}
     void main(){
       vec2 centred=vUv-0.5;
       float radius=length(centred)*2.0;
@@ -89,19 +91,12 @@ const CyberDuskGrade = {
         c.r=texture2D(tDiffuse,vUv-centred*split).r;
         c.b=texture2D(tDiffuse,vUv+centred*split).b;
       }
-      float luma=dot(c,vec3(.2126,.7152,.0722));
-      // Split tone toward the palette: cool ink in the shadows, warm yellow in the
-      // highlights, which is the contrast the menu is built out of.
-      vec3 shadowTint=vec3(.72,.86,1.12);
-      vec3 highlightTint=vec3(1.14,1.06,.72);
-      vec3 tinted=c*mix(shadowTint,highlightTint,smoothstep(.18,.82,luma));
-      tinted=mix(tinted,filmicCurve(clamp(tinted,0.0,1.0)),.18);
-      // Saturation is a ratio against luma, so it is safe on the linear buffer this
-      // pass runs against. A contrast multiply is not: linear values here run well
-      // above 1, so pivoting about a mid grey amplifies highlights into a white-out.
-      // The contrast for this look comes from exposure and albedo instead.
-      tinted=mix(vec3(dot(tinted,vec3(.333))),tinted,saturation);
-      vec3 graded=mix(c,tinted,gradeStrength);
+      // The curve. The strength uniform mixes it against the same scene at plain
+      // exposure, so the low graphics profile gets a gentler statement of the palette
+      // rather than a different one -- and so it can be turned off entirely to see what
+      // the lighting actually produced.
+      vec3 plain=clamp(c*${TONE.exposure.toFixed(4)},0.0,1.0);
+      vec3 graded=mix(plain,flowstateTone(c),gradeStrength);
       // Closing the frame in at speed, which reads as tunnelling.
       graded*=1.0-drive*0.22*smoothstep(0.35,1.15,radius);
       gl_FragColor=vec4(graded,1.0);
@@ -150,7 +145,7 @@ export class PostPipeline {
     // every lit surface into a white-out, and even 0.96 washed the frame whenever an
     // emissive strip came close to the camera.
     this.bloomPass.threshold = 1.05;
-    this.gradePass.uniforms.gradeStrength.value = this.quality === 'low' ? 0.62 : 0.88;
+    this.gradePass.uniforms.gradeStrength.value = this.quality === 'low' ? 0.72 : 1;
     // Reduced motion keeps the grade and drops only the motion cues.
     this.gradePass.uniforms.streakStrength.value = this.reducedMotion ? 0 : this.quality === 'high' ? 1 : 0.6;
   }
@@ -187,6 +182,12 @@ export class PostPipeline {
     if (requested === 'high') return 'high';
     if (requested === 'medium') return 'medium';
     const pixelBudget = window.innerWidth * window.innerHeight * window.devicePixelRatio ** 2;
+    // A phone reports a small window at a large pixel ratio, so on pixel budget alone it
+    // lands in the same bucket as a laptop and gets a laptop's post chain. The primary
+    // pointer is the cheapest honest signal that the GPU behind it is a mobile one.
+    if (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
+      return pixelBudget > 2_000_000 ? 'low' : 'medium';
+    }
     return pixelBudget > 4_000_000 ? 'medium' : 'high';
   }
 }

@@ -1872,3 +1872,402 @@ sessions of work, and worth deciding whether the game wants it before starting.
 
 - The three visual baselines were not regenerated and did not need to be. If a future audio
   or HUD pass moves them, something is wrong -- that inference is still good.
+
+## 17. The seven things `SOUND.md` asked for, and the phone it said nothing about
+
+Two jobs in one pass: implement the priority table at the end of `SOUND.md`, and make the
+game playable on a touch device -- which is the feature section 16 closed by surveying and
+deciding was worth three to five sessions.
+
+Verified at the end: `npm test` **515 passing / 41 files** (up from 471 / 38), `npm run
+typecheck` clean, `npm run build` clean, `npm run art:validate` clean at 1.93 MiB of
+25.00 MiB, the 3 Chromium visual baselines passing **untouched**, and 4 new Chromium e2e
+cases driving the touch scheme through a real browser. One pre-existing e2e failure
+survives and is not this pass's: `freezes the frame on a landed blow` fails inside
+`fightIntoTheAtrium`, with two hostiles left after twenty-four blind sweeps, and it fails
+identically on a stashed tree at the same load average. Trap 3 called this.
+
+### What can now be measured, which is the item everything else should be read through
+
+`tests/support/offlineAudio.ts` is a deterministic offline Web Audio renderer, and
+`tests/support/loudness.ts` is BS.1770-4. Together they render the **real graph** -- the
+same `AudioManager`, the same generated impulse response, the same envelopes and routing,
+driven by the same `consume` and `sustain` calls the runtime makes -- against a scripted
+tape, and hand back true peak and loudness. The browser has `OfflineAudioContext` for
+this; Node has nothing, and the alternative was measuring in Playwright, where the suite
+is least trustworthy.
+
+The apparatus is checked before the measurement: a full-scale stereo sine at 1 kHz reads
+0 LUFS, which is what the standard's -0.691 offset exists to make true.
+
+**One representative fight measures:**
+
+| | measured | industry target |
+| --- | --- | --- |
+| true peak | **-12.5 dBFS** | under -1 dBFS |
+| integrated | **-31.6 LUFS** | -23 LUFS ±2 |
+| max short-term | **-30.9 LUFS** | -- |
+| max momentary | **-28.7 LUFS** | -- |
+
+So the mix is **roughly eight decibels quiet and is throwing away eleven decibels of
+headroom**, and the worst case the content can produce -- a heavy finishing three hostiles
+on one tick, with the heal, three chain links and the duck all landing together -- only
+reaches -10.1 dBFS. That is the first honest number this mix has ever had, and it is
+deliberately not acted on here: the constants are `BUS_LEVEL` and
+`audioMix.defaultVolume`, turning them is a taste decision, and the player has said they
+like the register. What the tests do instead is fix a band around today's figures, so the
+next move on the level is a deliberate one.
+
+Approximations are documented at the head of the renderer. The compressor is the one to
+distrust: Chrome's has lookahead and a more elaborate release than a one-pole.
+
+### The other six
+
+1. **Cues are scheduled off `event.tick`.** `consume` runs once per *rendered* frame with
+   up to five simulation steps' events in it, and everything used to be scheduled at
+   `currentTime` -- so a hit from the first step played up to 83 ms late and simultaneously
+   with a hit from the fifth. The step is a fixed 1/60 s and every event carries its tick,
+   so the offset is exact. A burst is now a rhythm rather than a cluster.
+2. **Distance is a delay and a lowpass.** `placement` returns flight time (343 m/s),
+   an absorption scale on every noise cutoff, and a harder rolloff for transients than for
+   bodies -- because a distant shot is a muffled boom with no edge at all. It costs no
+   node: every cue here is a one-shot, so the delay is just when it starts.
+3. **A mechanical layer, per chassis.** Two band-limited clicks, one on the shot and one a
+   bolt-throw after it, randomised per event id. A shotgun's action is slow, heavy and low
+   where an SMG's is light and quick, and the reload and the dry trigger use it too. This
+   is the first time fitting a gun at the bench has been audible.
+4. **Threat-weighted cues.** A bot will not commit a shot until the player is inside its
+   firing arc, so *facing* is the honest reading of "about to hurt you". A hostile lined up
+   on the player is about 7 dB over one pointed elsewhere, which is the gap Overwatch puts
+   between its top threat bucket and its third -- and the same reading inverted is a cull.
+5. **One HDR window and one policy table, replacing two hand-written caps.** Every cue has
+   an `importance` in decibels under a kill and an optional per-batch `limit`. The window
+   rises to the loudest thing scheduled and falls at 34 dB a second; anything more than
+   26 dB under it is not worth a voice and is not built. A surface tick is audible under a
+   shot and inaudible under a body going down, which is what `MAX_IMPACTS_PER_BATCH` and
+   `MAX_KILLS_PER_BATCH` were each reaching for. Importance is deliberately not the
+   authored gain: the telegraph is one of the quietest cues in the mix and is ranked near
+   the top, because it is the only warning the player gets.
+6. **A pulse in the bed.** A gated blip on eighths at 96 bpm, opening with the hostiles
+   that can still act and stopping when the room is cleared. It is a held oscillator
+   through a shaping curve into the layer's own gain rather than a queue of scheduled
+   events, which is what keeps it from drifting and, more importantly, keeps it from ever
+   pulling a gameplay cue onto a grid. It is under 0.02 gain: a pulse you notice is a pulse
+   you mute.
+
+Two things `SOUND.md` discusses and the priority table does not, both left: the **tail**
+layer, which wants the level to publish indoor against outdoor so two reverbs can be
+crossfaded, and **round-robin variation** on the blade's transient, which wants two tick
+spectra alternating with the viewmodel's swing direction.
+
+**Nobody working on this can hear it.** What is guarded is that each cue reacts to the
+state it claims to react to, that the register and the relative levels hold, that the
+window culls what it says it culls, and now that the output does not clip and has not
+drifted. The e2e drives a real graph through a real fight, which is the only proof that it
+runs at all.
+
+### The phone
+
+Section 16's survey listed five things in order -- an input scheme first, then landscape
+and fullscreen, then a performance profile, then the play frame under 900 px, then the
+touch niceties. All five landed.
+
+**The scheme is `(pointer: coarse)`, and that is load bearing.** It describes the device's
+*primary* pointer, so a laptop with a touchscreen and a trackpad keeps the keyboard scheme
+and a phone gets the overlay. The looser `any-pointer: coarse` would put a thumbstick over
+the HUD of every touchscreen laptop in existence. It is watched rather than read once.
+
+**Nothing about the simulation changed.** `InputController` grew a `TouchInput` surface
+that produces the same three verbs the mouse and keyboard produce -- a bit went down, a bit
+came up, the view moved -- so the double-tap that becomes a dash, the edge queue that
+survives a throttled frame, and `simulationReplay` are all untouched. The stick is
+quantised to the movement bitmask *in the input layer* rather than the simulation growing
+an analogue axis, because the movement motor is momentum-free on the ground and snaps
+velocity to the input, which is the decision the whole movement kit rests on.
+
+The stick is floating -- it appears where the thumb lands rather than waiting in a corner
+to be found -- with a deliberately generous deadzone, because a resting thumb drifts and a
+drifting thumb that walks the player off a rooftop is the worst thing a touch scheme can do
+to this game. Sprint is the last 14 per cent of the throw, so it stays a commitment.
+
+Ten controls, ordered by how often they are pressed, which the layout turns into distance
+from the corner the thumb rests in: `CUT` is the largest thing on screen and nearest it.
+Two are contextual -- `PULL` only exists while a hook is out, `RELOAD` and `AIM` only while
+the gun is up -- which is how a phone holds ten controls in the room for eight. There is no
+dash button: a dash is a double-tapped jump on every device, and a button of its own would
+be a second way to spend one charge.
+
+The two HUD corners live exactly where the two thumbs do, so on touch they move to the top
+of the frame. Nothing was removed; the play frame is still six readouts in four zones, and
+the zones are the ones a thumb is not covering.
+
+**The performance profile is two caps, both on the same media query.** Auto graphics
+quality returns `low` or `medium` on a coarse pointer rather than reading pixel budget
+alone -- a phone reports a small window at a large pixel ratio and lands in the same bucket
+as a laptop. And the render target is capped at a 1280x720 budget instead of 1920x1080.
+`ResolutionController` would find this on its own, but only after several seconds of a bad
+frame; capping up front is the difference between a run that starts well and one that
+recovers.
+
+**One real defect fell out of the frame work.** At 915x412 -- a phone held in landscape --
+the menu's action column ran underneath the fixed footer, and the footer took the click:
+`START RUN` was unreachable. Two fixes, because it was two bugs: the menu lays out as a
+scrolling column under 560 px of height as well as under 640 px of width, and the footer is
+a hint rather than a control and no longer takes pointer events at all.
+
+Fullscreen and the orientation lock are asked for and never insisted on -- iPhone Safari
+implements neither -- and portrait gets a notice rather than a run the player cannot see.
+
+`tests/e2e/mobile.spec.ts` drives all of it in Chromium: the scheme appears, the thumbstick
+walks the player down the route, the pause control hands the run back, portrait asks to be
+turned, and a desktop is left entirely alone. Firefox cannot emulate a touch device, so the
+file skips there.
+
+## 18. An animated painting that behaves like a physical place
+
+`RENDER.md`'s priority table, implemented. The brief was written first and its survey is
+the reason this pass knew where to cut: the render stack was computing a photograph and
+then arguing with it, and eight items fell out of that one observation.
+
+Verified at the end: `npm test` **551 passing / 43 files** (up from 515 / 41), `npm run
+typecheck` clean, `npm run build` clean, `npm run art:validate` clean at 1.93 MiB of
+25.00 MiB, the 4 touch e2e cases passing, the audio-graph e2e passing, and the **three
+visual baselines regenerated** -- which is the expected result and the reason `RENDER.md`
+said to settle it before starting. The inference behind them is unchanged and still good:
+pure audio and pure UI work cannot move them, and this pass is neither.
+
+### The finding the rest of it turned on
+
+`GameRenderer` set `ACESFilmicToneMapping` at an exposure of 0.52. ACES is a film curve --
+its job is to make a physically lit scene look photographed, which means desaturating and
+compressing exactly the pure primaries this game's nine-colour palette is built from. Then
+`CyberDuskGrade`, downstream of it, pushed saturation back up by 1.22 and re-applied its
+own contrast curve. Its own comment recorded the collision without naming it: moving the
+grade after tone mapping "washes the whole route out", which is two curves disagreeing
+about where the mid tones are.
+
+There is one curve now, in `toneCurve`, folded into the grade pass; `renderer.toneMapping`
+is `NoToneMapping` and `OutputPass` does nothing but the colour-space conversion. Three
+properties the photographic one could not have:
+
+- **Black is black.** No toe, and a black point subtracted after exposure. A film curve is
+  built never to let a surface reach nothing, and this look needs walls that do.
+- **The shoulder is on luminance, not per channel.** Scaling the whole triple by the ratio
+  luminance was compressed by leaves hue and saturation where the lighting put them. A
+  per-channel roll-off desaturates as it compresses, which is what took the colour out of
+  the neon.
+- **It is linear under the knee**, so mid tones are the values the materials produced.
+
+`applyToneCurve` is a TypeScript mirror of the shader, and it exists so the curve's
+properties are assertable rather than arguable: black in gives black out, the curve never
+falls, nothing leaves the range, and a driven cyan comes out cyan rather than white.
+
+### Quantised light, and the colour a surface turns as it leaves it
+
+Every material in the game is now a banded toon material on a **coloured** ramp. The band
+count is per material -- three for architecture, five for a hostile, four for glass, two
+for signal trim -- because a wall has to read as a plane and a figure has to hold its
+volume against one. That is the Guilty Gear Xrd lesson: the inputs to lighting are art.
+
+The shadow hue is the same texture. `three.js` reads a gradient map's *red channel* and
+broadcasts it, so a one-line shader edit reads `.rgb` instead, and a ramp that runs from
+`[0.16, 0.26, 0.34]` to white is *cangiante* -- a face changing hue as it turns away rather
+than merely getting darker. Cast shadows take their colour from the hemisphere light
+instead, which is why that light is now the most important one in the rig.
+
+Given up deliberately: specular response, environment reflection, clearcoat, sheen and
+transmission. `setupEnvironmentMap` is gone with them -- a PMREM probe that nothing samples
+is a render target and a shader compile paid for nothing. What is bought, besides the look,
+is a materially cheaper shader on the phone profile §17 added.
+
+**The bug this pass spent the longest on is worth recording.** `Material.copy` does not
+carry `onBeforeCompile` or `customProgramCacheKey`: they are own properties assigned per
+instance and the copy list does not include them. So every cloned material silently
+reverted to a stock toon shader. The symptom was specific and misleading -- the world took
+the treatment and the *hostiles did not*, because hostiles clone their materials per
+instance to fade a body out on death, and the batching pass clones them to apply a variant
+accent. `rebindGraphicShading` is the fix and every clone site in the renderer calls it.
+
+### Readability, which is the budget all of this spends
+
+A world of flat masses and near-black shadow will swallow a figure standing in it. The
+usual answer is an outline on everything that can be shot, and it is the one thing the
+reference does not have: shapes there separate through value and colour, not contour.
+
+So figures get a thin fresnel edge in the room's own hue -- 1.3 on a hostile against 0
+on architecture -- and an **albedo floor**, which is the same lesson as the band count
+stated as a number. The authored hunter GLBs are near-black by design; that was readable
+while an environment probe was filling them in and is a hole in the frame without one.
+`liftAlbedo` scales rather than adds, so a dark red stays red instead of turning pink.
+
+### The other five
+
+- **Graphic FX.** `graphicShapes` is the vocabulary: an impact is a white angular star for
+  two frames, a hard-edged dark fracture that outlives it, and flat shards -- rather than a
+  soft ring scaling up and fading, which is a renderer describing expanding gas. Every
+  instance is generated from its own seed, so a held trigger never stamps the same shape
+  twice. The fracture is the only effect in the game drawn *darker* than what is behind it,
+  which is only possible because it is the only one not blending additively.
+- **The camera as an authored system.** `cameraDirection` turns one effect into a
+  vocabulary: speed widens, a hook widens further, a slide widens a little, and touching
+  down *compresses* and snaps back on its own damping. All of it is a clamped offset on the
+  player's own field-of-view setting, and none of it exists under reduced motion. Aim and
+  camera control stay a precision instrument, which is the rule this repo has now written
+  down three times.
+- **Vertex-painted masses.** `facePaint` decides a skyline tower's faces by which way they
+  point -- pale cyan, dark teal, magenta-lit, shadow -- and multiplies that over whatever
+  light arrives. Applied to generated geometry only. The catalogued GLB art was left out
+  deliberately, which `RENDER.md` flagged as a decision to take before starting rather than
+  during.
+- **Animating on twos.** Hostile *poses* advance in whole twelfths of a second, with the
+  remainder carried so stepped animation does not run slow. Their positions, their facing,
+  the camera, the viewmodel, hit registration and the mix are all untouched -- a figure
+  that teleported twelve times a second is a figure the player cannot lead a shot on, and
+  §17 had just spent a pass making cues land on the tick they happened on.
+- **Graphic moments.** Three, and the count is the design: a wave arriving, a thirty-metre
+  door opening, and going down -- the same events the mix reserves its deepest punctuation
+  for. Clearing the route is deliberately *not* one of them: the results card mounts on the
+  same frame at a higher stacking level, so that panel would have played its whole life
+  underneath something nobody can see past.
+  Masked hollow through the middle like the chain flourish, so nothing lands inside the
+  fifteen degrees the reticle cluster is budgeted, and under reduced motion the panel still
+  says what happened without moving across the frame to say it.
+
+The diegetic version of that last item -- a train filling the frame, a palm silhouette
+wiping the scene -- is level-authoring work and was not attempted.
+
+## 19. The two layers the tables left out
+
+Short pass, and it closes `SOUND.md`: both of the items that brief discusses in its body
+but did not put in its priority table.
+
+Verified: `npm test` **557 passing / 43 files**, `npm run typecheck` clean, `npm run build`
+clean, and the audio-graph e2e passing -- which matters more than usual here, because this
+pass doubles the number of convolvers in the graph and a `ConvolverNode` that fails to
+build fails silently against a test double.
+
+### The tail, which was one room for a route that is two
+
+The mix had one generated impulse response with three fixed send levels. That is a single
+room for the whole game, and the route is a bunker corridor **and** an open rooftop deck.
+The five-layer weapon this mix was two layers short of got its mechanical layer in §17;
+this is the other one, and it is the layer that says *where* a sound happened.
+
+Two rooms now, crossfaded:
+
+| | interior | exterior |
+| --- | --- | --- |
+| length | 0.85 s | 2.6 s |
+| decay | 3.6 | 2.3 |
+| damping | 0.055 | 0.17 |
+
+Short and dark against long and bright, which is the difference between a space with a
+ceiling and a set of distant hard surfaces. The crossfade sits *downstream* of the two
+existing sends rather than replacing them: how wet a cue is belongs to the cue, and which
+room the tail is belongs to where the player is standing, and keeping those as separate
+stages is what lets the second change without disturbing the first.
+
+**What decides it is height**, and not as a proxy. The route is authored as a climb out of
+a bunker, and its three arenas are checkpointed at 3.1 m, 6.1 m and 11.1 m precisely
+because the Atrium is enclosed and the Roofline is a deck between towers. `openness` in
+`content/config.ts` reads the camera's own height against those two, so the space opens
+*continuously* as the player walks up the ramp rather than switching at a boundary -- and
+it is followed at the bed's own rate on top of that. The limitation is stated where the
+constant is: a level that put an open courtyard at ground level would read as enclosed, and
+the honest fix for that is an authored volume per room, which is a level-schema change and
+a migration.
+
+Measured after: true peak **-12.47 dBFS**, integrated **-31.76 LUFS**, against -12.48 and
+-31.63 before. Level-neutral, which is the correct result -- the crossfade preserves the
+total send, and a change of room should change the character of the tail and not its
+loudness. That is the offline meter from §17 doing the job it was built for.
+
+### The blade, which sounded like one recording
+
+The rule of thumb is that anything heard more than twice needs varying, and the blade is
+the primary verb -- the most-heard cue in the game. It *was* varied, by two per cent of
+pitch, and pitch is the least audible knob there is on a five-millisecond transient.
+
+So each blade now has **two edges** rather than one, alternating per swing, differing in
+pitch, filter Q and decay length -- Tempo's are 1200 Hz at Q 1.4 for 5 ms against 970 Hz at
+Q 2.7 for 7.5 ms. Decay is the knob that carries it: the recording double now captures the
+envelope's ramp-to-silence, so "the pair differ by half again in how long they ring" is a
+case rather than a claim, and the surface tick and the whiff vary in length too.
+
+The alternation is a counter rather than a hash of the event id, because ids do not
+alternate -- other events interleave between two cuts, so their parity is arbitrary. It is
+still deterministic for a given event stream, which is the rule the rest of the variation
+in the file follows. And there is nothing for it to desync from: the viewmodel's two swing
+curves are light against heavy, not first against second, so this is the only alternation
+in the game.
+
+### What was left, and then taken
+
+Both of the outstanding items were decisions rather than work, and both were then decided.
+They are §20.
+
+## 20. The two decisions
+
+The last two items from `SOUND.md` and `RENDER.md` were held back deliberately because
+neither was engineering with a right answer. Both were taken.
+
+Verified: `npm test` **559 passing / 43 files**, `npm run typecheck` clean, `npm run build`
+clean, the touch and audio-graph e2e passing, and the three visual baselines regenerated
+again -- expected, since the second item changes what every wall on the route is coloured.
+
+### The mix was eight decibels quiet, and now it is not
+
+`BUS_LEVEL` went from 0.75 to 1.9, which is **+8.06 dB**, and the limiter's threshold moved
+by exactly the same amount. That second half is the whole design of the change: raising a
+mix into a fixed limiter threshold is not a level decision, it is a compression decision
+made by accident, and this mix's character is the thing the player asked to keep.
+
+Measured, at full volume, on the same representative fight:
+
+| | before | after | target |
+| --- | --- | --- | --- |
+| true peak | -12.5 dBFS | **-4.4** | under -1 |
+| integrated | -31.6 LUFS | **-23.7** | -23 ±2 |
+| short-term max | -30.9 LUFS | -22.9 | |
+| momentary max | -28.7 LUFS | -20.7 | |
+
+The loudness moved by 8.07 dB against a trim of 8.06 dB, which is the confirmation worth
+having: the limiter did not engage any harder, so this is where the mix sits and not what
+it does. The worst case the content can produce -- a heavy finishing three hostiles with
+the heal, three chain links and the duck together -- measures **-2.0 dBFS**, which is the
+tightest margin in the game and is now the number the test watches.
+
+Two things this fixes that nobody had words for. The game was quieter than everything else
+on the player's machine, and the volume slider did not have the range to fix it: at the
+default of 0.8 the mix now sits about -25.6 LUFS with headroom in both directions, where
+before it could not reach the target even at maximum.
+
+### The route's walls are painted now
+
+`facePaint` reached only the generated skyline, because `RENDER.md` flagged the catalogued
+art as a decision. Taking it turned up a distinction worth recording: the route's
+*primitive* art is the diagnostic fallback rather than what normal play draws, so the only
+geometry left to reach was the authored environment -- and that is the largest surface in
+the frame.
+
+The rule needed one change to be safe there. A stack of boxes wants a hard boundary between
+two faces, because that edge *is* the composition; authored art has smoothed normals around
+its bevels, and a hard rule seams a surface it was never describing. So `paintByFacing`
+became a weighted blend with a hardness exponent, and `FACE_BLEND` is the one number
+separating the two cases -- 16 for a mass, 4 for authored art. At 16 it is the dominant axis
+to within a rounding error, so the two are genuinely the same function rather than two that
+have to be kept in agreement.
+
+**The bug this turned up is the useful part of the entry.** Reading normals off
+`attribute.array` works for a `BoxGeometry` and does not work for a GLB: imported normals are
+routinely interleaved with the other attributes and routinely stored as normalised integers,
+so the array is neither the right length nor the right units. The result was a colour
+attribute of the wrong count and `offset is out of bounds` the moment `BatchedMesh` tried to
+copy it -- a fault that took the whole run down, and one that only appears on real content.
+`paintFaces` reads through the attribute's own accessors, and the skyline goes through the
+same door so there is one way to paint a geometry rather than two.
+
+What it buys is the asymmetry the reference is built on: the two sides of a corridor are no
+longer the same wall at two brightnesses. One is pale cyan and one is dark teal, ceilings
+recede into near-black, and the surfaces facing back down the route carry the magenta the
+sky is lit with.

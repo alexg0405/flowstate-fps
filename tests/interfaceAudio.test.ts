@@ -4,7 +4,13 @@ import { AudioManager, mixKey } from '../src/audio/AudioManager';
 import { cueFor, installInterfaceAudio } from '../src/audio/interfaceAudio';
 
 interface Voice { frequency: number; gain: number; type: string; startAt: number; filter: string | null }
-interface Noise { cutoff: number; gain: number; filter: string }
+/**
+ * `startAt` is the envelope's own start, which is the only clock a noise layer has, and
+ * `seconds` is where that envelope was told to reach silence. Decay length is the most
+ * audible thing about a transient of this length -- far more so than a two per cent
+ * detune -- so it has to be observable or the variation cannot be tested at all.
+ */
+interface Noise { cutoff: number; gain: number; filter: string; startAt: number; seconds: number }
 /** An automation written to a gain node that belongs to no voice: the bus, ducking. */
 interface Duck { value: number; at: number }
 
@@ -36,8 +42,10 @@ function recordingContext() {
    */
   // The bed's two per-oscillator balance gains are not in this list on purpose: they are
   // created straight after an oscillator, so they are attributed to it as voices. What is
-  // left source-less is the bus, the two sends, and the bed's two output gains.
-  const shared: string[] = ['bus', 'master', 'wetNear', 'wetFar', 'floor', 'harmonic', 'drive'];
+  // left source-less is the bus, the two sends, the two rooms they crossfade between, and
+  // the bed's four output gains -- the pulse's depth among them, which is built before its
+  // own oscillator for exactly this reason.
+  const shared: string[] = ['bus', 'master', 'wetNear', 'wetFar', 'interior', 'exterior', 'floor', 'harmonic', 'drive', 'pulse', 'pulseDepth'];
   const bedAutomation: { node: string; value: number }[] = [];
   /** Every level written to the player's own gain, which sits after the ducked bus. */
   const volumes: number[] = [];
@@ -45,6 +53,10 @@ function recordingContext() {
   const pitchTargets: { from: number; to: number }[] = [];
   /** Levels written to the two reverb sends, which a live chain opens. */
   const sendAutomation: { node: string; value: number }[] = [];
+  /** Every pan a placed voice was given, in the order the voices were built. */
+  const pans: number[] = [];
+  /** Each generated impulse response, so the two rooms are observable. */
+  const impulses: { length: number }[] = [];
   /** How long each tonal voice was scheduled for, in `voices` order. */
   const durations: number[] = [];
   let sharedCount = 0;
@@ -54,9 +66,10 @@ function recordingContext() {
     constructor(
       private readonly onSet?: (value: number, at: number) => void,
       private readonly onTarget?: (value: number) => void,
+      private readonly onRamp?: (at: number) => void,
     ) {}
     setValueAtTime(value: number, at: number) { this.value = value; this.onSet?.(value, at); return this; }
-    exponentialRampToValueAtTime(_value: number, _at: number): Param { return this; }
+    exponentialRampToValueAtTime(_value: number, at: number): Param { this.onRamp?.(at); return this; }
     linearRampToValueAtTime() { return this; }
     setTargetAtTime(value: number, _at: number, _constant: number): Param { this.onTarget?.(value); return this; }
     cancelScheduledValues() { return this; }
@@ -132,7 +145,11 @@ function recordingContext() {
         // be reading a volume slider or a reverb send.
         const push = (value: number) => {
           if (label === 'master') volumes.push(value);
-          else if (label === 'wetNear' || label === 'wetFar') sendAutomation.push({ node: label, value });
+          // The two sends and the two rooms they crossfade between all record as sends
+          // rather than as bed layers, for the reason above: one is how wet a cue is and
+          // the other is how big the room is, and neither is a layer of the bed. A test
+          // asserting the bed went silent would otherwise be reading a reverb.
+          else if (label === 'wetNear' || label === 'wetFar' || label === 'interior' || label === 'exterior') sendAutomation.push({ node: label, value });
           else bedAutomation.push({ node: label ?? '?', value });
         };
         const param = new Param((value, at) => {
@@ -154,12 +171,19 @@ function recordingContext() {
         if (next.label) sends.push(next.label);
         return next;
       };
-      node.gain = new Param((value) => {
+      let pending: Noise | null = null;
+      node.gain = new Param((value, at) => {
         if (source.kind === 'osc') {
           voices.push({ frequency: source.node.pitch, gain: value, type: source.node.type, startAt: source.node.startedAt, filter: filter?.type ?? null });
         } else if (filter) {
-          noises.push({ cutoff: filter.frequency, gain: value, filter: filter.type });
+          // A noise layer has no oscillator to carry a start time, so the envelope's own
+          // is it -- and it is the same number `noise` passes to `source.start`.
+          pending = { cutoff: filter.frequency, gain: value, filter: filter.type, startAt: at, seconds: 0 };
+          noises.push(pending);
         }
+      }, undefined, (at) => {
+        // The decay, which is written as a ramp to silence immediately after the level.
+        if (pending) pending.seconds = at - pending.startAt;
       });
       return node;
     },
@@ -170,7 +194,7 @@ function recordingContext() {
     },
     createBufferSource() {
       pendingSource = { kind: 'buffer' };
-      return Object.assign(new Node(), { buffer: null, onended: null as (() => void) | null, start() {}, stop() {} });
+      return Object.assign(new Node(), { buffer: null, loop: false, onended: null as (() => void) | null, start() {}, stop() {} });
     },
     createBiquadFilter() {
       const record = { type: '', frequency: 0 };
@@ -195,7 +219,11 @@ function recordingContext() {
     },
     createStereoPanner() {
       const node = new Node() as Node & { pan: { value: number } };
-      node.pan = { value: 0 };
+      let placed = 0;
+      node.pan = {
+        get value() { return placed; },
+        set value(next: number) { placed = next; pans.push(next); },
+      };
       return node;
     },
     createConvolver() {
@@ -209,11 +237,14 @@ function recordingContext() {
     },
     createBuffer(channels: number, length: number) {
       const data = Array.from({ length: channels }, () => new Float32Array(length));
+      // Two channels is an impulse response; one is the noise buffer everything else
+      // runs on. Recording their lengths is how the two rooms become observable at all.
+      if (channels === 2) impulses.push({ length });
       return { numberOfChannels: channels, getChannelData: (channel: number) => data[channel] };
     },
     close() {},
   };
-  return { context, voices, noises, ducks, sends, bedAutomation, filterCutoffs, volumes, pitchTargets, sendAutomation, durations };
+  return { context, voices, noises, ducks, sends, bedAutomation, filterCutoffs, volumes, pitchTargets, sendAutomation, durations, pans, impulses };
 }
 
 async function busWith(recorder: ReturnType<typeof recordingContext>): Promise<AudioManager> {
@@ -527,7 +558,7 @@ describe('the mix has weight, space and punctuation', () => {
 
 describe('the bed under the run', () => {
   const at = (speed: number, threat: number, down = false, links = 0) =>
-    ({ speed, threat, down, chain: { links, window: links > 0 ? 1 : 0 } });
+    ({ speed, threat, down, space: 0.15, chain: { links, window: links > 0 ? 1 : 0 } });
 
   it('says nothing until the run asks for it', async () => {
     const recorder = recordingContext();
@@ -843,7 +874,7 @@ describe('the mix is in one key', () => {
 });
 
 describe('a live chain drives the mix', () => {
-  const bed = (links: number) => ({ speed: 8, threat: 3, down: false, chain: { links, window: 1 } });
+  const bed = (links: number) => ({ speed: 8, threat: 3, down: false, space: 0.15, chain: { links, window: 1 } });
 
   it('opens the floor, the colour note and the room as the chain grows', async () => {
     const state = async (links: number) => {
@@ -897,7 +928,7 @@ describe('a live chain drives the mix', () => {
     const harmonic = async (window: number) => {
       const recorder = recordingContext();
       const bus = await busWith(recorder);
-      bus.sustain({ speed: 8, threat: 3, down: false, chain: { links: 8, window } });
+      bus.sustain({ speed: 8, threat: 3, down: false, space: 0.15, chain: { links: 8, window } });
       return recorder.bedAutomation.filter((entry) => entry.node === 'harmonic').at(-1)?.value ?? -1;
     };
     const open = await harmonic(1);
@@ -912,11 +943,11 @@ describe('a live chain drives the mix', () => {
     // that away, so the drop is what lands.
     const recorder = recordingContext();
     const bus = await busWith(recorder);
-    bus.sustain({ speed: 8, threat: 3, down: false, chain: { links: 8, window: 0.05 } });
+    bus.sustain({ speed: 8, threat: 3, down: false, space: 0.15, chain: { links: 8, window: 0.05 } });
     const floor = recorder.bedAutomation.filter((entry) => entry.node === 'floor').at(-1)?.value ?? 0;
     const cold = recordingContext();
     const coldBus = await busWith(cold);
-    coldBus.sustain({ speed: 8, threat: 3, down: false, chain: { links: 0, window: 0 } });
+    coldBus.sustain({ speed: 8, threat: 3, down: false, space: 0.15, chain: { links: 0, window: 0 } });
     expect(floor).toBeGreaterThan(cold.bedAutomation.filter((entry) => entry.node === 'floor').at(-1)!.value);
   });
 
@@ -953,7 +984,7 @@ describe('a live chain drives the mix', () => {
 
 describe('a cue knows what it hit', () => {
   const roster = (kind: 'ranged' | 'aggressive' | 'bulwark') =>
-    ({ position: [0, 0, 0] as const, yaw: 0, playerId: 1, profiles: new Map([[7, kind]]) });
+    ({ position: [0, 0, 0] as const, yaw: 0, playerId: 1, roster: new Map([[7, { kind, position: [0, 0, 0] as const, facing: 0 }]]) });
   const slash = async (kind: 'ranged' | 'aggressive' | 'bulwark', extra: Record<string, unknown> = {}) => {
     const recorder = recordingContext();
     const bus = await busWith(recorder);
@@ -1191,5 +1222,304 @@ describe('wiring the interface to the bus', () => {
     expect(cue).not.toHaveBeenCalled();
     dispose();
     cue.mockRestore();
+  });
+});
+
+describe('a cue lands when it happened, not when the frame did', () => {
+  it('spreads a batch across the ticks it actually spans', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    // What one rendered frame owing four simulation steps hands the mix: two shots three
+    // ticks apart. They used to be scheduled at the same instant, which is a cluster.
+    bus.consume([
+      { id: 1, tick: 120, kind: 'shot' },
+      { id: 2, tick: 123, kind: 'shot' },
+    ]);
+    const starts = [...new Set(recorder.voices.map((voice) => voice.startAt))].sort((a, b) => a - b);
+    expect(starts[0]).toBe(0);
+    // Three steps of a fixed 1/60 s. Sample-accurate and deterministic, which is what
+    // makes a burst read as a rhythm.
+    expect(starts.at(-1)).toBeCloseTo(3 / 60, 6);
+  });
+
+  it('starts the first event of a batch immediately, whatever tick it carries', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([{ id: 1, tick: 98_765, kind: 'shot' }]);
+    expect(Math.min(...recorder.voices.map((voice) => voice.startAt))).toBe(0);
+  });
+});
+
+describe('distance is a time and a filter, not only a level', () => {
+  const listener = { position: [0, 0, 0] as const, yaw: 0, playerId: 1 };
+  const gateAt = async (metres: number) => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([{ id: 1, tick: 1, kind: 'gateOpen', position: [0, 0, -metres] }], listener);
+    return recorder;
+  };
+
+  it('delays a distant event by its own flight time', async () => {
+    const near = await gateAt(1);
+    const far = await gateAt(40);
+    const earliest = (recorder: { noises: { startAt: number }[] }) => Math.min(...recorder.noises.map((noise) => noise.startAt));
+    // 343 m/s: a door forty metres down the route is 116 ms late, which is most of a beat
+    // and the difference between "somewhere" and "over there".
+    expect(earliest(far) - earliest(near)).toBeCloseTo(39 / 343, 3);
+  });
+
+  it('takes the top off a distant body', async () => {
+    const near = await gateAt(1);
+    const far = await gateAt(40);
+    const cutoff = (recorder: { noises: { cutoff: number }[] }) => Math.max(...recorder.noises.map((noise) => noise.cutoff));
+    // Air absorbs the top far faster than the bottom, so range is audible as darkness
+    // rather than only as quiet.
+    expect(cutoff(far)).toBeLessThan(cutoff(near) * 0.4);
+  });
+
+  it('leaves a cue in the player\'s own hands undelayed and unfiltered', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([{ id: 1, tick: 1, kind: 'shot' }], listener);
+    expect(recorder.noises.every((noise) => noise.startAt < 0.06)).toBe(true);
+  });
+});
+
+describe('the window decides what is worth a voice', () => {
+  const play = async (events: readonly GameEvent[]) => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume(events, { position: [0, 0, 0], yaw: 0, playerId: 1 });
+    return recorder;
+  };
+  const kill: GameEvent = { id: 1, tick: 1, kind: 'kill', targetEntityId: 7 };
+  const surface: GameEvent = { id: 2, tick: 1, kind: 'impact', position: [2, 0, -3] };
+  const shot: GameEvent = { id: 3, tick: 1, kind: 'shot' };
+
+  it('spends nothing on a surface tick under a kill, and plays the same tick under a shot', async () => {
+    expect((await play([surface])).noises.length).toBeGreaterThan(0);
+    // Counted against the same batch without it rather than matched by cutoff: a kill
+    // carries a tick of its own within a couple of hundred hertz of this one, which is
+    // most of the reason the window exists.
+    expect((await play([kill, surface])).noises).toHaveLength((await play([kill])).noises.length);
+    // And a round hitting a wall is worth hearing while the player is shooting at it.
+    expect((await play([shot, surface])).noises.length).toBeGreaterThan((await play([shot])).noises.length);
+  });
+
+  it('never culls the one warning the player gets', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume([
+      { id: 1, tick: 1, kind: 'kill', targetEntityId: 7 },
+      { id: 2, tick: 1, kind: 'enemyTelegraph', position: [0, 0, -9], sourceEntityId: 8, value: 0.3 },
+    ], { position: [0, 0, 0], yaw: 0, playerId: 1 });
+    // The telegraph is quiet and it is the only thing standing between the player and
+    // damage, so it is ranked far above what it is mixed at.
+    expect(recorder.voices.some((voice) => voice.type === 'triangle')).toBe(true);
+  });
+
+  it('holds a shotgun pattern to two surface ticks', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.consume(
+      Array.from({ length: 8 }, (_, index) => ({ id: index + 1, tick: 1, kind: 'impact' as const, position: [index, 0, -4] as const })),
+      { position: [0, 0, 0], yaw: 0, playerId: 1 },
+    );
+    // Two layers each. Eight pellets is one shell, not eight events.
+    expect(recorder.noises).toHaveLength(4);
+  });
+});
+
+describe('the gun is a machine, and the bench is audible in it', () => {
+  const shotWith = async (chassis: 'carbine' | 'smg' | 'shotgun' | 'dmr') => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.setWeaponChassis(chassis);
+    bus.consume([{ id: 41, tick: 1, kind: 'shot' }]);
+    return recorder;
+  };
+
+  it('throws a bolt after the shot rather than only with it', async () => {
+    const recorder = await shotWith('carbine');
+    // The mechanical layer: one click on the shot and one a bolt-throw later. Everything
+    // else in the cue starts at zero.
+    expect(recorder.noises.some((noise) => noise.startAt > 0.03 && noise.startAt < 0.1)).toBe(true);
+  });
+
+  it('gives a shotgun a slower, lower action than an SMG', async () => {
+    const pump = await shotWith('shotgun');
+    const smg = await shotWith('smg');
+    const bolt = (recorder: { noises: { startAt: number; cutoff: number }[] }) =>
+      recorder.noises.filter((noise) => noise.startAt > 0.02).sort((a, b) => b.startAt - a.startAt)[0];
+    expect(bolt(pump).startAt).toBeGreaterThan(bolt(smg).startAt);
+    expect(bolt(pump).cutoff).toBeLessThan(bolt(smg).cutoff);
+  });
+
+  it('makes an empty chamber the machine and nothing else', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.setWeaponChassis('dmr');
+    bus.consume([{ id: 5, tick: 1, kind: 'dryFire' }]);
+    // No sub anywhere: a dry trigger is the one shot cue with no round behind it.
+    expect(recorder.voices).toHaveLength(0);
+    expect(recorder.noises.some((noise) => noise.startAt > 0.03)).toBe(true);
+  });
+});
+
+describe('the mix says which hostile is about to hurt you', () => {
+  const telegraphFrom = async (facing: number) => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    const hostile = { kind: 'ranged' as const, position: [0, 0, -12] as const, facing };
+    bus.consume(
+      [{ id: 9, tick: 1, kind: 'enemyTelegraph', position: [0, 0, -12], sourceEntityId: 4, value: 0.3 }],
+      { position: [0, 0, 0], yaw: 0, playerId: 1, roster: new Map([[4, hostile]]) },
+    );
+    return Math.max(...recorder.voices.map((voice) => voice.gain));
+  };
+
+  it('puts a hostile lined up on the player several decibels over one that is not', async () => {
+    // Facing zero is the simulation's -Z; the player is at +Z from this bot, so a facing
+    // of PI is pointed straight at them and zero is pointed away.
+    const aimed = await telegraphFrom(Math.PI);
+    const oblivious = await telegraphFrom(0);
+    expect(aimed).toBeGreaterThan(oblivious);
+    // About seven decibels, which is the gap Overwatch puts between its top threat
+    // bucket and its third.
+    const gap = 20 * Math.log10(aimed / oblivious);
+    expect(gap).toBeGreaterThan(5);
+    expect(gap).toBeLessThan(9);
+  });
+
+  it('reads intent from the hostile, so a roster-free caller is unchanged', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    expect(() => bus.consume(
+      [{ id: 9, tick: 1, kind: 'enemyTelegraph', position: [0, 0, -12], sourceEntityId: 4, value: 0.3 }],
+      { position: [0, 0, 0], yaw: 0, playerId: 1 },
+    )).not.toThrow();
+    expect(recorder.voices.length).toBeGreaterThan(0);
+  });
+});
+
+describe('the pulse keeps time only while a room is live', () => {
+  const depthAfter = async (threat: number, down = false) => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.sustain({ speed: 8, threat, down, space: 0.15, chain: { links: 0, window: 0 } });
+    return recorder.bedAutomation.filter((entry) => entry.node === 'pulseDepth').at(-1)?.value ?? 0;
+  };
+
+  it('opens with the hostiles that can still act', async () => {
+    expect(await depthAfter(0)).toBe(0);
+    expect(await depthAfter(4)).toBeGreaterThan(0);
+    expect(await depthAfter(4)).toBeGreaterThan(await depthAfter(1));
+  });
+
+  it('stops when the room is cleared, because a pulse you notice is a pulse you mute', async () => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.sustain({ speed: 8, threat: 5, down: false, space: 0.15, chain: { links: 0, window: 0 } });
+    bus.sustain({ speed: 8, threat: 0, down: false, space: 0.15, chain: { links: 0, window: 0 } });
+    expect(recorder.bedAutomation.filter((entry) => entry.node === 'pulseDepth').at(-1)?.value).toBe(0);
+  });
+
+  it('goes with the floor when the player goes down', async () => {
+    expect(await depthAfter(5, true)).toBe(0);
+  });
+
+  it('stays well under the quietest transient in the mix', async () => {
+    // The bed's own rule: a floor you notice is a floor the player turns off, and the
+    // pulse is the most noticeable thing that can be put in one.
+    expect(await depthAfter(5)).toBeLessThan(0.03);
+  });
+});
+
+describe('the blade does not sound like one recording', () => {
+  const swing = async (count: number) => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    for (let index = 0; index < count; index += 1) {
+      bus.consume([{ id: 100 + index, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 }]);
+    }
+    // The edge is the only bandpass in a melee cue; the body under it is a lowpass.
+    return recorder.noises.filter((noise) => noise.filter === 'bandpass');
+  };
+
+  it('alternates two edges rather than repeating one', async () => {
+    const [first, second, third] = await swing(3);
+    // Two consecutive cuts are two different transients, and the third is the first
+    // again: a round robin rather than a random walk, so a combination reads as a
+    // pattern the player can learn.
+    expect(Math.abs(second.cutoff - first.cutoff) / first.cutoff).toBeGreaterThan(0.12);
+    // The third is the first again, bar the per-event detune the whole mix carries: a
+    // round robin rather than a random walk, so a combination reads as a pattern.
+    expect(Math.abs(third.cutoff - first.cutoff) / first.cutoff).toBeLessThan(0.08);
+  });
+
+  it('varies the two in length, which is what is audible at five milliseconds', async () => {
+    const [first, second] = await swing(2);
+    // Pitch is the least audible knob on a transient this short -- two per cent of
+    // 1200 Hz is nothing. The pair differ in how long they ring by half again, which is
+    // the knob the ear actually reads at this duration.
+    expect(Math.max(first.seconds, second.seconds) / Math.min(first.seconds, second.seconds)).toBeGreaterThan(1.3);
+    // And both stay inside the eight milliseconds the register rule allows a transient.
+    for (const edge of [first, second]) expect(edge.seconds).toBeLessThan(0.01);
+  });
+
+  it('gives each blade its own pair, so the styles stay apart', async () => {
+    const edges = async (style: 'tempo' | 'cleave' | 'riposte') => {
+      const recorder = recordingContext();
+      const bus = await busWith(recorder);
+      bus.setBladeStyle(style);
+      bus.consume([{ id: 3, tick: 1, kind: 'melee', sourceEntityId: 1, targetEntityId: 7 }]);
+      return recorder.noises.filter((noise) => noise.filter === 'bandpass')[0].cutoff;
+    };
+    // Riposte is the quick, bright one and Cleave is the heavy, dark one; that ordering
+    // is the same one `content/blades.ts` states in reach and recovery.
+    expect(await edges('riposte')).toBeGreaterThan(await edges('tempo'));
+    expect(await edges('tempo')).toBeGreaterThan(await edges('cleave'));
+  });
+});
+
+describe('the tail says which room a sound happened in', () => {
+  const rooms = async (space: number) => {
+    const recorder = recordingContext();
+    const bus = await busWith(recorder);
+    bus.sustain({ speed: 4, threat: 1, down: false, space, chain: { links: 0, window: 0 } });
+    const at = (node: string) => recorder.sendAutomation.filter((entry) => entry.node === node).at(-1)?.value ?? 0;
+    return { interior: at('interior'), exterior: at('exterior') };
+  };
+
+  it('crossfades rather than switching, so a climb opens the space', async () => {
+    const inside = await rooms(0);
+    const outside = await rooms(1);
+    const between = await rooms(0.5);
+    expect(inside.interior).toBeCloseTo(1, 5);
+    expect(inside.exterior).toBeCloseTo(0, 5);
+    expect(outside.exterior).toBeCloseTo(1, 5);
+    expect(outside.interior).toBeCloseTo(0, 5);
+    // Halfway up the ramp is half of each, which is what makes it a climb rather than a
+    // level boundary.
+    expect(between.interior).toBeCloseTo(0.5, 5);
+    expect(between.exterior).toBeCloseTo(0.5, 5);
+  });
+
+  it('always has exactly one room\'s worth of tail', async () => {
+    for (const space of [0, 0.2, 0.5, 0.8, 1]) {
+      const { interior, exterior } = await rooms(space);
+      // Or the route would get quieter in the middle of every climb.
+      expect(interior + exterior).toBeCloseTo(1, 5);
+    }
+  });
+
+  it('builds two rooms rather than one, and they are different rooms', async () => {
+    const recorder = recordingContext();
+    await busWith(recorder);
+    // Both impulse responses are generated at `resume`, so the graph's shape is fixed
+    // from the first gesture -- the same rule the bed is built under.
+    expect(recorder.impulses.length).toBe(2);
+    const [interior, exterior] = recorder.impulses;
+    expect(exterior.length).toBeGreaterThan(interior.length * 2);
   });
 });

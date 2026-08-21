@@ -2,7 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` puts the frame under the notch and hands the insets to
+         `env(safe-area-inset-*)`; the scale lock is because a double tap on a fire
+         button should not zoom the play frame. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#f4ec18" />
     <meta name="color-scheme" content="dark" />
     <title>FLOW/STATE — Movement Combat System</title>

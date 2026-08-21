@@ -5,6 +5,7 @@ import type { LevelPrimitive, LightInstance, RuntimeLevelV1, TransformData, Vec3
 import { isAssetId } from '../assets/catalog';
 import { palette } from '../palette';
 import { MaterialLibrary } from './MaterialLibrary';
+import { FACE_BLEND } from './facePaint';
 import { facadeAt, facadePatterns, paneLayout, towerArchetypes, towerTones, type FacadePattern } from './citySkyline';
 
 interface GateArt {
@@ -176,14 +177,14 @@ export class WorldPresenter {
     }
     if (cameraPosition) this.assignLightPool(cameraPosition, open);
     if (this.cityGlow) {
-      const material = this.cityGlow.material as THREE.MeshStandardMaterial;
+      const material = this.cityGlow.material as THREE.MeshToonMaterial;
       material.emissiveIntensity = 1.35 + Math.sin(time * 0.28) * 0.12;
     }
     this.updateSkyTraffic(time);
     if (this.cityBeacons) {
       // Warning beacons blink rather than glow. Slower than the neon and much
       // harder-edged, because that difference is the whole read.
-      const material = this.cityBeacons.material as THREE.MeshStandardMaterial;
+      const material = this.cityBeacons.material as THREE.MeshToonMaterial;
       material.emissiveIntensity = Math.sin(time * 1.7) > 0.35 ? 3.4 : 0.35;
     }
   }
@@ -518,8 +519,10 @@ export class WorldPresenter {
     // bevel that is sub-pixel at these distances. Measured, this is cheaper than the
     // single rounded box it replaces.
     // White, because the actual albedo arrives per instance through `setColorAt`:
-    // one material for six archetypes and six building tones.
-    const towerMaterial = this.materials.variant('armor', '#ffffff');
+    // one material for six archetypes and six building tones. Three bands rather than the
+    // armour plate's five -- a tower is a plane, not a figure -- and vertex colours on,
+    // because the faces are painted rather than lit. See `facePaint`.
+    const towerMaterial = this.materials.build('architecture', { color: '#ffffff', vertexColors: true });
     this.generatedMaterials.push(towerMaterial);
     const archetypeMeshes = towerArchetypes.map((archetype) => {
       const count = plans.filter((plan) => towerArchetypes[plan.archetype] === archetype).length;
@@ -528,7 +531,13 @@ export class WorldPresenter {
         box.translate(block.offsetX ?? 0, (block.y0 + block.y1) / 2 - 0.5, block.offsetZ ?? 0);
         return box;
       }), false);
-      const mesh = new THREE.InstancedMesh(geometry ?? new THREE.BoxGeometry(1, 1, 1), towerMaterial, Math.max(1, count));
+      // Which way each face points, decided once at build time and multiplied over
+      // whatever light the tower receives afterwards. This is what turns a stack of
+      // boxes into a mass with a lit side, a shadow side and a crown. At `mass` hardness,
+      // because a tower is exactly the stack of boxes the hard rule is written for.
+      const painted = geometry ?? new THREE.BoxGeometry(1, 1, 1);
+      this.materials.paintFaces(painted, FACE_BLEND.mass);
+      const mesh = new THREE.InstancedMesh(painted, towerMaterial, Math.max(1, count));
       mesh.receiveShadow = true;
       mesh.count = 0;
       return mesh;
@@ -1302,8 +1311,8 @@ export class WorldPresenter {
     return new THREE.Mesh(new RoundedBoxGeometry(Math.max(0.01, x), Math.max(0.01, y), Math.max(0.01, z), 2, Math.max(0.001, Math.min(radius, x / 3, y / 3, z / 3))), material);
   }
 
-  private emissiveMaterial(color: THREE.ColorRepresentation, intensity: number): THREE.MeshStandardMaterial {
-    const material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: intensity, roughness: 0.3, metalness: 0.35, toneMapped: false });
+  private emissiveMaterial(color: THREE.ColorRepresentation, intensity: number): THREE.MeshToonMaterial {
+    const material = this.materials.build('emissive', { color, emissive: color, emissiveIntensity: intensity });
     this.generatedMaterials.push(material);
     return material;
   }

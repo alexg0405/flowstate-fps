@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { rebindGraphicShading } from './MaterialLibrary';
 
 /** What a material variant does to a material, resolved once per visual instance. */
 export interface VariantAccent {
@@ -33,15 +34,24 @@ export function resolveVariantAccent(
  * with a marking rather than a glowing block.
  */
 export function accentMaterial(material: THREE.Material, variant: VariantAccent): THREE.Material | null {
-  if (!(material instanceof THREE.MeshStandardMaterial)) return null;
+  // Both shading models, because the world is banded now and the batching pass runs
+  // downstream of the conversion: a check for `MeshStandardMaterial` alone would have
+  // silently stopped tinting every variant in the game.
+  if (!(material instanceof THREE.MeshStandardMaterial) && !(material instanceof THREE.MeshToonMaterial)) return null;
   if (!variant.accent && !variant.weathered) return null;
   const shouldAccent = material.emissive.getHex() !== 0 || /(signal|cyan|red|amber|light|route)/i.test(material.name);
   if (!variant.weathered && !shouldAccent) return null;
   const clone = material.clone();
+  // A cloned toon material loses its shading edits; see `rebindGraphicShading`.
+  rebindGraphicShading(clone);
   if (variant.weathered) {
     clone.color.multiplyScalar(0.62);
-    clone.roughness = Math.max(0.82, clone.roughness);
-    clone.metalness *= 0.55;
+    // A banded material has no roughness or metalness to weather. Colour is the whole
+    // of what weathering means to it, which is also true of the look it is weathering.
+    if (clone instanceof THREE.MeshStandardMaterial) {
+      clone.roughness = Math.max(0.82, clone.roughness);
+      clone.metalness *= 0.55;
+    }
   } else if (variant.accent) {
     clone.color.copy(variant.accent);
     clone.emissive.copy(variant.accent);

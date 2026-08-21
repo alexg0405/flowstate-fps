@@ -1,4 +1,4 @@
-import type { BladeStyleId, BotProfile, GameEvent, Vec3 } from '../contracts';
+import type { BladeStyleId, BotProfile, GameEvent, Vec3, WeaponChassisId } from '../contracts';
 // The one run number the mix reads. A heal's level is a fraction of the largest heal the
 // game can pay, and keeping a second copy of that ceiling here is exactly the two-sources
 // -of-truth problem the tuning rules exist to prevent.
@@ -20,6 +20,11 @@ export interface AudioSustainState {
   /** True while the player is down, when the floor falls away entirely. */
   down: boolean;
   /**
+   * How open the space is, 0 enclosed and 1 exposed, which decides which room the tail
+   * comes back from. See `ROOMS`, and `content/config.ts` for where the number comes from.
+   */
+  space: number;
+  /**
    * The flow chain, which is the game's measure of playing well and had almost no voice
    * in the mix. Driven from here rather than from `consume` deliberately: see `CHAIN`.
    */
@@ -40,13 +45,24 @@ export interface AudioListenerState {
   yaw: number;
   playerId: number;
   /**
-   * What each live hostile is made of, by entity id. Presentation already knows this --
-   * `EntitySnapshot.profile` has carried it since the characters were authored -- and
-   * without it the mix cannot tell a slash into a brawler from a slash into a plate,
-   * which is the difference between the two most common impacts in the game. Absent for
-   * callers that have no roster, in which case every target is the reference material.
+   * Every live hostile, by entity id. Presentation already knows all of this --
+   * `EntitySnapshot` has carried it since the characters were authored -- and the mix
+   * needs two different things from it. Without `kind` it cannot tell a slash into a
+   * brawler from a slash into a plate, which is the difference between the two most
+   * common impacts in the game. Without `position` and `facing` it cannot tell a hostile
+   * that is *about to shoot the player* from one that happens to be nearby, which is the
+   * difference between a warning and a noise. Absent for callers that have no roster, in
+   * which case every target is the reference material at the reference threat.
    */
-  profiles?: ReadonlyMap<number, BotProfile['kind']>;
+  roster?: ReadonlyMap<number, AudioHostile>;
+}
+
+/** One live hostile, as the mix sees it. */
+export interface AudioHostile {
+  kind: BotProfile['kind'];
+  position: Vec3;
+  /** Which way it is pointing, in radians, in the simulation's own basis. */
+  facing: number;
 }
 
 interface Voice {
@@ -74,6 +90,27 @@ interface Voice {
 type Send = 'dry' | 'near' | 'far';
 
 /**
+ * Where a source is, in every term the mix has for saying so: how loud, which side, how
+ * much of the room, how late, how dark, and how much of its edge survived the trip.
+ */
+interface Placement {
+  gain: number;
+  pan: number;
+  send: Send;
+  /** Seconds of flight, which is the part of distance a level cannot say. */
+  delay: number;
+  /** Multiplier on a noise layer's cutoff. Air takes the top off before the bottom. */
+  cutoffScale: number;
+  /** Multiplier on a transient's level, which rolls off faster than the body's. */
+  edge: number;
+  /** Decibels of priority the source's intent is worth. See `THREAT`. */
+  importanceLift: number;
+}
+
+/** In the player's hands: no distance, no flight, no absorption, no threat. */
+const HERE: Placement = { gain: 1, pan: 0, send: 'dry', delay: 0, cutoffScale: 1, edge: 1, importanceLift: 0 };
+
+/**
  * What the interface can ask the mix for. Deliberately a short list: these are
  * acknowledgements, not gameplay cues, and every one of them is built from the same
  * primitives the rest of the bus uses.
@@ -92,20 +129,209 @@ const RESULT_STINGER_DELAY = 0.95;
 
 /** Beyond this a source contributes nothing, so distant fights stay out of the way. */
 const MAX_AUDIBLE_METRES = 55;
-/** Cap on impact ticks per batch, so a shotgun shell does not fire eight voices. */
-const MAX_IMPACTS_PER_BATCH = 2;
-/**
- * Cap on kill cues per batch, and the reason is the same one the whole combining pass is
- * about. A heavy sweeps every hostile in a 160-degree arc, so three bodies going down on
- * one tick is ordinary play -- and three copies of one cue at one pitch is not a bigger
- * sound, it is the same waveform nine decibels louder. The first is the full cue; the
- * second answers it a fourth up, shorter and quieter, so a multi-kill reads as an interval;
- * anything past that is inaudible under the two and is not played.
- */
-const MAX_KILLS_PER_BATCH = 2;
 
-/** Resting level of the bus everything passes through, and the level a duck returns to. */
-const BUS_LEVEL = 0.75;
+/** The simulation's fixed step, which is the clock every cue is now scheduled against. */
+const STEP_SECONDS = 1 / 60;
+
+/**
+ * Metres a second, and the reason distance is a *time* here rather than only a level.
+ *
+ * Real gunfire arrives as two events -- the crack that travels with the round and the
+ * thump of the muzzle blast -- and the gap between them is how an experienced listener
+ * ranges a shooter. At this route's distances that gap is 116 ms at forty metres, which
+ * is audible, free, and the difference between "something fired somewhere" and
+ * "something fired *over there*". It costs no node: every cue in this mix is a one-shot,
+ * so the delay is simply when it is scheduled to start.
+ */
+const SPEED_OF_SOUND = 343;
+
+/**
+ * Air absorption, expressed as the distance at which a body layer's cutoff is halved.
+ *
+ * High frequencies are absorbed far faster than low ones, so a distant shot is a muffled
+ * boom with no edge at all. Two terms, because the mix has two kinds of layer: the noise
+ * layers' cutoffs are scaled by `1 / (1 + distance / this)`, and the transient -- which
+ * is nothing *but* edge -- additionally loses level, because a tick that is filtered
+ * rather than removed is just a duller beep.
+ */
+const AIR_ABSORPTION_METRES = 14;
+/** Extra exponent on a transient's distance rolloff, over the body's own. */
+const EDGE_ROLLOFF = 1.9;
+
+/**
+ * The mix's dynamic range, and the generalisation of two caps that were written by hand.
+ *
+ * Frostbite tags every asset with a loudness across the whole range of hearing and slides
+ * a window over it: the window rises to encompass the loudest thing sounding, anything
+ * more than a fixed range under it is culled, and relative levels are preserved -- so a
+ * surface tick is inaudible while a kill lands and audible again a second later. That is
+ * one number per cue and one shared window, where this file had `MAX_IMPACTS_PER_BATCH`
+ * and `MAX_KILLS_PER_BATCH`: the right instinct, implemented twice, for two of the two
+ * dozen cues that can stack.
+ *
+ * The window is a cull and not a compressor on purpose. Every level in this file was
+ * authored against the others; scaling them at runtime would be a second mix fighting the
+ * first. What the window decides is what is *not worth a voice*, which is the decision
+ * the two constants it replaces were making.
+ */
+const HDR = {
+  /** A cue more than this far under the window's top is not played at all. */
+  rangeDb: 26,
+  /** The range tightens to this once the graph is already carrying `softVoices`. */
+  pressuredRangeDb: 14,
+  /** How fast the window falls back once nothing loud is sounding. */
+  fallDbPerSecond: 34,
+  /**
+   * Where the window rests. Without a floor it would drift down through a quiet corridor
+   * and stop meaning anything; at -14 the quietest cue in the table is still 26 dB clear
+   * of being culled by silence.
+   */
+  restDb: -14,
+  /** Voices sounding at once before the range tightens, and the hard ceiling. */
+  softVoices: 18,
+  hardVoices: 32,
+} as const;
+
+/**
+ * What each cue is worth, and how many of it may sound at once.
+ *
+ * `importance` is in decibels under the loudest thing the game plays, which is a kill,
+ * and it is deliberately *not* the authored gain. A telegraph is one of the quietest cues
+ * in the mix and must never be culled, because it is the only warning the player gets; a
+ * surface tick is not especially quiet and is the first thing that should go. Loudness is
+ * priority, but only once someone has said what the priority is.
+ *
+ * `limit` is the playback limit middleware ships for the same reason: how many instances
+ * of one cue may sound in a single batch. Two of these numbers used to be constants of
+ * their own -- a shotgun pattern firing eight identical ticks, and three bodies going down
+ * on one tick producing the same waveform nine decibels louder.
+ */
+interface CuePolicy {
+  importance: number;
+  /** Instances allowed per batch. Absent means as many as the events ask for. */
+  limit?: number;
+}
+
+const CUE: Record<GameEvent['kind'], CuePolicy> = {
+  kill: { importance: 0, limit: 2 },
+  death: { importance: 0 },
+  dodge: { importance: -2 },
+  complete: { importance: -2 },
+  wave: { importance: -4 },
+  respawn: { importance: -4 },
+  shot: { importance: -6 },
+  gateOpen: { importance: -6 },
+  /** Never culled by anything short of a death: it is the only warning in the game. */
+  enemyTelegraph: { importance: -7, limit: 3 },
+  melee: { importance: -8, limit: 3 },
+  checkpoint: { importance: -8 },
+  enemyAttack: { importance: -10, limit: 3 },
+  comboBreak: { importance: -12 },
+  grappleAttach: { importance: -12 },
+  grapplePull: { importance: -12 },
+  comboLink: { importance: -14, limit: 2 },
+  split: { importance: -14 },
+  heal: { importance: -15 },
+  hit: { importance: -16, limit: 3 },
+  reloadComplete: { importance: -16 },
+  reloadStart: { importance: -18 },
+  dryFire: { importance: -18 },
+  grappleRelease: { importance: -18 },
+  grappleFail: { importance: -22 },
+  /**
+   * The cheapest thing in the mix and the first thing the window takes away. Four
+   * decibels outside the window's range under a kill and inside it under everything
+   * else, which is the statement: a round hitting a wall is worth hearing while the
+   * player is shooting, and is not worth a voice while a body is going down.
+   */
+  impact: { importance: -30, limit: 2 },
+};
+
+/**
+ * Damage taken, which is not the `hit` cue however it arrives.
+ *
+ * A round landing on the player and a round landing on a hostile are the same event kind
+ * with the same authored table entry, and they could hardly be further apart in what they
+ * are worth: one is a confirm and the other is the mix telling the player they are losing.
+ */
+const PLAYER_DAMAGE_IMPORTANCE = -3;
+/** A swing that cut air. It happened, and almost nothing about it matters. */
+const WHIFF_IMPORTANCE = -20;
+/**
+ * The interface, which is not part of the run's dynamic range but shares its bus. High
+ * enough that nothing in a fight can cull a menu acknowledgement, low enough that opening
+ * a menu does not shut the mix down behind it.
+ */
+const UI_IMPORTANCE = -4;
+
+/**
+ * The mechanical layer: the bolt, the hammer and the casing.
+ *
+ * The standard AAA gunshot is five layers, not three -- body, transient, sub, mechanical
+ * and tail -- and this was the missing one. It is what makes a gun sound like a *machine*
+ * rather than an event: two band-limited clicks, one on the shot and one a bolt-throw
+ * later, randomised in pitch and level per event so a held trigger does not machine-gun
+ * one waveform.
+ *
+ * It is also the only layer that differs per chassis, which is the first time fitting the
+ * gun at the bench has been audible at all. The numbers are the ones the chassis already
+ * states in its handling: a shotgun's action is slow, heavy and low, an SMG's is light and
+ * quick, and the DMR's is the longest throw in the game.
+ */
+const MECHANICAL: Record<WeaponChassisId, { hammerHz: number; boltHz: number; boltSeconds: number; gain: number }> = {
+  carbine: { hammerHz: 1500, boltHz: 1060, boltSeconds: 0.052, gain: 0.017 },
+  smg: { hammerHz: 1850, boltHz: 1320, boltSeconds: 0.04, gain: 0.013 },
+  shotgun: { hammerHz: 980, boltHz: 720, boltSeconds: 0.086, gain: 0.026 },
+  dmr: { hammerHz: 1340, boltHz: 880, boltSeconds: 0.07, gain: 0.022 },
+};
+
+/**
+ * Threat, and the mix as a gameplay signal rather than a soundtrack to one.
+ *
+ * Blizzard bucket enemies by whether they are looking at you and how close they are, then
+ * drive level off the bucket -- an enemy in the top bucket is about seven decibels over
+ * the same enemy in the third. Our `placement` knew distance and bearing and nothing at
+ * all about intent, which is the one thing the player needs from eight hostiles at once.
+ *
+ * The simulation already computes the missing term: a bot has a firing arc it must have
+ * the player inside before it will commit. Facing is therefore the honest reading of
+ * "about to shoot you", and it works inverted too -- a hostile pointed away from the
+ * player is the thing to spend the range on rather than the thing to hear.
+ */
+const THREAT = {
+  /** Cosine of the half-angle inside which a hostile counts as looking at the player. */
+  aimedCosine: 0.72,
+  /** Distance at which proximity stops adding to the reading. */
+  nearMetres: 20,
+  /** Level a fully-aimed hostile and an oblivious one are played at. */
+  aimedGain: 1.5,
+  ambientGain: 0.68,
+  /** Decibels of priority a fully-aimed hostile gains in the window. */
+  importanceLift: 6,
+} as const;
+
+/**
+ * Resting level of the bus everything passes through, and the level a duck returns to.
+ *
+ * **This number was set by a measurement rather than by ear**, which is the first time
+ * anything in this file has been. At 0.75 the mix rendered a representative fight at
+ * -31.6 LUFS against an industry target of -23, with true peak at -12.5 dBFS against a
+ * ceiling of -1: eight decibels quiet and eleven decibels of headroom thrown away. The
+ * symptom a player would have reported is that this game is quieter than everything else
+ * on their machine and the volume slider does not have the range to fix it.
+ *
+ * The raise is a pure level change and deliberately not a change of character. The
+ * limiter's threshold moves by the same amount (see `createLimiter`), so the mix is
+ * compressed exactly as much as it was before -- what changed is where it sits, not what
+ * it does. `tests/mixLoudness.test.ts` pins the result, so the next move on this number is
+ * as deliberate as this one.
+ */
+const BUS_LEVEL = 1.9;
+/**
+ * Decibels the level was raised by, named once so the limiter can follow it. Changing
+ * `BUS_LEVEL` without changing this turns a level decision into a compression decision.
+ */
+const MIX_TRIM_DB = 20 * Math.log10(1.9 / 0.75);
 /** How quickly the player's own level follows the slider. Short: this is a de-click. */
 const VOLUME_FOLLOW_SECONDS = 0.05;
 /**
@@ -160,15 +386,28 @@ const BED = {
 } as const;
 
 /**
- * Length of the generated impulse response, how sharply it decays, and how dark it is.
+ * The two rooms this route is actually made of.
  *
- * The tail is deliberately long and heavily damped. An undamped noise decay is a hiss,
- * which is the last thing a low-register mix wants sitting on top of it; the one-pole
- * coefficient rolls the reflections off so what comes back is body rather than air.
+ * There was one generated impulse response with three fixed send levels, which is a single
+ * room for the whole game -- and the route is a bunker corridor *and* an open rooftop deck.
+ * The five-layer weapon this mix was missing two of got its mechanical layer last pass;
+ * this is the other one. The tail is the layer that says where a sound happened, and it
+ * cannot say two things at once with one impulse.
+ *
+ * Both are long and heavily damped relative to what a physical model would give: an
+ * undamped noise decay is a hiss, which is the last thing a low-register mix wants sitting
+ * on top of it, and the one-pole coefficient rolls the reflections off so what comes back
+ * is body rather than air. The difference between them is the whole point:
+ *
+ * - **Interior** is short and dark. A corridor returns quickly and returns almost nothing
+ *   above the low mids, which is what makes a space feel like it has a ceiling.
+ * - **Exterior** is nearly three times as long and considerably brighter, because an open
+ *   deck between towers is a set of distant hard surfaces rather than a close soft one.
  */
-const REVERB_SECONDS = 1.9;
-const REVERB_DECAY = 3.1;
-const REVERB_DAMPING = 0.085;
+const ROOMS = {
+  interior: { seconds: 0.85, decay: 3.6, damping: 0.055 },
+  exterior: { seconds: 2.6, decay: 2.3, damping: 0.17 },
+} as const;
 
 /**
  * How hard the low end is driven.
@@ -299,6 +538,43 @@ const CHAIN = {
 } as const;
 
 /**
+ * The pulse, and it is the one thing in this mix that keeps time.
+ *
+ * The bed is vertical remixing -- layers fading in and out on a gameplay parameter -- and
+ * it has no concept of *time*: there is no pulse anywhere in this game, which is most of
+ * the distance between what the mix is and what a player would call a soundtrack. This is
+ * a slow gated blip on eighths, keyed to how live the room is, and it stops when the room
+ * is cleared.
+ *
+ * Three things about it are deliberate. It is not scheduled: a held oscillator drives the
+ * layer's own gain through a shaper, so the gate exists in the graph rather than in a
+ * queue of future events -- which is what keeps it from drifting and what keeps it out of
+ * the way of the one thing that must never be quantised, which is a gameplay cue arriving
+ * the instant it happened. It is filtered noise rather than a note, so it cannot disagree
+ * with a bed that transposes up the scale under a live chain. And it is quiet enough to be
+ * a floor rather than a part: a pulse you notice is a pulse you mute.
+ */
+const PULSE = {
+  bpm: 96,
+  /** Beats subdivided this far. Two is eighths. */
+  division: 2,
+  /** Where the blip sits. A muted fifth, two octaves up, as a band rather than a note. */
+  hz: note('fifth', 2),
+  q: 3.4,
+  /**
+   * Gate sharpness: the exponent a sine is raised to on its way to the gain. Twelve turns
+   * a smooth cycle into about a fifth of it sounding, which is a pulse rather than a
+   * tremolo.
+   */
+  shape: 12,
+  /** Level at a full room, and the hostiles that count as one. */
+  gainFull: 0.019,
+  threatFull: 4,
+  /** How much a live chain opens the pulse's band, in Hz. */
+  chainOpen: 90,
+} as const;
+
+/**
  * What each blade sounds like.
  *
  * `content/blades.ts` gives Tempo, Cleave and Riposte different reach, recovery and chain
@@ -319,13 +595,33 @@ const CHAIN = {
  * Every heavy is a fourth or a fifth under its own light and carries a second sub an
  * octave over that, which is the trick the kill uses: a swing that moved the room.
  */
+/**
+ * One of a blade's two edges.
+ *
+ * The round robin, and the reason it is spelled out in three numbers rather than one.
+ * The rule of thumb is that anything heard more than twice needs varying, and the blade is
+ * the primary verb -- but the knob this file was varying was **pitch**, which is the least
+ * audible thing about a five-millisecond transient. Two per cent of 1200 Hz is nothing.
+ * What is audible at that length is how long it rings and how narrow the band is, so the
+ * two edges differ in all three and the pair alternates per swing.
+ */
+interface BladeEdge {
+  hz: number;
+  /** Filter Q. A wider band is a scrape; a narrow one is a ring. */
+  q: number;
+  seconds: number;
+}
+
 interface BladeVoice {
   light: { hz: number; seconds: number; gain: number };
   heavy: { hz: number; seconds: number; gain: number };
   /** The body under the cut -- a bent sine, the layer that says what the blade is. */
   bodyHz: number;
-  /** Where the edge's transient sits. Brightness is most of a blade's character. */
-  edgeHz: number;
+  /**
+   * The two edges, alternating per swing. Brightness is most of a blade's character and
+   * the alternation is what stops two consecutive cuts being one recording played twice.
+   */
+  edges: readonly [BladeEdge, BladeEdge];
   /** The whiff: dark air, and how long the player just committed for. */
   airHz: number;
   airSeconds: number;
@@ -336,7 +632,7 @@ const BLADE_VOICE: Record<BladeStyleId, BladeVoice> = {
     light: { hz: note('root', 1), seconds: 0.34, gain: 0.15 },
     heavy: { hz: note('fifth', 0), seconds: 0.55, gain: 0.17 },
     bodyHz: note('fifth', 1),
-    edgeHz: 1200,
+    edges: [{ hz: 1200, q: 1.4, seconds: 0.005 }, { hz: 970, q: 2.7, seconds: 0.0075 }],
     airHz: 700,
     airSeconds: 0.16,
   },
@@ -344,7 +640,7 @@ const BLADE_VOICE: Record<BladeStyleId, BladeVoice> = {
     light: { hz: note('minorSeventh', 0), seconds: 0.44, gain: 0.17 },
     heavy: { hz: note('fourth', 0), seconds: 0.62, gain: 0.19 },
     bodyHz: note('fourth', 1),
-    edgeHz: 900,
+    edges: [{ hz: 900, q: 1.2, seconds: 0.006 }, { hz: 745, q: 2.2, seconds: 0.0095 }],
     airHz: 560,
     airSeconds: 0.22,
   },
@@ -352,7 +648,7 @@ const BLADE_VOICE: Record<BladeStyleId, BladeVoice> = {
     light: { hz: note('minorThird', 1), seconds: 0.24, gain: 0.13 },
     heavy: { hz: note('minorSixth', 0), seconds: 0.46, gain: 0.15 },
     bodyHz: note('minorSeventh', 1),
-    edgeHz: 1500,
+    edges: [{ hz: 1500, q: 1.6, seconds: 0.004 }, { hz: 1245, q: 3.1, seconds: 0.006 }],
     airHz: 860,
     airSeconds: 0.12,
   },
@@ -426,6 +722,9 @@ export class AudioManager {
   private volume = 1;
   private wetNear: GainNode | null = null;
   private wetFar: GainNode | null = null;
+  /** The crossfade between the two rooms. See `ROOMS` and `AudioSustainState.space`. */
+  private interiorSend: GainNode | null = null;
+  private exteriorSend: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
   /** Saturation curve for the low end, built once. Null where `WaveShaperNode` is absent. */
   private driveCurve: Float32Array<ArrayBuffer> | null = null;
@@ -443,10 +742,48 @@ export class AudioManager {
   private harmonicGain: GainNode | null = null;
   private driveGain: GainNode | null = null;
   private driveFilter: BiquadFilterNode | null = null;
+  /** The pulse's layer and the depth its gate is applied at. */
+  private pulseGain: GainNode | null = null;
+  private pulseDepth: GainNode | null = null;
+  private pulseFilter: BiquadFilterNode | null = null;
   /** Base levels of the two sends, so a chain can lift them and let them back down. */
   private sendLevels = { near: 0.17, far: 0.44 };
   /** Which blade is in the player's hands. The reference style until told otherwise. */
   private bladeVoice: BladeVoice = BLADE_VOICE.tempo;
+  /** Which gun is in the player's hands, for the mechanical layer. */
+  private mechanism = MECHANICAL.carbine;
+  /**
+   * Which of the blade's two edges the next swing takes.
+   *
+   * A counter rather than a hash of the event id, because the point is that consecutive
+   * swings *alternate* and ids do not: other events are interleaved between two cuts, so
+   * their parity is arbitrary. It is still deterministic for a given event stream, which
+   * is the rule the rest of the variation in this file follows.
+   *
+   * Nothing in the renderer alternates per swing for this to disagree with -- the
+   * viewmodel's two swing curves are light against heavy, not first against second -- so
+   * this is the only alternation in the game and cannot desync from another one.
+   */
+  private swingRobin = 0;
+  /**
+   * Where the cue being built is scheduled, as an offset from `currentTime`.
+   *
+   * `consume` is called once per *rendered* frame with the events of up to five
+   * simulation steps, and every voice used to be scheduled at `currentTime` -- so a hit
+   * that happened on the first of five steps played up to 83 ms late and *simultaneously*
+   * with a hit from the fifth. Every event carries the tick it happened on and the step is
+   * a fixed 1/60 s, so the offset is exact: a burst arrives as a rhythm instead of as a
+   * cluster. Distance is folded in here too, because the two are the same thing -- a cue
+   * is late by when it happened plus how far away it happened.
+   */
+  private scheduleAt = 0;
+  /** What the cue being built is worth, in the units `CUE` is authored in. */
+  private importance = 0;
+  /** The top of the HDR window, and the scheduled time it was last written at. */
+  private windowTop: number = HDR.restDb;
+  private windowAt = 0;
+  /** Voices sounding right now, counted so the window can tighten under pressure. */
+  private liveVoices = 0;
 
   async resume(): Promise<void> {
     if (typeof AudioContext !== 'function') return;
@@ -463,6 +800,8 @@ export class AudioManager {
       this.bus = null;
       this.wetNear = null;
       this.wetFar = null;
+      this.interiorSend = null;
+      this.exteriorSend = null;
     }
   }
 
@@ -474,17 +813,39 @@ export class AudioManager {
     this.bladeVoice = BLADE_VOICE[style ?? 'tempo'] ?? BLADE_VOICE.tempo;
   }
 
+  /**
+   * Which gun the player is holding, for the mechanical layer.
+   *
+   * Unlike the blade this can change inside a run -- there are two slots and a swap key --
+   * so it is pushed every frame rather than once at construction, and the early-out is
+   * what makes that free.
+   */
+  setWeaponChassis(chassis: WeaponChassisId | undefined): void {
+    const next = MECHANICAL[chassis ?? 'carbine'] ?? MECHANICAL.carbine;
+    if (next !== this.mechanism) this.mechanism = next;
+  }
+
   consume(events: readonly GameEvent[], listener?: AudioListenerState): void {
     if (!this.context || this.context.state !== 'running') return;
-    let impacts = 0;
     // What happened to each hostile across the whole batch, worked out before anything
     // is played. This is what lets one target produce one impact cue: a killing slash
     // arrives as a `melee`, a `hit` and a `kill` on the same tick, and playing all three
     // is three cues queueing rather than one event.
     const outcomes = batchOutcomes(events);
-    let kills = 0;
+    // The tick this batch starts on. Everything after it is scheduled forward from here,
+    // which is what turns five steps' worth of events from a cluster into a rhythm.
+    let firstTick = Number.POSITIVE_INFINITY;
+    for (const event of events) firstTick = Math.min(firstTick, event.tick);
+    /** Instances of each cue already played in this batch. See `CUE.limit`. */
+    const played = new Map<GameEvent['kind'], number>();
     for (const event of events) {
       const place = this.placement(event, listener);
+      const policy = CUE[event.kind];
+      const stacked = played.get(event.kind) ?? 0;
+      played.set(event.kind, stacked + 1);
+      if (policy?.limit !== undefined && stacked >= policy.limit) continue;
+      this.scheduleAt = Math.max(0, (event.tick - firstTick) * STEP_SECONDS) + place.delay;
+      this.importance = (policy?.importance ?? -12) + place.importanceLift;
       // Deterministic per-event variation. Presentation is allowed to be arbitrary but
       // it must not differ run to run, and without this a held trigger is a machine gun
       // of one identical waveform -- the most artificial thing a synth mix can do and
@@ -503,22 +864,33 @@ export class AudioManager {
           this.boom(190 * vary, 0.13, 0.11, 0, 'near');
           this.sub(note('minorSeventh', 0) * detune, 0.3, 0.13, 0.42, 0, 'dry');
           this.tone({ frequency: note('fourth', 1) * detune, duration: 0.16, gain: 0.05, type: 'sine', bend: 0.5, lowpass: 300 }, 0, 0, 'dry');
+          // The layer that makes it a machine rather than an event, and the only one
+          // that differs per chassis. See `MECHANICAL`.
+          this.mechanical(event.id);
           break;
         case 'dryFire':
-          this.tick(1500, 0.006, 0.03, 0, 'dry');
+          // An empty chamber is the mechanical layer with nothing on top of it, which is
+          // both what it is and the clearest possible statement that no round left.
+          this.tick(this.mechanism.hammerHz, 0.006, 0.03, 0, 'dry');
           this.boom(260, 0.05, 0.03, 0, 'near');
+          this.mechanical(event.id);
           break;
         case 'impact':
           // Body shots already get the confirm, so only surfaces tick here. Both layers
           // vary per event, so a shotgun pattern reads as debris rather than as the same
           // tick eight times.
-          if (event.targetEntityId !== undefined || impacts >= MAX_IMPACTS_PER_BATCH) break;
-          impacts += 1;
-          this.boom(320 * vary, 0.06, 0.04 * place.gain, place.pan, place.send);
-          this.tick(1400 * vary, 0.004, 0.012 * place.gain, place.pan, place.send);
+          if (event.targetEntityId !== undefined) break;
+          // Length as well as pitch: at four milliseconds the ear reads duration long
+          // before it reads a two per cent detune, so a shotgun pattern varies where it
+          // can actually be heard varying.
+          this.boom(320 * vary * place.cutoffScale, 0.06 * vary, 0.04 * place.gain, place.pan, place.send);
+          this.tick(1400 * vary, 0.004 * vary, 0.012 * place.gain * place.edge, place.pan, place.send, 1.4 * vary);
           break;
         case 'hit': {
           if (this.isPlayer(event.targetEntityId, listener)) {
+            // Not the `hit` cue and not worth what a `hit` is worth: this is the mix
+            // telling the player they are losing, and nothing else in a batch outranks it.
+            this.importance = PLAYER_DAMAGE_IMPORTANCE;
             this.playerDamaged(event.value ?? 0);
             break;
           }
@@ -551,9 +923,6 @@ export class AudioManager {
           break;
         }
         case 'kill': {
-          const stacked = kills;
-          kills += 1;
-          if (stacked >= MAX_KILLS_PER_BATCH) break;
           const outcome = event.targetEntityId === undefined ? undefined : outcomes.get(event.targetEntityId);
           const material = materialOf(event.targetEntityId, listener);
           if (stacked > 0) {
@@ -575,7 +944,15 @@ export class AudioManager {
           // the blade's edge for a cut, the material's for a round. This is the
           // combining -- a killing slash is one impact in the mix, not a cut and then a
           // kill, and the sub below is longer than the cut's own would have been.
-          this.tick(outcome?.blade ? this.bladeVoice.edgeHz * 1.25 : material.edgeHz * 1.36, 0.006, 0.03, 0, 'dry');
+          // The killing blow's edge is the one the swing that delivered it was already
+          // going to use, so a finishing cut is the same blade rather than a brighter one.
+          const finish = this.bladeVoice.edges[this.swingRobin % this.bladeVoice.edges.length];
+          this.tick(
+            outcome?.blade ? finish.hz * 1.25 : material.edgeHz * 1.36,
+            outcome?.blade ? finish.seconds * 1.3 : 0.006,
+            0.03, 0, 'dry',
+            outcome?.blade ? finish.q : 1.4,
+          );
           this.sub(note('fifth', 1), outcome?.blade === 'heavy' ? 0.7 : 0.62, 0.16 * material.weight, 0.24, 0, 'near');
           this.sub(note('fifth', 0), 0.5, 0.1, 0.5, 0, 'near');
           this.boom(material.bodyHz * 0.68, 0.4, 0.09, 0, 'far');
@@ -607,10 +984,12 @@ export class AudioManager {
           if (event.targetEntityId === undefined) {
             // A heavy that cut air is a longer, lower rush of nothing than a light one:
             // the whiff should tell the player how much they just committed, and Cleave's
-            // says more than Riposte's.
+            // says more than Riposte's. It is also the least important thing the player
+            // can cause, and the first of their own cues the window should take away.
+            this.importance = WHIFF_IMPORTANCE;
             this.boom(
               (event.heavy ? blade.airHz * 0.74 : blade.airHz) * vary,
-              event.heavy ? blade.airSeconds * 1.62 : blade.airSeconds,
+              (event.heavy ? blade.airSeconds * 1.62 : blade.airSeconds) * vary,
               0.04, 0, 'near',
             );
             break;
@@ -619,7 +998,9 @@ export class AudioManager {
           const material = materialOf(event.targetEntityId, listener);
           // The edge and the body always sound: the player has to hear that the blade
           // connected however the exchange ended, and the body is what it connected with.
-          this.tick(blade.edgeHz * vary, 0.005, event.heavy ? 0.032 : 0.03, 0, 'dry');
+          // The round robin, and the only place it advances: one swing, one edge.
+          const edge = this.nextEdge();
+          this.tick(edge.hz * vary, edge.seconds * vary, event.heavy ? 0.032 : 0.03, 0, 'dry', edge.q);
           this.boom(material.bodyHz * vary, event.heavy ? 0.3 : 0.14, (event.heavy ? 0.12 : 0.1) * material.weight, 0, 'near');
           // A plate rings and does not part. What is missing is the weight, which is the
           // cue to get around it rather than keep swinging at it.
@@ -651,7 +1032,7 @@ export class AudioManager {
           // swell rising through the wind-up, placed, with one tick at the front so the
           // player can tell where it came from.
           const windup = Math.max(0.12, event.value ?? 0.3);
-          this.tick(1500, 0.005, 0.014 * place.gain, place.pan, 'dry');
+          this.tick(1500, 0.005, 0.014 * place.gain * place.edge, place.pan, 'dry');
           this.sub(note('fourth', 0), windup, 0.075 * place.gain, 2.6, place.pan, 'near');
           // The flat second, which is the interval this mix keeps for things that are
           // about to happen *to* the player: it beats against the floor the room is
@@ -662,7 +1043,7 @@ export class AudioManager {
         case 'enemyAttack':
           // Duller and lower than the player's own shot so the two never blur, and
           // wetter, because it happens out there rather than in their hands.
-          this.boom(200, 0.1, 0.085 * place.gain, place.pan, place.send);
+          this.boom(200 * place.cutoffScale, 0.1, 0.085 * place.gain, place.pan, place.send);
           this.sub(note('fourth', 0), 0.22, 0.075 * place.gain, 0.6, place.pan, 'far');
           this.tone({ frequency: note('minorSecond', 1), duration: 0.1, gain: 0.05 * place.gain, type: 'sine', bend: 0.5, lowpass: 220 }, 0, place.pan, 'dry');
           break;
@@ -717,13 +1098,17 @@ export class AudioManager {
           this.tick(1400, 0.005, 0.018, 0, 'near');
           break;
         case 'reloadStart':
-          this.tick(1200, 0.006, 0.03, 0, 'dry');
+          // The magazine leaving, at the chassis's own pitch: the bench is audible in the
+          // reload as well as in the shot, which is where a player actually listens to it.
+          this.tick(this.mechanism.boltHz, 0.006, 0.03, 0, 'dry');
           this.boom(340, 0.05, 0.035, 0, 'dry');
           break;
         case 'reloadComplete':
-          this.tick(1600, 0.005, 0.032, 0, 'dry');
+          this.tick(this.mechanism.hammerHz, 0.005, 0.032, 0, 'dry');
           this.boom(240, 0.06, 0.045, 0, 'dry');
           this.sub(note('fourth', 1), 0.08, 0.04, 0.8, 0, 'dry');
+          // The bolt going home, which is the sound a reload actually ends on.
+          this.mechanical(event.id);
           break;
         case 'checkpoint':
           this.sub(note('minorSeventh', 0), 0.5, 0.09, 1.6, 0, 'near');
@@ -748,7 +1133,7 @@ export class AudioManager {
         case 'gateOpen':
           // A thirty-metre door. The sub is the entire point of it.
           this.sub(note('minorSeventh', -1), 1.1, 0.13 * place.gain, 2.2, place.pan, 'far');
-          this.boom(120, 0.8, 0.09 * place.gain, place.pan, 'far');
+          this.boom(120 * place.cutoffScale, 0.8, 0.09 * place.gain, place.pan, 'far');
           break;
         case 'grappleAttach':
           this.tick(1700, 0.005, 0.028, 0, 'dry');
@@ -767,6 +1152,37 @@ export class AudioManager {
           break;
       }
     }
+    // Nothing outside a batch is placed or ranked. Left set, the last event of a frame
+    // would silently schedule the next thing the interface plays.
+    this.scheduleAt = 0;
+    this.importance = 0;
+  }
+
+  /**
+   * The mechanical layer: two band-limited clicks, one on the shot and one a bolt-throw
+   * after it, both randomised per event so a held trigger is not one waveform repeating.
+   *
+   * Deliberately the quietest layer of the five and deliberately the only one that knows
+   * which gun this is. See `MECHANICAL`.
+   */
+  private mechanical(eventId: number): void {
+    const machine = this.mechanism;
+    // A wider spread than any tonal layer gets, because this is the layer whose whole
+    // job is to sound imperfect. Noise has no pitch to be wrong about.
+    const spread = variation(eventId, 0.09);
+    const level = variation(eventId ^ 0x5bf0, 0.22);
+    this.tick(machine.hammerHz * spread, 0.005, machine.gain * level, 0.12, 'dry');
+    this.at(machine.boltSeconds * spread, () => {
+      this.tick(machine.boltHz / spread, 0.007, machine.gain * 0.82 * level, -0.16, 'near');
+    });
+  }
+
+  /** Runs `build` with everything it schedules pushed `seconds` further out. */
+  private at(seconds: number, build: () => void): void {
+    const base = this.scheduleAt;
+    this.scheduleAt = base + seconds;
+    build();
+    this.scheduleAt = base;
   }
 
   /**
@@ -782,6 +1198,8 @@ export class AudioManager {
    */
   cue(kind: UiCue): void {
     if (!this.context || this.context.state !== 'running') return;
+    this.scheduleAt = 0;
+    this.importance = UI_IMPORTANCE;
     switch (kind) {
       case 'hover':
         // Barely there. A menu that clicks loudly under the pointer is a menu the
@@ -846,6 +1264,8 @@ export class AudioManager {
     this.master = null;
     this.wetNear = null;
     this.wetFar = null;
+    this.interiorSend = null;
+    this.exteriorSend = null;
     this.noiseBuffer = null;
     this.driveCurve = null;
     this.floorGain = null;
@@ -853,7 +1273,13 @@ export class AudioManager {
     this.harmonicGain = null;
     this.driveGain = null;
     this.driveFilter = null;
+    this.pulseGain = null;
+    this.pulseDepth = null;
+    this.pulseFilter = null;
     this.duckUntil = 0;
+    this.liveVoices = 0;
+    this.windowTop = HDR.restDb;
+    this.windowAt = 0;
   }
 
   /**
@@ -885,7 +1311,7 @@ export class AudioManager {
     const context = this.context;
     const bus = this.bus;
     if (!context || !bus) return;
-    const now = context.currentTime;
+    const now = this.startTime();
     if (now < this.duckUntil) return;
     const floor = Math.max(0.0001, BUS_LEVEL * (1 - Math.min(0.95, Math.max(0, depth))));
     const holdEnds = now + DUCK_ATTACK_SECONDS + DUCK_HOLD_SECONDS;
@@ -903,22 +1329,85 @@ export class AudioManager {
    * route arrives mostly as its own reflections, and something in the player's hands
    * arrives with none.
    */
-  private placement(event: GameEvent, listener?: AudioListenerState): { gain: number; pan: number; send: Send } {
+  private placement(event: GameEvent, listener?: AudioListenerState): Placement {
     const source = event.origin ?? event.position;
-    if (!listener || !source) return { gain: 1, pan: 0, send: 'dry' };
+    if (!listener || !source) return HERE;
     const dx = source[0] - listener.position[0];
     const dy = source[1] - listener.position[1];
     const dz = source[2] - listener.position[2];
     const distance = Math.hypot(dx, dy, dz);
-    if (distance < 0.001) return { gain: 1, pan: 0, send: 'dry' };
+    // Intent is read from the hostile rather than from the event, so it is the same
+    // reading whether the cue is the telegraph or the shot that follows it.
+    const threat = this.threatOf(event, listener);
+    if (distance < 0.001) return { ...HERE, ...threat };
     // Matches the simulation's basis: forward is (-sin yaw, -cos yaw), so right is
     // (cos yaw, -sin yaw) and a positive dot puts the source to the player's right.
     const pan = (dx * Math.cos(listener.yaw) + dz * -Math.sin(listener.yaw)) / distance;
+    const reach = Math.max(0, 1 - distance / MAX_AUDIBLE_METRES);
     return {
-      gain: Math.max(0, 1 - distance / MAX_AUDIBLE_METRES) ** 1.4,
+      gain: reach ** 1.4 * threat.gain,
       pan,
       send: distance > MAX_AUDIBLE_METRES * 0.3 ? 'far' : 'near',
+      // Sound is slow. This is the whole of the distance cue that level cannot give.
+      delay: distance / SPEED_OF_SOUND,
+      cutoffScale: 1 / (1 + distance / AIR_ABSORPTION_METRES),
+      // The edge goes first and goes fastest: a shot across the deck is a boom with
+      // nothing on the front of it, which is exactly how the ear reads range.
+      edge: reach ** EDGE_ROLLOFF,
+      importanceLift: threat.importanceLift,
     };
+  }
+
+  /**
+   * How much the player should care about whoever caused this event.
+   *
+   * Distance is already in `gain`; this is the term distance cannot give -- whether the
+   * hostile is pointed at the player. A bot will not commit a shot until the player is
+   * inside its firing arc, so facing is the honest reading of "about to hurt you", and
+   * the same reading inverted is a cull: a marksman shooting down a corridor the player
+   * left can go quiet without anything having to decide that it is unimportant.
+   */
+  private threatOf(event: GameEvent, listener: AudioListenerState): { gain: number; importanceLift: number } {
+    const hostile = event.sourceEntityId === undefined ? undefined : listener.roster?.get(event.sourceEntityId);
+    if (!hostile) return { gain: 1, importanceLift: 0 };
+    const dx = listener.position[0] - hostile.position[0];
+    const dz = listener.position[2] - hostile.position[2];
+    const flat = Math.hypot(dx, dz);
+    if (flat < 0.001) return { gain: THREAT.aimedGain, importanceLift: THREAT.importanceLift };
+    // The simulation's forward for a facing of zero.
+    const aimCosine = (-Math.sin(hostile.facing) * dx + -Math.cos(hostile.facing) * dz) / flat;
+    const aimed = Math.max(0, (aimCosine - THREAT.aimedCosine) / (1 - THREAT.aimedCosine));
+    const close = Math.max(0, 1 - flat / THREAT.nearMetres);
+    // Facing carries most of it. A hostile at nine metres looking elsewhere is less
+    // urgent than one at twenty about to fire, which is the whole point of the bucket.
+    const weight = Math.min(1, aimed * (0.65 + 0.35 * close));
+    return {
+      gain: THREAT.ambientGain + (THREAT.aimedGain - THREAT.ambientGain) * weight,
+      importanceLift: THREAT.importanceLift * weight,
+    };
+  }
+
+  /**
+   * The HDR window, and the one decision every voice in the run passes through.
+   *
+   * The window rises instantly to the loudest thing scheduled and falls back at a fixed
+   * rate; anything more than `HDR.rangeDb` under it is not worth a voice and is not built.
+   * The range tightens once the graph is already carrying a crowd, which is the voice
+   * limit doing its real job: middleware ships playback limits and priorities so that the
+   * loud and the important survive and everything else is culled *before* it is rendered,
+   * and this graph tears down five nodes per cue.
+   *
+   * Evaluated at the time the voice is scheduled for rather than now, because after the
+   * tick-accurate scheduling pass those are up to 83 ms apart.
+   */
+  private admit(when: number): boolean {
+    const top = Math.max(HDR.restDb, this.windowTop - HDR.fallDbPerSecond * Math.max(0, when - this.windowAt));
+    const range = this.liveVoices >= HDR.softVoices ? HDR.pressuredRangeDb : HDR.rangeDb;
+    if (this.importance < top - range) return false;
+    if (this.liveVoices >= HDR.hardVoices) return false;
+    this.windowTop = Math.max(top, this.importance);
+    this.windowAt = when;
+    return true;
   }
 
   private isPlayer(entityId: number | undefined, listener?: AudioListenerState): boolean {
@@ -960,18 +1449,29 @@ export class AudioManager {
     this.master = master;
 
     if (typeof context.createConvolver !== 'function') return;
-    const reverb = context.createConvolver();
-    reverb.buffer = this.createImpulseResponse(context);
-    reverb.connect(bus);
     // Two fixed send levels. See `Send` for why this is three states and not a knob.
     const near = context.createGain();
     near.gain.value = this.sendLevels.near;
-    near.connect(reverb);
     const far = context.createGain();
     far.gain.value = this.sendLevels.far;
-    far.connect(reverb);
+    // And the crossfade between the two rooms, downstream of both sends: how *much* of a
+    // cue goes to the tail is a property of the cue, and *which room the tail is* is a
+    // property of where the player is standing. Keeping them as separate stages is what
+    // lets the second change without disturbing the first.
+    const interior = context.createGain();
+    interior.gain.value = 1;
+    const exterior = context.createGain();
+    exterior.gain.value = 0;
+    near.connect(interior);
+    near.connect(exterior);
+    far.connect(interior);
+    far.connect(exterior);
+    interior.connect(this.createRoom(context, ROOMS.interior)).connect(bus);
+    exterior.connect(this.createRoom(context, ROOMS.exterior)).connect(bus);
     this.wetNear = near;
     this.wetFar = far;
+    this.interiorSend = interior;
+    this.exteriorSend = exterior;
     this.buildBed(context, bus);
   }
 
@@ -998,6 +1498,14 @@ export class AudioManager {
     const drive = context.createGain();
     drive.gain.value = 0;
     drive.connect(bus);
+    // The pulse's output and the depth its gate is applied at. Both source-less and both
+    // built here, before any oscillator, so the graph's shared nodes are created in one
+    // run -- which is also how the test double attributes them.
+    const pulse = context.createGain();
+    pulse.gain.value = 0;
+    pulse.connect(bus);
+    const pulseDepth = context.createGain();
+    pulseDepth.gain.value = 0;
     for (const [ratio, type, level] of [[1, 'sine', 1], [INTERVAL.fifth, 'triangle', 0.45]] as const) {
       const oscillator = context.createOscillator();
       oscillator.type = type;
@@ -1050,6 +1558,48 @@ export class AudioManager {
     }
     this.driveGain = drive;
     this.driveFilter = driveFilter;
+    this.buildPulse(context, pulse, pulseDepth);
+  }
+
+  /**
+   * The pulse.
+   *
+   * A held oscillator through a shaping curve into the layer's own gain: the gate lives in
+   * the graph rather than in a queue of scheduled events, so it cannot drift, it costs one
+   * oscillator for the whole run, and -- the point -- it has no way to pull a gameplay cue
+   * onto a grid. Latency is the enemy for anything the player caused; a floor that keeps
+   * time is the one thing in the mix allowed to be early or late.
+   *
+   * The layer itself is the same noise buffer the movement layer runs on, banded rather
+   * than lowpassed so it reads as a muted stick rather than as more floor. It is silent
+   * until `sustain` reports a live room, and it is `pulseDepth` that opens -- the gain node
+   * it drives has an intrinsic value of zero and is modulated, which is the only way to
+   * have a gate and a level without one overwriting the other.
+   */
+  private buildPulse(context: AudioContext, pulse: GainNode, depth: GainNode): void {
+    if (typeof context.createWaveShaper !== 'function' || !this.noiseBuffer) return;
+    const filter = context.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = PULSE.hz;
+    filter.Q.value = PULSE.q;
+    filter.connect(pulse);
+    const source = context.createBufferSource();
+    source.buffer = this.noiseBuffer;
+    source.loop = true;
+    source.connect(filter);
+    source.start();
+
+    const clock = context.createOscillator();
+    clock.type = 'sine';
+    clock.frequency.value = (PULSE.bpm / 60) * PULSE.division;
+    const gate = context.createWaveShaper();
+    gate.curve = createGateCurve(PULSE.shape);
+    clock.connect(gate).connect(depth);
+    depth.connect(pulse.gain);
+    clock.start();
+    this.pulseGain = pulse;
+    this.pulseDepth = depth;
+    this.pulseFilter = filter;
   }
 
   /**
@@ -1093,6 +1643,19 @@ export class AudioManager {
     for (const voice of this.floorVoices) {
       voice.oscillator.frequency.setTargetAtTime?.(KEY_HZ * voice.ratio * transpose, now, BED.followSeconds);
     }
+    // Which room the tail comes back from. Followed at the bed's own rate rather than
+    // switched, because the route climbs into the open over several seconds and a hard
+    // switch would be the one moment in the mix that sounds like a level boundary.
+    const space = Math.min(1, Math.max(0, state.space));
+    this.interiorSend?.gain.setTargetAtTime?.(1 - space, now, BED.followSeconds);
+    this.exteriorSend?.gain.setTargetAtTime?.(space, now, BED.followSeconds);
+    // The pulse, and it is the only thing in the mix that is about the *room* rather than
+    // about the player: it opens with the hostiles that can still act and it stops when
+    // the last of them is down. A pulse that kept going through a cleared corridor would
+    // be the thing the player turns the volume down for.
+    const room = state.down ? 0 : Math.min(1, Math.max(0, state.threat / PULSE.threatFull));
+    this.pulseDepth?.gain.setTargetAtTime?.(PULSE.gainFull * room, now, BED.followSeconds);
+    this.pulseFilter?.frequency.setTargetAtTime?.(PULSE.hz + PULSE.chainOpen * lift, now, BED.followSeconds);
     // And the room opens up. A chain is the one time the player is moving through the
     // space fast enough for its size to be the point, so the sends carry more of it.
     this.wetNear?.gain.setTargetAtTime?.(this.sendLevels.near * (1 + CHAIN.sendLift * lift), now, BED.followSeconds);
@@ -1106,7 +1669,9 @@ export class AudioManager {
    */
   private createLimiter(context: AudioContext): DynamicsCompressorNode {
     const limiter = context.createDynamicsCompressor();
-    limiter.threshold.value = -14;
+    // Moved with the mix, so raising the level did not quietly turn the limiter from glue
+    // into the loudest thing in the signal path.
+    limiter.threshold.value = -14 + MIX_TRIM_DB;
     limiter.knee.value = 6;
     limiter.ratio.value = 6;
     limiter.attack.value = 0.003;
@@ -1134,8 +1699,15 @@ export class AudioManager {
    * the only sample in a project whose entire mix is synthesised, and a download the
    * player waits on before they can hear anything.
    */
-  private createImpulseResponse(context: AudioContext): AudioBuffer {
-    const length = Math.ceil(context.sampleRate * REVERB_SECONDS);
+  /** One room, as a convolver carrying its own generated impulse. */
+  private createRoom(context: AudioContext, room: typeof ROOMS[keyof typeof ROOMS]): ConvolverNode {
+    const reverb = context.createConvolver();
+    reverb.buffer = this.createImpulseResponse(context, room);
+    return reverb;
+  }
+
+  private createImpulseResponse(context: AudioContext, room: typeof ROOMS[keyof typeof ROOMS]): AudioBuffer {
+    const length = Math.ceil(context.sampleRate * room.seconds);
     const buffer = context.createBuffer(2, length, context.sampleRate);
     let state = 0x2545f491;
     for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
@@ -1144,8 +1716,8 @@ export class AudioManager {
       for (let index = 0; index < length; index += 1) {
         state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
         const noise = ((state >>> 0) / 0x8000_0000) - 1;
-        damped += (noise - damped) * REVERB_DAMPING;
-        data[index] = damped * (1 - index / length) ** REVERB_DECAY;
+        damped += (noise - damped) * room.damping;
+        data[index] = damped * (1 - index / length) ** room.decay;
       }
     }
     return buffer;
@@ -1157,6 +1729,14 @@ export class AudioManager {
    * connected to the bus for the rest of the session. The reverb send is taken from the
    * voice's own envelope rather than from after the panner, so it costs no extra node.
    */
+  /**
+   * When a voice built right now should start: the context's clock, plus which step of
+   * the batch this event happened on, plus how long its sound took to arrive.
+   */
+  private startTime(extra = 0): number {
+    return (this.context?.currentTime ?? 0) + this.scheduleAt + extra;
+  }
+
   private output(pan: number, send: Send): { destination: AudioNode; wet: AudioNode | null; release: () => void } | null {
     const context = this.context;
     const bus = this.bus;
@@ -1181,8 +1761,15 @@ export class AudioManager {
    * about ten milliseconds and 0.04 gain it stops being an edge and starts being the
    * beep this whole pass exists to remove.
    */
-  private tick(cutoff: number, duration: number, gainValue: number, pan: number, send: Send): void {
-    this.noise('bandpass', cutoff, 1.4, duration, gainValue, pan, send);
+  private tick(cutoff: number, duration: number, gainValue: number, pan: number, send: Send, q = 1.4): void {
+    this.noise('bandpass', cutoff, q, duration, gainValue, pan, send);
+  }
+
+  /** The edge this swing takes, and the hand-off to the next one. */
+  private nextEdge(): BladeEdge {
+    const edge = this.bladeVoice.edges[this.swingRobin % this.bladeVoice.edges.length];
+    this.swingRobin += 1;
+    return edge;
   }
 
   /**
@@ -1216,8 +1803,11 @@ export class AudioManager {
     send: Send,
   ): void {
     const context = this.context;
+    if (!context) return;
+    const startAt = this.startTime();
+    if (gainValue <= 0.0005 || !this.admit(startAt)) return;
     const output = this.output(pan, send);
-    if (!context || !output || !this.noiseBuffer || gainValue <= 0.0005) {
+    if (!output || !this.noiseBuffer) {
       output?.release();
       return;
     }
@@ -1228,18 +1818,20 @@ export class AudioManager {
     filter.frequency.value = cutoff;
     filter.Q.value = q;
     const gain = context.createGain();
-    gain.gain.setValueAtTime(gainValue, context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + duration);
+    gain.gain.setValueAtTime(gainValue, startAt);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
     source.connect(filter).connect(gain).connect(output.destination);
     if (output.wet) gain.connect(output.wet);
+    this.liveVoices += 1;
     source.onended = () => {
+      this.liveVoices -= 1;
       source.disconnect();
       filter.disconnect();
       gain.disconnect();
       output.release();
     };
-    source.start();
-    source.stop(context.currentTime + duration);
+    source.start(startAt);
+    source.stop(startAt + duration);
   }
 
   /**
@@ -1253,12 +1845,11 @@ export class AudioManager {
    */
   private sub(frequency: number, duration: number, gainValue: number, drop: number, pan: number, send: Send): void {
     const context = this.context;
+    if (!context) return;
+    const now = this.startTime();
+    if (gainValue <= 0.0005 || !this.admit(now)) return;
     const output = this.output(pan, send);
-    if (!context || !output || gainValue <= 0.0005) {
-      output?.release();
-      return;
-    }
-    const now = context.currentTime;
+    if (!output) return;
     const oscillator = context.createOscillator();
     oscillator.type = 'sine';
     oscillator.frequency.setValueAtTime(frequency, now);
@@ -1280,7 +1871,9 @@ export class AudioManager {
     else oscillator.connect(filter);
     filter.connect(gain).connect(output.destination);
     if (output.wet) gain.connect(output.wet);
+    this.liveVoices += 1;
     oscillator.onended = () => {
+      this.liveVoices -= 1;
       oscillator.disconnect();
       shaper?.disconnect();
       filter.disconnect();
@@ -1298,12 +1891,11 @@ export class AudioManager {
     send: Send = 'dry',
   ): void {
     const context = this.context;
+    if (!context) return;
+    const startAt = this.startTime(Math.max(0, delaySeconds));
+    if (gainValue <= 0.0005 || !this.admit(startAt)) return;
     const output = this.output(pan, send);
-    if (!context || !output || gainValue <= 0.0005) {
-      output?.release();
-      return;
-    }
-    const startAt = context.currentTime + Math.max(0, delaySeconds);
+    if (!output) return;
     const oscillator = context.createOscillator();
     oscillator.type = type;
     oscillator.frequency.setValueAtTime(frequency, startAt);
@@ -1321,7 +1913,9 @@ export class AudioManager {
     else oscillator.connect(gain);
     gain.connect(output.destination);
     if (output.wet) gain.connect(output.wet);
+    this.liveVoices += 1;
     oscillator.onended = () => {
+      this.liveVoices -= 1;
       oscillator.disconnect();
       filter?.disconnect();
       gain.disconnect();
@@ -1336,7 +1930,7 @@ export class AudioManager {
  * What each hostile is made of, or the reference material for a caller with no roster.
  */
 function materialOf(entityId: number | undefined, listener?: AudioListenerState): Material {
-  const kind = entityId === undefined ? undefined : listener?.profiles?.get(entityId);
+  const kind = entityId === undefined ? undefined : listener?.roster?.get(entityId)?.kind;
   return kind ? MATERIAL[kind] : MATERIAL.ranged;
 }
 
@@ -1400,6 +1994,21 @@ function variation(id: number, spread: number): number {
  * material passes nearly untouched and loud material folds over gradually instead of
  * squaring off into a buzz.
  */
+/**
+ * The pulse's gate: a sine on its way in, about a fifth of a cycle sounding on its way
+ * out. Raising the half-rectified cycle to a power is the cheapest percussive envelope
+ * there is, and unlike a scheduled ramp it exists in the graph rather than in a queue.
+ */
+function createGateCurve(shape: number): Float32Array<ArrayBuffer> {
+  const samples = 512;
+  const curve = new Float32Array(samples);
+  for (let index = 0; index < samples; index += 1) {
+    const x = (index / (samples - 1)) * 2 - 1;
+    curve[index] = ((x + 1) / 2) ** shape;
+  }
+  return curve;
+}
+
 function createDriveCurve(amount: number): Float32Array<ArrayBuffer> {
   const samples = 1024;
   const curve = new Float32Array(samples);
