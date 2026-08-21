@@ -33,9 +33,10 @@ FLOWSTATE_STATIC_DIST=1 npm run test:e2e
 - `Space` (airborne, against a wall-run surface): wall jump — this always wins over the dash double-tap, so kicking down a corridor never turns into a dash
 - `C` or `Ctrl`: slide
 - `1` / `2`: draw the first or second carried weapon; `Tab` swaps between them
-- Left mouse: fire
-- Right mouse: ADS. Holding it locks onto the bot nearest the crosshair and tracks its centre mass. The acquisition cone covers roughly the visible screen; the lock drops when the target dies, leaves the wider hold cone, or moves behind cover, and manual look still applies first so you can drag off or switch targets.
-- `E`: quick melee
+- Left mouse: the trigger, and it uses whatever is in your hands. With the blade up it swings — held rather than clicked, so it produces a rhythm at the blade's own recovery rate. With the gun up it fires, so drawing a weapon deliberately is not undone by the button every shooter puts the trigger on. The ammo corner always names which one you are holding.
+- Right mouse: fire the sidearm. This is also how the gun is drawn; it puts itself away 0.95 s after the last shot.
+- `E`: the heavy swing — slower, wider, and the only swing that sweeps more than one target. It also draws the blade, so it is how you get back to it without waiting.
+- `V`: ADS. Holding it locks onto the bot nearest the crosshair and tracks its centre mass. The acquisition cone covers roughly the visible screen; the lock drops when the target dies, leaves the wider hold cone, or moves behind cover, and manual look still applies first so you can drag off or switch targets.
 - `R`: reload
 - `Esc`: release Pointer Lock (or embedded-preview mouse capture) and pause
 

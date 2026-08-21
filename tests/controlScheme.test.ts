@@ -447,16 +447,44 @@ describe('which weapon is in the player\'s hands', () => {
     simulation.dispose();
   });
 
-  it('takes the gun straight back out of the way for a swing', async () => {
+  it('leaves the gun in the player\'s hands when they pull the primary trigger', async () => {
     const simulation = await start(level([FLOOR]));
     const tick = settle(simulation);
     expect(simulation.step(frame(tick, { held: Action.Fire }), TICK).snapshot.player.weapons.inHand).toBe('gun');
-    // Well inside the hold. The blade is what does the swinging: the previous
-    // arrangement kept the gun on screen for up to 0.95 s after a shot and ran the
-    // blade's swing pose on it.
+    // The reported bug, and the rule that replaced it. A player who has deliberately
+    // drawn a gun used to have it yanked back out of their hands by the button every
+    // shooter in the world puts the trigger on. The primary button now fires while the
+    // gun is up: the trigger uses whatever is in your hands.
     const output = simulation.step(frame(tick + 1, { held: Action.Slash }), TICK);
+    expect(output.snapshot.player.action).not.toBe('melee');
+    expect(output.snapshot.player.weapons.inHand).toBe('gun');
+    simulation.dispose();
+  });
+
+  it('takes the gun out of the way for a heavy, which is the blade\'s own draw', async () => {
+    const simulation = await start(level([FLOOR]));
+    const tick = settle(simulation);
+    expect(simulation.step(frame(tick, { held: Action.Fire }), TICK).snapshot.player.weapons.inHand).toBe('gun');
+    // Well inside the hold. The blade is what does the swinging -- an older arrangement
+    // kept the gun on screen for up to 0.95 s after a shot and ran the blade's swing
+    // pose on it -- and the heavy is now also how the player gets the blade back
+    // without waiting, so the primary button firing cannot lock them out of it.
+    const output = simulation.step(frame(tick + 1, { pressed: Action.Melee }), TICK);
     expect(output.snapshot.player.action).toBe('melee');
     expect(output.snapshot.player.weapons.inHand).toBe('blade');
+    simulation.dispose();
+  });
+
+  it('hands the primary button back to the blade once the gun puts itself away', async () => {
+    const simulation = await start(level([FLOOR]));
+    let tick = settle(simulation);
+    simulation.step(frame(tick, { held: Action.Fire }), TICK);
+    // Idle past the hold, then swing. Nothing is permanently rebound: the button means
+    // whichever weapon the ammo corner is currently naming.
+    for (let step = 1; step <= 90; step += 1) simulation.step(frame(tick + step, {}), TICK);
+    tick += 91;
+    const output = simulation.step(frame(tick, { held: Action.Slash }), TICK);
+    expect(output.snapshot.player.action).toBe('melee');
     simulation.dispose();
   });
 

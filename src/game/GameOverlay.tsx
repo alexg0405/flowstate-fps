@@ -96,7 +96,7 @@ export function GameOverlay({ screenState, error, snapshot, level, settings, sav
                 </>
               ) : (
                 <>
-                  <span><kbd>LMB</kbd> SLASH</span>
+                  <span><kbd>LMB</kbd> SLASH / FIRE</span>
                   <span><kbd>E</kbd> HEAVY</span>
                   <span><kbd>RMB</kbd> SIDEARM</span>
                   <span><kbd>WASD</kbd> MOVE</span>
