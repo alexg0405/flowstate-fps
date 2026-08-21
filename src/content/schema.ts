@@ -66,7 +66,7 @@ const lightInstanceSchema = z.object({
 
 const spawnSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(['player', 'bot-ranged', 'bot-aggressive', 'bot-bulwark']),
+  kind: z.enum(['player', 'bot-ranged', 'bot-aggressive', 'bot-bulwark', 'bot-resonator']),
   position: vec3,
   rotationY: z.number(),
   encounterId: z.string().min(1).optional(),
@@ -100,6 +100,14 @@ export const legacyLevelDocumentSchema = z.object({
   exit: vec3,
 });
 
+const vistaHintSchema = z.object({
+  id: z.string().min(1),
+  at: vec3,
+  radius: z.number().positive(),
+  yaw: z.number(),
+  pitch: z.number(),
+});
+
 export const levelDocumentV2Schema = z.object({
   schemaVersion: z.literal(2),
   id: z.string().min(1),
@@ -115,10 +123,12 @@ export const levelDocumentV2Schema = z.object({
   spawns: z.array(spawnSchema),
   encounters: z.array(encounterSchema),
   offMeshLinks: z.array(offMeshLinkSchema),
+  // Absent on every document authored before compositions carried a camera.
+  vistaHints: z.array(vistaHintSchema).optional(),
   exit: vec3,
-}).transform(({ primitives: _primitives, ...level }): LevelDocumentV2 => {
+}).transform(({ primitives: _primitives, vistaHints, ...level }): LevelDocumentV2 => {
   const collision = structuredClone(level.collision);
-  return { ...level, collision, primitives: collision };
+  return { ...level, collision, primitives: collision, vistaHints: vistaHints ?? [] };
 });
 
 /** Accepts either serialized generation and always returns normalized V2. */
@@ -146,7 +156,7 @@ export function validateLevel(input: unknown): ValidationResult {
     errors.push(`Unsupported environment preset ${level.environmentPresetId}; expected ${DEFAULT_ENVIRONMENT_PRESET_ID}.`);
   }
   const ids = new Set<string>();
-  for (const item of [...level.collision, ...level.visuals, ...level.lights, ...level.spawns, ...level.encounters, ...level.offMeshLinks]) {
+  for (const item of [...level.collision, ...level.visuals, ...level.lights, ...level.spawns, ...level.encounters, ...level.offMeshLinks, ...level.vistaHints]) {
     if (ids.has(item.id)) errors.push(`Duplicate id: ${item.id}`);
     ids.add(item.id);
   }
@@ -192,6 +202,11 @@ export function validateLevel(input: unknown): ValidationResult {
       errors.push(`Light ${light.id} references missing gate binding ${light.gateVisibilityBindingId}.`);
     }
     if (light.castShadow) warnings.push(`Light ${light.id} requests a shadow; accent lights are intentionally non-shadowed.`);
+  }
+  for (const hint of level.vistaHints) {
+    // Beyond the clamp the simulation applies to pitch, a hint can never be reached and
+    // the nudge would spend the whole zone pulling at its own ceiling.
+    if (Math.abs(hint.pitch) > 1.48) errors.push(`Vista hint ${hint.id} asks for a pitch outside the look clamp.`);
   }
   if (level.collision.length === 0) warnings.push('The level has no geometry.');
   return { errors, warnings };

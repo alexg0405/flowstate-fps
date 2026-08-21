@@ -9,7 +9,11 @@ import { FlowSimulation } from '../src/simulation/FlowSimulation';
 const TICK = 1 / 60;
 
 function frame(tick: number, overrides: Partial<InputFrame> = {}): InputFrame {
-  return { tick, held: 0, pressed: 0, released: 0, look: [0, 0], ...overrides };
+  // Every case in this file is about the gun, and the gun is a *selection* now rather
+  // than the weapon the player starts a run holding. Drawing it costs a bit rather than
+  // a frame: selection resolves at the top of `updateCombat`, before the trigger is read.
+  const input: InputFrame = { tick, held: 0, pressed: 0, released: 0, look: [0, 0], ...overrides };
+  return { ...input, pressed: input.pressed | Action.SelectGunOne };
 }
 
 function arena(): LegacyLevelDocumentV1 {
@@ -90,8 +94,8 @@ describe('applying a contract to a run', () => {
         const dy = bot.position[1] + 0.3 - camera.position[1];
         const dz = bot.position[2] - camera.position[2];
         output = simulation.step(frame(tick, {
-          held: Action.Fire,
-          pressed: tick === 2 ? Action.Fire : 0,
+          held: Action.Attack,
+          pressed: tick === 2 ? Action.Attack : 0,
           look: [
             (camera.yaw - Math.atan2(-dx, -dz)) / 0.002,
             (camera.pitch - Math.atan2(dy, Math.hypot(dx, dz))) / 0.002,

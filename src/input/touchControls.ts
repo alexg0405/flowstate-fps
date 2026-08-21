@@ -93,7 +93,7 @@ export function readStick(dx: number, dy: number): StickReading {
  * player is not holding is not something to reload. A phone has room for about eight
  * controls under a thumb, and the two contextual ones are how it holds ten.
  */
-export type TouchCondition = 'always' | 'grappling' | 'gun';
+export type TouchCondition = 'always' | 'grappling' | 'gun' | 'blade';
 
 export interface TouchButton {
   id: string;
@@ -119,17 +119,25 @@ export interface TouchButton {
  * double-tapped jump, and the simulation derives them from the same edge on every input
  * device -- a separate button would be a second way to spend a charge the player is
  * already spending, which is how a mobile scheme ends up with two verbs that fight.
+ *
+ * There is no separate fire button either, for the same reason: `HIT` attacks with
+ * whatever is selected, and `SWAP` is what selects.
  */
 export const touchButtons: readonly TouchButton[] = [
-  { id: 'slash', label: 'CUT', description: 'Slash', action: Action.Slash, condition: 'always', zone: 'primary' },
+  // One trigger, exactly as on a mouse: it attacks with whatever `SWAP` last selected,
+  // and the ammo corner says which that is. A separate `GUN` button was the same
+  // conflict the keyboard had -- two ways to attack, one of which silently changed what
+  // was in the player's hands.
+  { id: 'attack', label: 'HIT', description: 'Attack with the selected weapon', action: Action.Attack, condition: 'always', zone: 'primary' },
   { id: 'jump', label: 'JUMP', description: 'Jump, and twice to dash', action: Action.Jump, condition: 'always', zone: 'primary' },
-  { id: 'heavy', label: 'HEAVY', description: 'Heavy swing', action: Action.Melee, condition: 'always', zone: 'primary' },
-  { id: 'fire', label: 'GUN', description: 'Fire the sidearm', action: Action.Fire, condition: 'always', zone: 'primary' },
+  { id: 'heavy', label: 'HEAVY', description: 'Heavy swing', action: Action.Melee, condition: 'blade', zone: 'primary' },
   { id: 'hook', label: 'HOOK', description: 'Cast the hook', action: Action.Grapple, condition: 'always', zone: 'secondary' },
   { id: 'pull', label: 'PULL', description: 'Pull along the hook', action: Action.GrapplePull, condition: 'grappling', zone: 'secondary' },
   { id: 'slide', label: 'SLIDE', description: 'Slide', action: Action.Crouch, condition: 'always', zone: 'secondary' },
   { id: 'aim', label: 'AIM', description: 'Aim down sights', action: Action.Ads, condition: 'gun', zone: 'utility' },
   { id: 'reload', label: 'RELOAD', description: 'Reload', action: Action.Reload, condition: 'gun', zone: 'utility' },
+  // The selector. Three weapons and one thumb, so it cycles rather than taking three
+  // buttons -- the number keys' job, done in the room a phone actually has.
   { id: 'swap', label: 'SWAP', description: 'Swap weapon', action: Action.WeaponSwap, condition: 'always', zone: 'utility' },
 ];
 
@@ -139,5 +147,6 @@ export function visibleTouchButtons(state: { grappling: boolean; gunInHand: bool
     button.condition === 'always'
     || (button.condition === 'grappling' && state.grappling)
     || (button.condition === 'gun' && state.gunInHand)
+    || (button.condition === 'blade' && !state.gunInHand)
   ));
 }

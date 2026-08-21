@@ -17,10 +17,12 @@ const keyActions: Record<string, number> = {
   // action with nearly half a second of recovery, and a key says that better than a
   // button the player's index finger is already resting on.
   KeyE: Action.Melee,
-  KeyV: Action.Ads,
   KeyF: Action.Grapple,
-  Digit1: Action.WeaponPrimary,
-  Digit2: Action.WeaponSecondary,
+  // What is in your hands, in the order it matters: the blade is the primary verb, so
+  // it takes the first slot, and the two carried gun builds follow it.
+  Digit1: Action.SelectBlade,
+  Digit2: Action.SelectGunOne,
+  Digit3: Action.SelectGunTwo,
   Tab: Action.WeaponSwap,
 };
 
@@ -248,13 +250,16 @@ export class InputController {
   };
 
   /**
-   * Left is the blade, right is the sidearm. Aiming came off the mouse entirely and
-   * onto `KeyV`: with melee as the primary verb there are three attack-adjacent verbs
-   * and two mouse buttons, and the one a player uses least is the deliberate,
-   * stand-still zoom.
+   * Left attacks, right aims.
+   *
+   * Aiming was pushed off the mouse and onto `KeyV` when there were three
+   * attack-adjacent verbs and two buttons to put them on. There is one attack verb now
+   * -- the trigger uses whatever the player selected -- so the pressure that decision
+   * was answering is gone, and the button every shooter puts the sights on gets them
+   * back.
    */
   private mouseAction(button: number): number {
-    return button === 0 ? Action.Slash : button === 2 ? Action.Fire : 0;
+    return button === 0 ? Action.Attack : button === 2 ? Action.Ads : 0;
   }
 
   private onMouseDown = (event: MouseEvent): void => {

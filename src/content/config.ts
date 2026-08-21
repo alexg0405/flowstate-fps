@@ -58,6 +58,28 @@ export const aimAssist: AimAssistProfile = {
   aimHeight: 0.35,
 };
 
+/**
+ * How far, and how fast, an authored vista may move the player's view.
+ *
+ * `maxPitchOffset` is the number that decides whether this is a hint or a cutscene.
+ * Eighteen degrees is enough to lift a composition off the floor of a 92-degree vertical
+ * frame and not enough to take the view anywhere the player would not have gone; the
+ * route's steeper shots have to be earned by geometry instead. `rate` is slow enough to
+ * read as drift rather than as a camera move, and `decayRate` gives the aim back faster
+ * than it was taken, because a view that lingers where the player did not put it is the
+ * thing that feels like losing control.
+ */
+export const lookNudge = {
+  maxPitchOffset: (18 * Math.PI) / 180,
+  rate: (12 * Math.PI) / 180,
+  decayRate: (26 * Math.PI) / 180,
+  /** Look input below this is noise from a resting hand or a stick deadzone. */
+  inputEpsilon: 0.0005,
+  inputLockSeconds: 1.1,
+  /** A hostile this close disarms it. Nothing moves the aim during a fight. */
+  disarmRange: 45,
+} as const;
+
 /** Recoil is reduced while aiming, which is most of the reason to aim. */
 export const recoilAdsFactor = 0.72;
 /**
@@ -190,6 +212,46 @@ export const botProfiles: Record<BotProfile['kind'], BotProfile> = {
     turnRate: 1.5,
     shield: { arcCosine: Math.cos(1.2), damageScale: 0.18 },
     fireArcCosine: Math.cos(0.5),
+  },
+  /**
+   * The Resonator, which is the first hostile that asks a movement question.
+   *
+   * The roster was three profiles differing in health, speed, range and one shield --
+   * all of them answered by shooting better or standing somewhere else on the same
+   * floor. This one anchors, telegraphs for eight tenths of a second, and puts a wave
+   * along the ground that reaches twenty metres at twenty-four metres a second. Cover
+   * does not stop it. What answers it is being off the floor when it arrives, which is
+   * the one thing the movement kit is for.
+   *
+   * `speed` was 15 and `reach` 16, and at those numbers the enemy did not work. Sprinting
+   * is 12 m/s, so a player running straight away from a wave leaving from seven metres
+   * outran it and the wave expired at its reach without ever arriving. Once the wave is
+   * faster than a sprint the break-even distance is `reach * (speed - sprint) / speed`;
+   * at 24 and 20 that is ten metres, comfortably outside this profile's own
+   * `preferredRange` of seven. Beyond ten, backing off is a real answer, and that is the
+   * intended shape: get off the floor, or get out of its bubble.
+   *
+   * Found by a test that was silently passing while doing nothing. It held
+   * `Action.MoveBackward`, which is not a member of `Action`, so the "retreating" player
+   * stood still and was duly hit. Only the typecheck caught it.
+   *
+   * Low health and slow on purpose. It is not meant to be a damage race -- it is meant
+   * to change where the player can afford to stand, and a bulwark's health pool on top
+   * of that would just make the arena a waiting game.
+   *
+   * `preferredRange` keeps it out at seven metres so it is not trivially inside the
+   * blade's 3.6 m envelope on arrival, and `turnRate` is high because facing does not
+   * matter to a ring -- it is there so the model reads as tracking the player.
+   *
+   * The 0.8 s telegraph is the same grammar the other three use: it commits, announces,
+   * and only then resolves. The dash's invulnerability frames still answer it, because
+   * that rule holds for everything in the game.
+   */
+  resonator: {
+    kind: 'resonator', health: 90, moveSpeed: 2.6, preferredRange: 7, fireInterval: 3.4, damage: 16,
+    windupSeconds: 0.8, baseSpread: 0, spreadPerSpeed: 0,
+    turnRate: 2.4,
+    pulse: { speed: 24, reach: 20, height: 1.4, thickness: 2.2 },
   },
 };
 

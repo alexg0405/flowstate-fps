@@ -2271,3 +2271,65 @@ What it buys is the asymmetry the reference is built on: the two sides of a corr
 longer the same wall at two brightnesses. One is pale cyan and one is dark teal, ceilings
 recede into near-black, and the surfaces facing back down the route carry the magenta the
 sky is lit with.
+
+## 21. One trigger, and the player says what it does
+
+A control-scheme rebuild, from a bug report: left click with a gun out still swung the
+blade. It did -- `Action.Slash` swung unconditionally -- and the first fix made the button
+contextual on a 0.95 s hold timer. That was still two meanings on one button, decided by a
+clock rather than by the player, so the scheme was rebuilt instead.
+
+Verified: `npm test` **561 passing / 43 files**, `npm run typecheck` clean, `npm run build`
+clean, and the touch and visual e2e green.
+
+### What changed
+
+| | before | now |
+| --- | --- | --- |
+| left mouse | slash, always | **attack** with whatever is selected |
+| right mouse | fire the sidearm | **ADS** |
+| `V` | ADS | unbound |
+| `1` / `2` | gun slot one / two | **blade** / **gun one** |
+| `3` | — | **gun two** |
+| `Tab` | swap the two guns | cycle all three, in key order |
+| what is in hand | a 0.95 s timer refreshed by firing | the player's last choice, held until the next |
+
+`Action.Slash` and `Action.Fire` are gone, replaced by one `Action.Attack`; leaving the bit
+called `Slash` while it fired guns would have re-created the same confusion one layer down.
+
+**The timer is the real removal.** `gunHoldTimer` drew a gun whenever one fired and put the
+blade back 0.95 s later, which meant the attack button changed meaning underneath a player
+who had not asked for anything -- and it is why the fix before this one still felt wrong
+even though it did what the report asked. `inHand` is now state that only a slot key, the
+swap key or a checkpoint restore moves. `gunHoldSeconds` is deleted.
+
+Aiming came back to the mouse with it. It was pushed onto `V` when there were three
+attack-adjacent verbs and two buttons; there is one attack verb now, so the pressure that
+decision was answering is gone.
+
+### The decisions inside it
+
+- **Blade on `1`.** It is the primary verb, so it takes the first slot and the two carried
+  gun builds follow it.
+- **Blade-to-gun is free; gun-to-gun is not.** The swap ready timer is a magazine change,
+  and changing hands is not one. Charging a third of a second to put a blade away in a game
+  this fast would turn the selection the player just gained into something they avoid using.
+- **The heavy needs the blade.** `E` used to swing regardless, which is how a blade's swing
+  pose ended up animating on a gun. Both blade attacks now require the blade, which prevents
+  that at the source instead of papering over it afterwards.
+- **Sights and reloads need the gun.** A blade has no sights and no magazine.
+- **Selection resolves first.** `updateWeaponSwitch` runs before anything that reads what is
+  in hand, so a weapon drawn on a tick is the weapon that tick acts with -- which is also
+  what lets a test draw and fire on the same frame.
+
+On touch the same conflict existed in button form: `CUT` and `GUN` were two ways to attack,
+one of which silently changed what was held. There is one `HIT` button now, `HEAVY` appears
+only with the blade up, and `SWAP` does the number keys' job in the room a phone has.
+
+### What it cost
+
+Thirty-six test cases, across twelve files, every one of which had been written against a
+scheme where the player starts a run holding a gun. Most took one bit -- the gun drawn on
+the frame the trigger is first pulled -- but the six files that test the scheme itself were
+rewritten, and `weaponSlots` grew a third slot throughout. The README's mouse controls were
+two passes stale before this and now describe the game.

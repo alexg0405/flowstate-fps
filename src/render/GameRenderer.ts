@@ -12,6 +12,8 @@ import { PostPipeline } from './presentation/PostPipeline';
 import { accentMaterial, canBatch, groupVisualBatches, resolveVariantAccent, type VariantAccent } from './presentation/visualBatching';
 import { HitstopController } from './presentation/hitstop';
 import { directCamera, FOV_DIRECTION, isTouchdown } from './presentation/cameraDirection';
+import { botColliderBottom } from '../content/config';
+import { ResonancePresenter } from './presentation/ResonancePresenter';
 import { palette } from './palette';
 import { ResolutionController } from './ResolutionController';
 import { ViewmodelPresenter } from './presentation/ViewmodelPresenter';
@@ -58,6 +60,7 @@ export class GameRenderer {
   private readonly fx: FxPresenter;
   private readonly grapple: GrapplePresenter;
   private readonly ghost: GhostPresenter;
+  private readonly resonance: ResonancePresenter;
   private readonly post: PostPipeline;
   private readonly assetManager: AssetManager;
   private readonly assetRoot = new THREE.Group();
@@ -136,8 +139,9 @@ export class GameRenderer {
     this.fx = new FxPresenter(this.materials, settings);
     this.grapple = new GrapplePresenter(this.materials, settings);
     this.ghost = new GhostPresenter(settings);
+    this.resonance = new ResonancePresenter(settings);
     this.assetRoot.name = 'Catalog Assets';
-    this.scene.add(this.world.environmentRoot, this.world.root, this.assetRoot, this.characters.root, this.fx.root, this.grapple.root, this.grapple.aimRoot, this.ghost.root);
+    this.scene.add(this.world.environmentRoot, this.world.root, this.assetRoot, this.characters.root, this.fx.root, this.grapple.root, this.grapple.aimRoot, this.ghost.root, this.resonance.root);
     this.viewScene.add(this.viewmodel.root);
     this.setupLighting();
     this.assetManager = new AssetManager({
@@ -157,6 +161,7 @@ export class GameRenderer {
     this.fx.updateSettings(settings);
     this.grapple.updateSettings(settings);
     this.ghost.updateSettings(settings);
+    this.resonance.updateSettings(settings);
     this.post.updateSettings(settings);
     if (!this.dynamicResolutionEnabled()) {
       this.dynamicScale = 1;
@@ -246,6 +251,7 @@ export class GameRenderer {
     this.grapple.update(snapshot, time, this.grappleEmitterOffset);
     this.grapple.updateAim(snapshot, time);
     this.ghost.update(ghostPosition, snapshot.camera.position, time, frameSeconds);
+    this.resonance.update(snapshot, time, botColliderBottom);
 
     this.post.setSpeed(this.speedDrive(snapshot));
     this.post.render(frameSeconds);
@@ -290,6 +296,7 @@ export class GameRenderer {
     this.assetManager.dispose();
     this.post.dispose();
     this.ghost.dispose();
+    this.resonance.dispose();
     this.grapple.dispose();
     this.fx.dispose();
     this.viewmodel.dispose();

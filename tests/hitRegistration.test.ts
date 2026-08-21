@@ -37,8 +37,10 @@ async function shootAtBodyFraction(fraction: number) {
   const flat = Math.hypot(dx, dz);
   output = simulation.step({
     tick: 30,
-    held: Action.Fire | Action.Ads,
-    pressed: Action.Fire,
+    held: Action.Attack | Action.Ads,
+    // The gun is a selection now, and drawing it resolves before the trigger is read on
+    // the same tick.
+    pressed: Action.Attack | Action.SelectGunOne,
     released: 0,
     look: [
       (output.snapshot.camera.yaw - Math.atan2(-dx, -dz)) / 0.002,

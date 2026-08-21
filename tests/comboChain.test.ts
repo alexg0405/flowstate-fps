@@ -187,7 +187,7 @@ describe('the flow chain', () => {
     let landed = 0;
     let links = 0;
     for (let tick = 5; tick <= 5 + Math.ceil(melee.light.seconds * 60) * 4; tick += 1) {
-      const output = simulation.step(frame(tick, { held: Action.Slash, pressed: tick === 5 ? Action.Slash : 0 }), TICK);
+      const output = simulation.step(frame(tick, { held: Action.Attack, pressed: tick === 5 ? Action.Attack : 0 }), TICK);
       for (const event of output.events) {
         if (event.kind === 'melee' && event.targetEntityId !== undefined) landed += 1;
         if (event.kind === 'comboLink' && !output.events.some((other) => other.kind === 'kill' && other.tick === event.tick)) links += 1;
@@ -205,7 +205,7 @@ describe('the flow chain', () => {
     for (let tick = 1; tick <= 4; tick += 1) simulation.step(frame(tick), TICK);
 
     // One light, then the heavy inside the same chain window.
-    const light = simulation.step(frame(5, { held: Action.Slash, pressed: Action.Slash }), TICK);
+    const light = simulation.step(frame(5, { held: Action.Attack, pressed: Action.Attack }), TICK);
     expect(light.events.some((event) => event.kind === 'comboLink')).toBe(true);
     let output = light;
     for (let tick = 6; tick <= 5 + Math.ceil(melee.light.seconds * 60); tick += 1) {
@@ -224,7 +224,7 @@ describe('the flow chain', () => {
     await simulation.loadLevel(cookLevel(course()));
     for (let tick = 1; tick <= 20; tick += 1) simulation.step(frame(tick), TICK);
     // Nothing to hit anywhere on the combo course.
-    const output = simulation.step(frame(21, { held: Action.Slash, pressed: Action.Slash }), TICK);
+    const output = simulation.step(frame(21, { held: Action.Attack, pressed: Action.Attack }), TICK);
     expect(output.events.some((event) => event.kind === 'melee')).toBe(true);
     expect(output.events.some((event) => event.kind === 'comboLink')).toBe(false);
     expect(output.snapshot.player.combo.links).toBe(0);

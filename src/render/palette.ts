@@ -33,12 +33,23 @@ export const surfaceAccent = {
 } as const;
 
 /**
- * Hostiles read cyan or red; the player's own signals own the yellow. The bulwark
- * takes the hot yellow because its plate is the one hostile marking the player has
- * to read *positionally* rather than just spot, and it is only ever worn by a shield.
+ * Hostiles read cyan or red; the player's own signals own the yellow. The hot yellow is
+ * for a hostile marking the player has to read **positionally** rather than just spot --
+ * where the plate is pointing, where the wave has got to. That was written as "only ever
+ * worn by a shield", which described the only case there was rather than the rule; the
+ * Resonator is the second case and it is the same rule.
+ *
+ * The Resonator's body is red because it is a threat to where the player is standing,
+ * which is what red means here. What separates it from a brawler at a glance is not hue
+ * but the ring on the floor underneath it, in the positional colour, which no other
+ * hostile has.
  */
 export const hostileAccent = {
   ranged: palette.cyan,
   aggressive: palette.red,
   bulwark: palette.yellowHot,
+  resonator: palette.red,
 } as const;
+
+/** The ground wave and its warning ring. Positional, so it takes the hot yellow. */
+export const resonanceAccent = palette.yellowHot;

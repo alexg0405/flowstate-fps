@@ -593,19 +593,21 @@ describe('gameplay overlay states', () => {
     onExit: () => {},
   } as const;
 
-  it('shows the full guidance on standby, leading with the blade', () => {
+  it('shows the full guidance on standby, leading with the one trigger', () => {
     render(<GameOverlay {...baseProps} screenState="standby" snapshot={snapshotFixture()} />);
     const guide = query('.control-guide').textContent ?? '';
-    // The blade is the primary verb, so it is the first thing the guide names, and
-    // the gun is the button next to it rather than the one under the index finger.
-    for (const binding of ['LMB SLASH', 'E HEAVY', 'RMB SIDEARM', 'WASD MOVE', 'SPACE JUMP', 'SPACE ×2 DASH / DODGE', 'F HOOK', 'Q PULL', 'C SLIDE', 'V AIM', 'R RELOAD']) {
+    // One attack verb on the mouse and a selector on the numbers. The guide names the
+    // trigger first, because it is the only button whose meaning the player chooses.
+    for (const binding of ['LMB ATTACK', 'E HEAVY', 'RMB AIM', 'WASD MOVE', 'SPACE JUMP', 'SPACE ×2 DASH / DODGE', 'F HOOK', 'Q PULL', 'C SLIDE', '1 2 3 BLADE / GUNS', 'R RELOAD']) {
       expect(guide).toContain(binding);
     }
-    expect(guide.indexOf('LMB SLASH')).toBeLessThan(guide.indexOf('RMB SIDEARM'));
-    // Both swings before the gun, and aiming is no longer on the mouse at all.
-    expect(guide.indexOf('E HEAVY')).toBeLessThan(guide.indexOf('RMB SIDEARM'));
+    expect(guide.indexOf('LMB ATTACK')).toBeLessThan(guide.indexOf('RMB AIM'));
+    // And nothing anywhere says the mouse fires or slashes, which is the confusion the
+    // scheme was rebuilt to remove.
     expect(guide).not.toContain('E MELEE');
     expect(guide).not.toContain('LMB FIRE');
+    expect(guide).not.toContain('LMB SLASH');
+    expect(guide).not.toContain('SIDEARM');
     expect(query('.enter-action').textContent).toContain('Enter run');
   });
 

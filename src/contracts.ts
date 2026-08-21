@@ -9,21 +9,33 @@ export const Action = {
   Sprint: 1 << 5,
   Crouch: 1 << 6,
   Dash: 1 << 7,
-  Fire: 1 << 8,
   Ads: 1 << 9,
   Reload: 1 << 10,
   Melee: 1 << 11,
   Grapple: 1 << 12,
-  WeaponPrimary: 1 << 13,
-  WeaponSecondary: 1 << 14,
+  /**
+   * What is in the player's hands, chosen explicitly and kept until they choose again.
+   *
+   * There used to be two gun slots and a blade that came back on a 0.95 s timer, which
+   * meant the attack button silently changed meaning while the player was holding it.
+   * Three slots and three keys: the choice is the player's and it is visible in the ammo
+   * corner.
+   */
+  SelectBlade: 1 << 13,
+  SelectGunOne: 1 << 14,
+  SelectGunTwo: 1 << 18,
+  /** Cycles the three in order, for a thumb that is busy. */
   WeaponSwap: 1 << 15,
   GrapplePull: 1 << 16,
   /**
-   * The blade. This is the primary verb: `Fire` is the sidearm now, and it moved to
-   * the right mouse button to make room for it. `Melee` is the heavy on the same
-   * blade -- slower, wider, and the only swing that sweeps more than one target.
+   * The trigger, and it is one verb rather than two.
+   *
+   * It attacks with whatever is in hand -- the blade swings, a gun fires -- so the
+   * primary mouse button means one thing and the *selection* decides what that thing
+   * does. Holding it produces a rhythm at the weapon's own rate. `Melee` is the heavy
+   * on the blade: slower, wider, and the only swing that sweeps more than one target.
    */
-  Slash: 1 << 17,
+  Attack: 1 << 17,
 } as const;
 
 export interface InputFrame {
@@ -73,6 +85,24 @@ export interface EntitySnapshot {
    */
   maxHealth: number;
   profile?: BotProfile['kind'];
+  /**
+   * A live ground wave, so the floor can draw it. Published as a radius rather than a
+   * shape because the wave *is* a radius -- the presentation layer decides what a ring
+   * looks like, the simulation decides where it has got to.
+   */
+  pulse?: {
+    /** Current radius in metres. */
+    radius: number;
+    reach: number;
+    height: number;
+    thickness: number;
+  };
+  /**
+   * How far through its telegraph this hostile is, 0 to 1, or undefined when it is not
+   * winding up. The Resonator's warning is drawn on the arena floor rather than in the
+   * HUD, which needs the progress and not just the fact.
+   */
+  telegraph?: number;
 }
 
 export interface SimulationSnapshot {
@@ -196,7 +226,7 @@ export interface GameEvent {
    * HUD both want the *amount*, and a health value that went up is not the same statement
    * as sixteen points of life taken back out of a body.
    */
-  kind: 'shot' | 'impact' | 'hit' | 'kill' | 'heal' | 'melee' | 'checkpoint' | 'death' | 'complete' | 'grappleAttach' | 'grapplePull' | 'grappleRelease' | 'grappleFail' | 'reloadStart' | 'reloadComplete' | 'enemyTelegraph' | 'enemyAttack' | 'gateOpen' | 'dryFire' | 'respawn' | 'split' | 'comboLink' | 'comboBreak' | 'dodge' | 'wave';
+  kind: 'shot' | 'impact' | 'hit' | 'kill' | 'heal' | 'melee' | 'checkpoint' | 'death' | 'complete' | 'grappleAttach' | 'grapplePull' | 'grappleRelease' | 'grappleFail' | 'reloadStart' | 'reloadComplete' | 'enemyTelegraph' | 'enemyAttack' | 'gateOpen' | 'dryFire' | 'respawn' | 'split' | 'comboLink' | 'comboBreak' | 'dodge' | 'wave' | 'resonance';
   position?: Vec3;
   /**
    * Start of the segment an event describes, when `position` is its end. Set on
@@ -311,7 +341,7 @@ export interface AssetCatalog {
 
 export interface SpawnDefinition {
   id: string;
-  kind: 'player' | 'bot-ranged' | 'bot-aggressive' | 'bot-bulwark';
+  kind: 'player' | 'bot-ranged' | 'bot-aggressive' | 'bot-bulwark' | 'bot-resonator';
   position: Vec3;
   rotationY: number;
   encounterId?: string;
@@ -353,6 +383,24 @@ export interface LegacyLevelDocumentV1 {
   exit: Vec3;
 }
 
+/**
+ * A place on the route where the level would like the player to be looking, and where.
+ *
+ * Authored beside the geometry because it *is* geometry information: a composition is a
+ * statement about a camera, and a level that states one without saying where the camera
+ * should be is only stating half of it. `yaw` is carried for completeness and is not
+ * currently acted on -- see `lookNudge`, which moves pitch only.
+ */
+export interface VistaHint {
+  id: string;
+  /** Centre of the zone that arms the hint. */
+  at: Vec3;
+  /** How close the player has to be for it to arm, in metres. */
+  radius: number;
+  yaw: number;
+  pitch: number;
+}
+
 export interface LevelDocumentV2 {
   schemaVersion: 2;
   id: string;
@@ -368,6 +416,8 @@ export interface LevelDocumentV2 {
   spawns: SpawnDefinition[];
   encounters: EncounterDefinition[];
   offMeshLinks: OffMeshLink[];
+  /** Where the level wants the view. Empty on every document that does not author any. */
+  vistaHints: VistaHint[];
   exit: Vec3;
 }
 
@@ -573,7 +623,7 @@ export interface BladeStyleDefinition {
 }
 
 export interface BotProfile {
-  kind: 'ranged' | 'aggressive' | 'bulwark';
+  kind: 'ranged' | 'aggressive' | 'bulwark' | 'resonator';
   health: number;
   moveSpeed: number;
   preferredRange: number;
@@ -614,6 +664,30 @@ export interface BotProfile {
    * shot. Omitted means it can fire whichever way it happens to be pointing.
    */
   fireArcCosine?: number;
+  /**
+   * A ground wave instead of a shot.
+   *
+   * Every other hostile asks how much damage the player can take or avoid; this one
+   * asks where they are standing. The wave occupies a band a fixed height above the
+   * emitter's feet and spreads outward fast enough that walking out of it is not an
+   * option, so the answers are jump, wall-run, mantle, air-step and grapple -- the
+   * movement kit, which nothing in the roster previously required.
+   *
+   * Deliberately **not** blocked by line of sight. A shot is defeated by cover and
+   * that is the grammar of the other three profiles; this is defeated by altitude, and
+   * mixing the two would make it a worse version of both. Cover you can stand *on*
+   * still works, which is the point -- it turns the arena's geometry into the answer.
+   */
+  pulse?: {
+    /** How fast the ring travels outward, in metres a second. */
+    speed: number;
+    /** How far it reaches before it dies. */
+    reach: number;
+    /** Metres above the emitter's feet that the wave occupies. */
+    height: number;
+    /** Depth of the band, so it is a wave passing rather than a disc expanding. */
+    thickness: number;
+  };
 }
 
 /**
@@ -815,6 +889,8 @@ export interface CheckpointState {
   ammo: readonly number[];
   reserveAmmo: readonly number[];
   activeSlot: number;
+  /** What was in the player's hands, so a restore does not rearm them differently. */
+  inHand: 'blade' | 'gun';
   score: number;
   completedEncounterIds: readonly string[];
   defeatedBotIds: readonly number[];

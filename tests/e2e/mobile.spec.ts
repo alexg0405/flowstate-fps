@@ -34,7 +34,7 @@ test.describe('on a touch device', () => {
     await page.getByRole('button', { name: /enter run/i }).click();
     await expect(page.getByRole('button', { name: /enter run/i })).toBeHidden({ timeout: ENTERED_RUN_TIMEOUT });
     await expect(page.locator('.touch-controls')).toBeVisible();
-    for (const control of ['Slash', 'Heavy swing', 'Jump, and twice to dash', 'Cast the hook', 'Pause the run']) {
+    for (const control of ['Attack with the selected weapon', 'Heavy swing', 'Jump, and twice to dash', 'Cast the hook', 'Pause the run']) {
       await expect(page.getByRole('button', { name: control, exact: true })).toBeVisible();
     }
     // Contextual controls stay off the frame until they mean something.

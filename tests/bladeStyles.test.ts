@@ -81,7 +81,7 @@ describe('the blade is chosen, not assembled', () => {
       const simulation = await start(blade);
       let links = 0;
       for (let tick = 5; tick <= 200; tick += 1) {
-        const output = simulation.step(frame(tick, { held: Action.Slash, pressed: tick === 5 ? Action.Slash : 0 }), TICK);
+        const output = simulation.step(frame(tick, { held: Action.Attack, pressed: tick === 5 ? Action.Attack : 0 }), TICK);
         const killed = output.events.some((event) => event.kind === 'kill');
         if (killed) {
           links = output.snapshot.player.combo.links;
@@ -107,8 +107,8 @@ describe('the blade is chosen, not assembled', () => {
       let broke = 0;
       for (let tick = 5; tick <= 900; tick += 1) {
         const output = simulation.step(frame(tick, {
-          held: tick === 5 ? Action.Slash : 0,
-          pressed: tick === 5 ? Action.Slash : 0,
+          held: tick === 5 ? Action.Attack : 0,
+          pressed: tick === 5 ? Action.Attack : 0,
         }), TICK);
         if (!opened && output.events.some((event) => event.kind === 'comboLink')) opened = tick;
         if (opened && output.events.some((event) => event.kind === 'comboBreak')) {
@@ -147,7 +147,7 @@ describe('the blade is chosen, not assembled', () => {
     const recovery = async (blade: BladeStyleId): Promise<number> => {
       const simulation = await start(blade);
       let ticks = 1;
-      simulation.step(frame(5, { held: Action.Slash, pressed: Action.Slash }), TICK);
+      simulation.step(frame(5, { held: Action.Attack, pressed: Action.Attack }), TICK);
       for (let tick = 6; tick <= 200; tick += 1) {
         if (simulation.step(frame(tick), TICK).snapshot.player.action !== 'melee') break;
         ticks += 1;
@@ -177,7 +177,7 @@ describe('the blade is chosen, not assembled', () => {
       const simulation = await start('riposte');
       const links: number[] = [];
       for (let tick = 5; tick <= 300; tick += 1) {
-        links.push(simulation.step(frame(tick, { held: Action.Slash }), TICK).snapshot.player.combo.links);
+        links.push(simulation.step(frame(tick, { held: Action.Attack }), TICK).snapshot.player.combo.links);
       }
       simulation.dispose();
       return links;

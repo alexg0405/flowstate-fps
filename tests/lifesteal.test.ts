@@ -49,7 +49,7 @@ async function fight(kinds: SpawnDefinition['kind'][], blade: BladeStyleId = 'te
   let cleared = false;
   let died = false;
   for (let tick = 1; tick <= maxTicks; tick += 1) {
-    const output = simulation.step(frame(tick, { held: Action.Slash }), TICK);
+    const output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     ticks = tick;
     const playerId = output.snapshot.entities[0].id;
     for (const event of output.events) {
@@ -112,7 +112,7 @@ describe('life from damage', () => {
     await simulation.loadLevel(cookLevel(room(['bot-aggressive'])));
     let output = simulation.step(frame(1), TICK);
     // Take some damage, then clear the room and stand still for five seconds.
-    for (let tick = 2; tick <= 240; tick += 1) output = simulation.step(frame(tick, { held: Action.Slash }), TICK);
+    for (let tick = 2; tick <= 240; tick += 1) output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
     const settled = output.snapshot.player.health;
     expect(settled).toBeLessThan(playerHealth);
     for (let tick = 241; tick <= 540; tick += 1) output = simulation.step(frame(tick), TICK);
@@ -130,7 +130,7 @@ describe('life from damage', () => {
     let heals = 0;
     let peak = 0;
     for (let tick = 1; tick <= 600; tick += 1) {
-      const output = simulation.step(frame(tick, { held: Action.Slash }), TICK);
+      const output = simulation.step(frame(tick, { held: Action.Attack }), TICK);
       heals += output.events.filter((event) => event.kind === 'heal').length;
       peak = Math.max(peak, output.snapshot.player.health);
       if (output.snapshot.entities.every((entity) => entity.kind !== 'bot')) break;
